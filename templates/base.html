@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ app_name }}{% endblock %}</title>
+
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="d-flex flex-column min-vh-100">
+
+    {# ================================================================== #}
+    {# NAVBAR                                                              #}
+    {# ================================================================== #}
+    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
+        <div class="container-fluid">
+            {# Brand #}
+            <a class="navbar-brand d-flex align-items-center" href="{{ url_for('index') }}">
+                <div class="brand-icon me-2">
+                    <i class="bi bi-cpu"></i>
+                </div>
+                <span class="fw-semibold">{{ app_name }}</span>
+            </a>
+
+            {# Mobile toggle #}
+            <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#navbarContent">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <div class="collapse navbar-collapse" id="navbarContent">
+                {# Main nav links #}
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'index' or request.endpoint == 'dashboard' %}active{% endif %}"
+                           href="{{ url_for('index') }}">
+                            <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'apparecchi' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('apparecchi.lista') }}">
+                            <i class="bi bi-cpu me-1"></i> Apparecchi
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'verifiche' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('verifiche.lista') }}">
+                            <i class="bi bi-shield-check me-1"></i> Verifiche sic. el.
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'manutenzioni' in request.endpoint and 'scadenzario' not in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('manutenzioni.lista') }}">
+                            <i class="bi bi-wrench me-1"></i> Manutenzioni
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'scadenzario' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('manutenzioni.scadenzario') }}">
+                            <i class="bi bi-calendar-event me-1"></i> Scadenzario
+                            {% if scadenze_alert_count is defined and scadenze_alert_count > 0 %}
+                            <span class="badge bg-danger rounded-pill ms-1">{{ scadenze_alert_count }}</span>
+                            {% endif %}
+                        </a>
+                    </li>
+                </ul>
+
+                {# Right side: Division selector + User menu #}
+                <ul class="navbar-nav">
+                    {# Division selector #}
+                    {% if divisioni_accessibili is defined and divisioni_accessibili|length > 0 %}
+                    <li class="nav-item dropdown me-2">
+                        <a class="nav-link dropdown-toggle d-flex align-items-center" href="#"
+                           data-bs-toggle="dropdown">
+                            {% if divisione_attiva is defined and divisione_attiva %}
+                            <span class="divisione-dot me-1"
+                                  style="background-color: {{ divisione_attiva.colore or '#6b7280' }}"></span>
+                            <span class="d-none d-md-inline">{{ divisione_attiva.nome }}</span>
+                            {% else %}
+                            <i class="bi bi-building me-1"></i>
+                            <span class="d-none d-md-inline">Divisione</span>
+                            {% endif %}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            {% if current_user is defined and current_user.ruolo == 'admin' %}
+                            <li>
+                                <a class="dropdown-item {% if divisione_attiva is defined and divisione_attiva.id == 'tutte' %}active{% endif %}"
+                                   href="{{ url_for('auth.cambia_divisione', divisione_id='tutte') }}">
+                                    <i class="bi bi-collection me-2"></i> Tutte le divisioni
+                                </a>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                            {% endif %}
+                            {% for div in divisioni_accessibili %}
+                            <li>
+                                <a class="dropdown-item d-flex align-items-center
+                                          {% if divisione_attiva is defined and divisione_attiva.id == div.id %}active{% endif %}"
+                                   href="{{ url_for('auth.cambia_divisione', divisione_id=div.id) }}">
+                                    <span class="divisione-dot me-2" style="background-color: {{ div.colore }}"></span>
+                                    {{ div.nome }}
+                                </a>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </li>
+                    {% endif %}
+
+                    {# User menu #}
+                    {% if current_user is defined and current_user %}
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle d-flex align-items-center" href="#"
+                           data-bs-toggle="dropdown">
+                            <i class="bi bi-person-circle me-1"></i>
+                            <span class="d-none d-md-inline">{{ current_user.nome }}</span>
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li class="dropdown-header">
+                                <div class="fw-medium">{{ current_user.nome }} {{ current_user.cognome }}</div>
+                                <small class="text-muted">{{ current_user.email }}</small>
+                                <div>
+                                    <span class="badge {% if current_user.ruolo == 'admin' %}bg-primary{% else %}bg-secondary{% endif %} mt-1">
+                                        {{ current_user.ruolo|capitalize }}
+                                    </span>
+                                </div>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('auth.cambio_password') }}">
+                                    <i class="bi bi-key me-2"></i> Cambia Password
+                                </a>
+                            </li>
+                            {% if current_user.ruolo == 'admin' %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="{{ url_for('admin.configurazione') }}">
+                                    <i class="bi bi-gear me-2"></i> Configurazione
+                                </a>
+                            </li>
+                            {% endif %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item text-danger" href="{{ url_for('auth.logout') }}">
+                                    <i class="bi bi-box-arrow-right me-2"></i> Esci
+                                </a>
+                            </li>
+                        </ul>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    {# ================================================================== #}
+    {# MAIN CONTENT                                                        #}
+    {# ================================================================== #}
+    <div class="content-wrapper">
+        {# Sidebar #}
+        <nav class="sidebar d-none d-lg-block">
+            <div class="sidebar-content">
+                {# Structure name #}
+                {% if structure_name %}
+                <div class="sidebar-header">
+                    <small class="text-uppercase fw-semibold text-muted letter-spacing-wide">{{ structure_name }}</small>
+                </div>
+                {% endif %}
+
+                <ul class="nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'index' or request.endpoint == 'dashboard' %}active{% endif %}"
+                           href="{{ url_for('index') }}">
+                            <i class="bi bi-speedometer2"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'apparecchi' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('apparecchi.lista') }}">
+                            <i class="bi bi-cpu"></i> Apparecchi
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'verifiche' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('verifiche.lista') }}">
+                            <i class="bi bi-shield-check"></i> Verifiche sic. el.
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'manutenzioni' in request.endpoint and 'scadenzario' not in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('manutenzioni.lista') }}">
+                            <i class="bi bi-wrench"></i> Manutenzioni
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'scadenzario' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('manutenzioni.scadenzario') }}">
+                            <i class="bi bi-calendar-event"></i> Scadenzario
+                            {% if scadenze_alert_count is defined and scadenze_alert_count > 0 %}
+                            <span class="badge bg-danger rounded-pill float-end">{{ scadenze_alert_count }}</span>
+                            {% endif %}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'import' in request.endpoint and 'email' not in (request.endpoint or '') %}active{% endif %}"
+                           href="{{ url_for('import.upload') }}">
+                            <i class="bi bi-cloud-upload"></i> Import
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'email' in (request.endpoint or '') and 'admin' not in (request.endpoint or '') %}active{% endif %}"
+                           href="{{ url_for('import.email_queue') }}">
+                            <i class="bi bi-envelope-paper"></i> Coda Email
+                        </a>
+                    </li>
+
+                    {# Admin section #}
+                    {% if current_user is defined and current_user.ruolo == 'admin' %}
+                    <li class="nav-item mt-3">
+                        <small class="nav-section-title">AMMINISTRAZIONE</small>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'admin.utent' in request.endpoint|default('') %}active{% endif %}"
+                           href="{{ url_for('admin.utenti') }}">
+                            <i class="bi bi-people"></i> Utenti
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'admin.divisioni' in request.endpoint|default('') %}active{% endif %}"
+                           href="{{ url_for('admin.divisioni') }}">
+                            <i class="bi bi-building"></i> Divisioni
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'admin.configurazione' in request.endpoint|default('') %}active{% endif %}"
+                           href="{{ url_for('admin.configurazione') }}">
+                            <i class="bi bi-gear"></i> Configurazione
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'admin.backup' in request.endpoint|default('') %}active{% endif %}"
+                           href="{{ url_for('admin.backup') }}">
+                            <i class="bi bi-database"></i> Backup
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'admin.log' in request.endpoint|default('') %}active{% endif %}"
+                           href="{{ url_for('admin.log_attivita_view') }}">
+                            <i class="bi bi-journal-text"></i> Log Attivit&agrave;
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </nav>
+
+        {# Main area #}
+        <main class="main-content">
+            {# Flash messages #}
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="flash-container">
+                {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endwith %}
+
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    {# ================================================================== #}
+    {# FOOTER                                                              #}
+    {# ================================================================== #}
+    <footer class="app-footer">
+        <div class="container-fluid text-center">
+            <span>{{ app_name }} v{{ app_version }}</span>
+            <span class="mx-2">&middot;</span>
+            <span>{{ organization }}</span>
+        </div>
+    </footer>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+
+    {% block scripts_extra %}{% endblock %}
+</body>
+</html>

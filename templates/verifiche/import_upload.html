@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Import Verifiche - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2><i class="bi bi-cloud-upload me-2"></i>Import Verifiche Elettriche</h2>
+    <p class="text-muted mb-0">Carica un file PDF, Excel o CSV per importare le verifiche di sicurezza elettrica con l'AI</p>
+</div>
+
+<div class="row">
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-file-earmark-arrow-up me-1"></i> Carica File</div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('verifiche.import_analizza') }}" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label class="form-label">File <span class="text-danger">*</span></label>
+                        <input type="file" class="form-control" name="file"
+                               accept=".pdf,.xlsx,.xls,.csv" required>
+                        <div class="form-text">Formati supportati: PDF, Excel (.xlsx/.xls), CSV</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Divisione</label>
+                        <select class="form-select" name="divisione_id">
+                            <option value="">-- Tutte / Non specificata --</option>
+                            {% for d in divisioni %}
+                            <option value="{{ d.id }}">{{ d.nome }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Usata solo come riferimento nell'import history</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-robot me-1"></i> Analizza con AI
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header"><i class="bi bi-info-circle me-1"></i> Come funziona</div>
+            <div class="card-body small text-muted">
+                <ol class="mb-0 ps-3">
+                    <li class="mb-1">Carica un PDF del rapporto di verifica (singolo o multi-apparecchio)</li>
+                    <li class="mb-1">L'AI estrae automaticamente matricola, data, esito e periodicità</li>
+                    <li class="mb-1">Rivedi l'anteprima e abbina gli apparecchi</li>
+                    <li class="mb-0">Conferma l'importazione batch</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

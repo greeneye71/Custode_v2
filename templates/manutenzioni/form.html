@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if manutenzione %}Modifica{% else %}Nuova{% endif %} Manutenzione - {{ app_name }}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>
+        <i class="bi bi-{% if manutenzione %}pencil{% else %}plus-lg{% endif %} me-2"></i>
+        {% if manutenzione %}Modifica Manutenzione{% else %}Nuova Manutenzione{% endif %}
+    </h2>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <form method="POST" enctype="multipart/form-data">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-wrench me-1"></i> Dati Intervento
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-12">
+                            <label for="apparecchio_id" class="form-label">Apparecchio <span class="text-danger">*</span></label>
+                            <select class="form-select {% if errors.get('apparecchio_id') %}is-invalid{% endif %}"
+                                    id="apparecchio_id" name="apparecchio_id" required>
+                                <option value="">-- Seleziona Apparecchio --</option>
+                                {% for a in apparecchi %}
+                                <option value="{{ a.id }}"
+                                        {% if form_data.get('apparecchio_id')|string == a.id|string %}selected{% endif %}>
+                                    {{ a.marca }} {{ a.modello }} ({{ a.matricola }})
+                                    {% if a.divisione_nome %} - {{ a.divisione_nome }}{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if errors.get('apparecchio_id') %}
+                            <div class="invalid-feedback">{{ errors.apparecchio_id }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label for="tipo" class="form-label">Tipo <span class="text-danger">*</span></label>
+                            <select class="form-select {% if errors.get('tipo') %}is-invalid{% endif %}"
+                                    id="tipo" name="tipo" required>
+                                <option value="">-- Seleziona --</option>
+                                {% for t in ['preventiva', 'correttiva', 'verifica', 'calibrazione'] %}
+                                <option value="{{ t }}" {% if form_data.get('tipo') == t %}selected{% endif %}>
+                                    {{ t|capitalize }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if errors.get('tipo') %}
+                            <div class="invalid-feedback">{{ errors.tipo }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label for="data_intervento" class="form-label">Data Intervento <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control {% if errors.get('data_intervento') %}is-invalid{% endif %}"
+                                   id="data_intervento" name="data_intervento"
+                                   value="{{ form_data.get('data_intervento', '') }}" required>
+                            {% if errors.get('data_intervento') %}
+                            <div class="invalid-feedback">{{ errors.data_intervento }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label for="tecnico_ditta" class="form-label">Tecnico / Ditta</label>
+                            <input type="text" class="form-control"
+                                   id="tecnico_ditta" name="tecnico_ditta"
+                                   value="{{ form_data.get('tecnico_ditta', '') }}">
+                        </div>
+
+                        <div class="col-md-6">
+                            <label for="costo" class="form-label">Costo (&euro;)</label>
+                            <input type="number" step="0.01" class="form-control {% if errors.get('costo') %}is-invalid{% endif %}"
+                                   id="costo" name="costo"
+                                   value="{{ form_data.get('costo', '') }}"
+                                   placeholder="0.00">
+                            {% if errors.get('costo') %}
+                            <div class="invalid-feedback">{{ errors.costo }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-12">
+                            <label for="descrizione" class="form-label">Descrizione</label>
+                            <textarea class="form-control" id="descrizione" name="descrizione"
+                                      rows="3">{{ form_data.get('descrizione', '') }}</textarea>
+                        </div>
+
+                        <div class="col-md-12">
+                            <label for="esito" class="form-label">Esito</label>
+                            <input type="text" class="form-control"
+                                   id="esito" name="esito"
+                                   value="{{ form_data.get('esito', '') }}"
+                                   placeholder="Es. Positivo, Da rivedere...">
+                        </div>
+
+                        <div class="col-md-12">
+                            <label for="verbale" class="form-label">Verbale PDF</label>
+                            <input type="file" class="form-control" id="verbale" name="verbale" accept=".pdf">
+                            {% if manutenzione and manutenzione.get('verbale_path') %}
+                            <div class="form-text">
+                                <i class="bi bi-file-earmark-pdf text-danger me-1"></i>
+                                Verbale attuale:
+                                <a href="{{ url_for('manutenzioni.scarica_verbale', id=manutenzione.id) }}">
+                                    Scarica
+                                </a> (carica nuovo per sostituire)
+                            </div>
+                            {% else %}
+                            <div class="form-text">Solo file PDF. Opzionale.</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Scheduling #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-calendar-event me-1"></i> Programmazione Prossima Scadenza
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="periodicita_giorni" class="form-label">Periodicit&agrave; (giorni)</label>
+                            <input type="number" class="form-control {% if errors.get('periodicita_giorni') %}is-invalid{% endif %}"
+                                   id="periodicita_giorni" name="periodicita_giorni"
+                                   value="{{ form_data.get('periodicita_giorni', '') }}"
+                                   placeholder="Es. 365 per annuale"
+                                   onchange="calcolaScadenza()">
+                            {% if errors.get('periodicita_giorni') %}
+                            <div class="invalid-feedback">{{ errors.periodicita_giorni }}</div>
+                            {% endif %}
+                            <div class="form-text">Lascia vuoto se non periodica</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="prossima_scadenza" class="form-label">Prossima Scadenza</label>
+                            <input type="date" class="form-control"
+                                   id="prossima_scadenza" name="prossima_scadenza"
+                                   value="{{ form_data.get('prossima_scadenza', '') }}">
+                            <div class="form-text">Calcolata automaticamente dalla periodicit&agrave;</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Actions #}
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>
+                    {% if manutenzione %}Salva Modifiche{% else %}Registra Manutenzione{% endif %}
+                </button>
+                <a href="{{ url_for('manutenzioni.lista') }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-x-lg me-1"></i> Annulla
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+function calcolaScadenza() {
+    const dataIntervento = document.getElementById('data_intervento').value;
+    const periodicita = document.getElementById('periodicita_giorni').value;
+    if (dataIntervento && periodicita) {
+        const date = new Date(dataIntervento);
+        date.setDate(date.getDate() + parseInt(periodicita));
+        const formatted = date.toISOString().split('T')[0];
+        document.getElementById('prossima_scadenza').value = formatted;
+    }
+}
+// Also trigger on date change
+document.getElementById('data_intervento').addEventListener('change', calcolaScadenza);
+</script>
+{% endblock %}

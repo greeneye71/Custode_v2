@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Backup - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-database me-2"></i>Backup Database</h2>
+        <p class="text-muted mb-0">
+            Gestione backup del database.
+            Retention: <strong>{{ retention }}</strong> backup conservati.
+            Backup automatico: <strong>ogni domenica alle 03:00</strong>.
+        </p>
+    </div>
+    <form method="POST" action="{{ url_for('admin.backup_crea') }}">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-plus-circle me-1"></i> Crea Backup Ora
+        </button>
+    </form>
+</div>
+
+{# Database info #}
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-primary">{{ db_size }}</div>
+                <div class="stat-label">Dimensione DB</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-info">{{ backups|length }}</div>
+                <div class="stat-label">Backup disponibili</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-secondary">
+                    {{ backups[0].created_at if backups else 'Mai' }}
+                </div>
+                <div class="stat-label">Ultimo backup</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Backups list #}
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-archive me-2"></i>Backup Disponibili</h5>
+    </div>
+    {% if backups %}
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Data creazione</th>
+                        <th>Dimensione</th>
+                        <th class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for backup in backups %}
+                    <tr>
+                        <td>
+                            <i class="bi bi-file-earmark-binary text-primary me-1"></i>
+                            <code class="small">{{ backup.filename }}</code>
+                        </td>
+                        <td>{{ backup.created_at }}</td>
+                        <td>{{ backup.size_display }}</td>
+                        <td class="text-end">
+                            <div class="btn-group btn-group-sm">
+                                <a href="{{ url_for('admin.backup_scarica', filename=backup.filename) }}"
+                                   class="btn btn-outline-primary" title="Scarica">
+                                    <i class="bi bi-download"></i>
+                                </a>
+                                <form method="POST" action="{{ url_for('admin.backup_ripristina', filename=backup.filename) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('ATTENZIONE: Il ripristino sovrascrivera il database attuale. Sei sicuro?')">
+                                    <button type="submit" class="btn btn-outline-warning" title="Ripristina">
+                                        <i class="bi bi-arrow-counterclockwise"></i>
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('admin.backup_elimina', filename=backup.filename) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('Eliminare questo backup?')">
+                                    <button type="submit" class="btn btn-outline-danger" title="Elimina">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card-body text-center py-5">
+        <i class="bi bi-archive display-4 text-muted"></i>
+        <p class="text-muted mt-3 mb-0">Nessun backup disponibile.</p>
+        <p class="text-muted small">Clicca "Crea Backup Ora" per creare il primo backup.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

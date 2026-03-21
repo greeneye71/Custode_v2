@@ -1,0 +1,369 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if apparecchio %}Modifica{% else %}Nuovo{% endif %} Apparecchio - {{ app_name }}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>
+        <i class="bi bi-{% if apparecchio %}pencil{% else %}plus-lg{% endif %} me-2"></i>
+        {% if apparecchio %}Modifica Apparecchio{% else %}Nuovo Apparecchio{% endif %}
+    </h2>
+    <p class="text-muted mb-0">
+        {% if apparecchio %}
+        {{ apparecchio.marca }} {{ apparecchio.modello }} ({{ apparecchio.matricola }})
+        {% else %}
+        Inserisci i dati del nuovo apparecchio
+        {% endif %}
+    </p>
+</div>
+
+<form method="POST" class="needs-validation" novalidate>
+    <div class="row g-4">
+        {# ---- Left column: main data ---- #}
+        <div class="col-lg-8">
+
+            {# Identification section #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-tag me-1"></i> Identificazione
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label for="matricola" class="form-label">Matricola <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control {% if errors.get('matricola') %}is-invalid{% endif %}"
+                                   id="matricola" name="matricola"
+                                   value="{{ form_data.get('matricola', '') }}" required>
+                            {% if errors.get('matricola') %}
+                            <div class="invalid-feedback">{{ errors.matricola }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label for="descrizione" class="form-label">Descrizione</label>
+                            <input type="text" class="form-control"
+                                   id="descrizione" name="descrizione"
+                                   value="{{ form_data.get('descrizione', '') }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="numero_inventario" class="form-label">N. Inventario</label>
+                            <input type="text" class="form-control"
+                                   id="numero_inventario" name="numero_inventario"
+                                   value="{{ form_data.get('numero_inventario', '') }}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Device data section #}
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-cpu me-1"></i> Dati Apparecchio</span>
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="soggetto_verifica"
+                               name="soggetto_verifica"
+                               {% if form_data.get('soggetto_verifica') %}checked{% endif %}>
+                        <label class="form-check-label small" for="soggetto_verifica">
+                            Soggetto a verifica el.
+                        </label>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label for="marca" class="form-label">Marca <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control {% if errors.get('marca') %}is-invalid{% endif %}"
+                                   id="marca" name="marca"
+                                   value="{{ form_data.get('marca', '') }}" required>
+                            {% if errors.get('marca') %}
+                            <div class="invalid-feedback">{{ errors.marca }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label for="modello" class="form-label">Modello <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control {% if errors.get('modello') %}is-invalid{% endif %}"
+                                   id="modello" name="modello"
+                                   value="{{ form_data.get('modello', '') }}" required>
+                            {% if errors.get('modello') %}
+                            <div class="invalid-feedback">{{ errors.modello }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label for="anno_fabbricazione" class="form-label">Anno Fabbricazione</label>
+                            <input type="number" class="form-control {% if errors.get('anno_fabbricazione') %}is-invalid{% endif %}"
+                                   id="anno_fabbricazione" name="anno_fabbricazione"
+                                   value="{{ form_data.get('anno_fabbricazione', '') }}"
+                                   min="1900" max="{{ now().year if now is defined else 2026 }}">
+                            {% if errors.get('anno_fabbricazione') %}
+                            <div class="invalid-feedback">{{ errors.anno_fabbricazione }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label for="classificazione" class="form-label">Classificazione</label>
+                            <select class="form-select" id="classificazione" name="classificazione">
+                                <option value="">-- Seleziona --</option>
+                                {% for c in ['I', 'IIa', 'IIb', 'III'] %}
+                                <option value="{{ c }}" {% if form_data.get('classificazione') == c %}selected{% endif %}>Classe {{ c }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label for="ubicazione" class="form-label">Ubicazione</label>
+                            <input type="text" class="form-control"
+                                   id="ubicazione" name="ubicazione"
+                                   value="{{ form_data.get('ubicazione', '') }}"
+                                   placeholder="Es. Piano 1, Stanza 3">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="stato" class="form-label">Stato</label>
+                            <select class="form-select" id="stato" name="stato">
+                                <option value="funzionante" {% if form_data.get('stato', 'funzionante') == 'funzionante' %}selected{% endif %}>Funzionante</option>
+                                <option value="in_manutenzione" {% if form_data.get('stato') == 'in_manutenzione' %}selected{% endif %}>In manutenzione</option>
+                                <option value="da_sostituire" {% if form_data.get('stato') == 'da_sostituire' %}selected{% endif %}>Da programmare sostituzione</option>
+                                <option value="dismesso" {% if form_data.get('stato') == 'dismesso' %}selected{% endif %}>Dismesso</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Accessories section #}
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-box-seam me-1"></i> Accessori</span>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="aggiungi-accessorio">
+                        <i class="bi bi-plus-lg me-1"></i> Aggiungi
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <table class="table table-sm mb-0" id="accessori-table" {% if not accessori %}style="display:none"{% endif %}>
+                        <thead class="table-light">
+                            <tr>
+                                <th>Descrizione <span class="text-danger">*</span></th>
+                                <th>Produttore</th>
+                                <th>Modello</th>
+                                <th>Matricola</th>
+                                <th style="width:40px"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="accessori-tbody">
+                            {% for acc in accessori %}
+                            <tr>
+                                <td><input type="text" class="form-control form-control-sm" name="acc_descrizione[]" value="{{ acc.descrizione }}" placeholder="Descrizione"></td>
+                                <td><input type="text" class="form-control form-control-sm" name="acc_produttore[]" value="{{ acc.produttore or '' }}" placeholder="Produttore"></td>
+                                <td><input type="text" class="form-control form-control-sm" name="acc_modello[]" value="{{ acc.modello or '' }}" placeholder="Modello"></td>
+                                <td><input type="text" class="form-control form-control-sm" name="acc_matricola[]" value="{{ acc.matricola or '' }}" placeholder="Matricola"></td>
+                                <td><button type="button" class="btn btn-sm btn-outline-danger rimuovi-accessorio" title="Rimuovi"><i class="bi bi-trash"></i></button></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <div class="text-center text-muted py-3" id="no-accessori-msg" {% if accessori %}style="display:none"{% endif %}>
+                        <i class="bi bi-box-seam" style="font-size:1.2rem"></i>
+                        <p class="mb-0 mt-1 small">Nessun accessorio aggiunto</p>
+                    </div>
+                </div>
+            </div>
+
+            {# Network section #}
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-wifi me-1"></i> Connettivit&agrave; di Rete</span>
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="connesso_rete" name="connesso_rete"
+                               {% if form_data.get('connesso_rete') %}checked{% endif %}
+                               onchange="document.getElementById('network-fields').style.display = this.checked ? '' : 'none'">
+                        <label class="form-check-label small" for="connesso_rete">Connesso</label>
+                    </div>
+                </div>
+                <div class="card-body" id="network-fields"
+                     style="{% if not form_data.get('connesso_rete') %}display:none{% endif %}">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label for="ip_address" class="form-label">Indirizzo IP</label>
+                            <input type="text" class="form-control {% if errors.get('ip_address') %}is-invalid{% endif %}"
+                                   id="ip_address" name="ip_address"
+                                   value="{{ form_data.get('ip_address', '') }}"
+                                   placeholder="192.168.1.100">
+                            {% if errors.get('ip_address') %}
+                            <div class="invalid-feedback">{{ errors.ip_address }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <label for="mac_address" class="form-label">MAC Address</label>
+                            <input type="text" class="form-control"
+                                   id="mac_address" name="mac_address"
+                                   value="{{ form_data.get('mac_address', '') }}"
+                                   placeholder="AA:BB:CC:DD:EE:FF">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="hostname" class="form-label">Hostname</label>
+                            <input type="text" class="form-control"
+                                   id="hostname" name="hostname"
+                                   value="{{ form_data.get('hostname', '') }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label for="porta" class="form-label">Porta</label>
+                            <input type="number" class="form-control {% if errors.get('porta') %}is-invalid{% endif %}"
+                                   id="porta" name="porta"
+                                   value="{{ form_data.get('porta', '') }}">
+                            {% if errors.get('porta') %}
+                            <div class="invalid-feedback">{{ errors.porta }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-3">
+                            <label for="protocollo" class="form-label">Protocollo</label>
+                            <input type="text" class="form-control"
+                                   id="protocollo" name="protocollo"
+                                   value="{{ form_data.get('protocollo', '') }}"
+                                   placeholder="HTTP, DICOM...">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="url_interfaccia" class="form-label">URL Interfaccia Web</label>
+                            <input type="url" class="form-control"
+                                   id="url_interfaccia" name="url_interfaccia"
+                                   value="{{ form_data.get('url_interfaccia', '') }}"
+                                   placeholder="https://...">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Supplier section #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-shop me-1"></i> Fornitore e Garanzia
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label for="fornitore" class="form-label">Fornitore</label>
+                            <input type="text" class="form-control"
+                                   id="fornitore" name="fornitore"
+                                   value="{{ form_data.get('fornitore', '') }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="codice_fornitore" class="form-label">Codice Fornitore</label>
+                            <input type="text" class="form-control"
+                                   id="codice_fornitore" name="codice_fornitore"
+                                   value="{{ form_data.get('codice_fornitore', '') }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="garanzia_scadenza" class="form-label">Scadenza Garanzia</label>
+                            <input type="date" class="form-control"
+                                   id="garanzia_scadenza" name="garanzia_scadenza"
+                                   value="{{ form_data.get('garanzia_scadenza', '') }}">
+                        </div>
+                        <div class="col-md-12">
+                            <label for="contratto_manutenzione" class="form-label">Contratto Manutenzione</label>
+                            <input type="text" class="form-control"
+                                   id="contratto_manutenzione" name="contratto_manutenzione"
+                                   value="{{ form_data.get('contratto_manutenzione', '') }}"
+                                   placeholder="Riferimento contratto">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Notes #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-chat-text me-1"></i> Note
+                </div>
+                <div class="card-body">
+                    <textarea class="form-control" id="note" name="note" rows="3"
+                              placeholder="Annotazioni, osservazioni...">{{ form_data.get('note', '') }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        {# ---- Right column: division + actions ---- #}
+        <div class="col-lg-4">
+            {# Division #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-building me-1"></i> Divisione
+                </div>
+                <div class="card-body">
+                    <select class="form-select {% if errors.get('divisione_id') %}is-invalid{% endif %}"
+                            id="divisione_id" name="divisione_id" required>
+                        <option value="">-- Seleziona Divisione --</option>
+                        {% for d in divisioni %}
+                        <option value="{{ d.id }}"
+                                {% if form_data.get('divisione_id')|string == d.id|string %}selected
+                                {% elif not apparecchio and divisione_attiva is defined and divisione_attiva and divisione_attiva.id == d.id %}selected
+                                {% endif %}>
+                            {{ d.nome }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    {% if errors.get('divisione_id') %}
+                    <div class="invalid-feedback">{{ errors.divisione_id }}</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {# Actions #}
+            <div class="card">
+                <div class="card-body d-grid gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>
+                        {% if apparecchio %}Salva Modifiche{% else %}Crea Apparecchio{% endif %}
+                    </button>
+                    {% if apparecchio %}
+                    <a href="{{ url_for('apparecchi.dettaglio', id=apparecchio.id) }}"
+                       class="btn btn-outline-secondary">
+                        <i class="bi bi-x-lg me-1"></i> Annulla
+                    </a>
+                    {% else %}
+                    <a href="{{ url_for('apparecchi.lista') }}"
+                       class="btn btn-outline-secondary">
+                        <i class="bi bi-x-lg me-1"></i> Annulla
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+(function() {
+    const tbody = document.getElementById('accessori-tbody');
+    const table = document.getElementById('accessori-table');
+    const noMsg = document.getElementById('no-accessori-msg');
+
+    function updateVisibility() {
+        const hasRows = tbody.rows.length > 0;
+        table.style.display = hasRows ? '' : 'none';
+        noMsg.style.display = hasRows ? 'none' : '';
+    }
+
+    document.getElementById('aggiungi-accessorio').addEventListener('click', function() {
+        const row = document.createElement('tr');
+        row.innerHTML =
+            '<td><input type="text" class="form-control form-control-sm" name="acc_descrizione[]" placeholder="Descrizione"></td>' +
+            '<td><input type="text" class="form-control form-control-sm" name="acc_produttore[]" placeholder="Produttore"></td>' +
+            '<td><input type="text" class="form-control form-control-sm" name="acc_modello[]" placeholder="Modello"></td>' +
+            '<td><input type="text" class="form-control form-control-sm" name="acc_matricola[]" placeholder="Matricola"></td>' +
+            '<td><button type="button" class="btn btn-sm btn-outline-danger rimuovi-accessorio" title="Rimuovi"><i class="bi bi-trash"></i></button></td>';
+        tbody.appendChild(row);
+        updateVisibility();
+        row.querySelector('input').focus();
+    });
+
+    tbody.addEventListener('click', function(e) {
+        const btn = e.target.closest('.rimuovi-accessorio');
+        if (btn) {
+            btn.closest('tr').remove();
+            updateVisibility();
+        }
+    });
+
+    updateVisibility();
+})();
+</script>
+{% endblock %}

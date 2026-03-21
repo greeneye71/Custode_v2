@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Storico Import - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-clock-history me-2"></i>Storico Importazioni</h2>
+    </div>
+    <a href="{{ url_for('import.upload') }}" class="btn btn-primary">
+        <i class="bi bi-cloud-upload me-1"></i> Nuovo Import
+    </a>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Tipo</th>
+                        <th>File</th>
+                        <th>Divisione</th>
+                        <th>Righe</th>
+                        <th>Importate</th>
+                        <th>Errori</th>
+                        <th>Stato</th>
+                        <th>Utente</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for imp in imports %}
+                    <tr>
+                        <td><small>{{ imp.created_at }}</small></td>
+                        <td>
+                            {% set tipo_labels = {'inventario': 'Inventario', 'verbale_email': 'Email', 'verbale_manutenzione': 'Verbale', 'verifica_elettrica': 'Verifica'} %}
+                            <span class="badge bg-secondary">{{ tipo_labels.get(imp.tipo_import, imp.tipo_import) }}</span>
+                        </td>
+                        <td><small>{{ imp.filename }}</small></td>
+                        <td>{{ imp.divisione_nome or '-' }}</td>
+                        <td>{{ imp.totale_righe or 0 }}</td>
+                        <td class="text-success fw-medium">{{ imp.righe_importate or 0 }}</td>
+                        <td class="text-danger">{{ imp.righe_errori or 0 }}</td>
+                        <td>
+                            {% if imp.stato == 'completed' %}
+                            <span class="badge bg-success">Completato</span>
+                            {% elif imp.stato == 'pending' %}
+                            <span class="badge bg-warning text-dark">In attesa</span>
+                            {% elif imp.stato == 'failed' %}
+                            <span class="badge bg-danger">Fallito</span>
+                            {% else %}
+                            <span class="badge bg-info">{{ imp.stato }}</span>
+                            {% endif %}
+                        </td>
+                        <td><small>{{ imp.utente_nome or '-' }}</small></td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-4">
+                            Nessuna importazione effettuata
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

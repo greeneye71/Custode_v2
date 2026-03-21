@@ -1,0 +1,88 @@
+{% for m in manutenzioni %}
+<tr>
+    <td class="fw-medium">{{ m.data_intervento }}</td>
+    <td><span class="badge badge-{{ m.tipo }}">{{ m.tipo|capitalize }}</span></td>
+    <td>
+        <a href="{{ url_for('apparecchi.dettaglio', id=m.apparecchio_id) }}" class="text-decoration-none">
+            {{ m.marca }} {{ m.modello }}
+        </a>
+        <br><small class="text-muted">{{ m.matricola }}</small>
+    </td>
+    <td>{{ m.tecnico_ditta or '-' }}</td>
+    <td>{{ m.esito or '-' }}</td>
+    <td>{% if m.costo %}&euro; {{ "%.2f"|format(m.costo) }}{% else %}-{% endif %}</td>
+    <td>{{ m.prossima_scadenza or '-' }}</td>
+    <td>
+        {% if m.verbale_path %}
+        <a href="{{ url_for('manutenzioni.scarica_verbale', id=m.id) }}"
+           class="btn btn-sm btn-outline-secondary" title="Scarica verbale">
+            <i class="bi bi-file-earmark-pdf text-danger"></i>
+        </a>
+        {% else %}-{% endif %}
+    </td>
+    <td class="text-end">
+        <div class="btn-group">
+            <a href="{{ url_for('manutenzioni.modifica', id=m.id) }}"
+               class="btn btn-outline-secondary btn-action" title="Modifica">
+                <i class="bi bi-pencil"></i>
+            </a>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="9" class="text-center text-muted py-4">
+        <i class="bi bi-inbox" style="font-size: 1.5rem;"></i>
+        <p class="mb-0 mt-2">Nessuna manutenzione trovata</p>
+    </td>
+</tr>
+{% endfor %}
+
+{# OOB swap: aggiorna la paginazione fuori dal tbody ad ogni risposta HTMX #}
+<div id="pagination-nav" hx-swap-oob="true">
+{% if pagination.total_pages > 1 %}
+<div class="card-footer bg-white d-flex justify-content-between align-items-center">
+    <small class="text-muted">
+        Pagina {{ pagination.page }} di {{ pagination.total_pages }}
+        ({{ pagination.total }} risultati)
+    </small>
+    <nav>
+        <ul class="pagination pagination-sm mb-0">
+            {% if pagination.page > 1 %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('manutenzioni.lista') }}"
+                   hx-target="#manutenzioni-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ pagination.page - 1 }}"}'>&laquo;</a>
+            </li>
+            {% endif %}
+            {% for p in range(1, pagination.total_pages + 1) %}
+            {% if p == pagination.page %}
+            <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+            {% elif p <= 3 or p >= pagination.total_pages - 2 or (p >= pagination.page - 1 and p <= pagination.page + 1) %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('manutenzioni.lista') }}"
+                   hx-target="#manutenzioni-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ p }}"}'>{{ p }}</a>
+            </li>
+            {% elif p == 4 or p == pagination.total_pages - 3 %}
+            <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+            {% endif %}
+            {% endfor %}
+            {% if pagination.page < pagination.total_pages %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('manutenzioni.lista') }}"
+                   hx-target="#manutenzioni-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ pagination.page + 1 }}"}'>&raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+</div>
+{% endif %}
+</div>

@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+
+{% block title %}Apparecchi - {{ app_name }}{% endblock %}
+
+{% block content %}
+{# Page header #}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-cpu me-2"></i>Apparecchi</h2>
+        <p class="text-muted mb-0">{{ pagination.total }} apparecchi trovati</p>
+    </div>
+    <div class="d-flex gap-2">
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                <i class="bi bi-download me-1"></i> Esporta
+            </button>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="{{ url_for('export.apparecchi_excel') }}">
+                    <i class="bi bi-file-earmark-excel text-success me-2"></i>Excel (.xlsx)</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('export.apparecchi_pdf') }}">
+                    <i class="bi bi-file-earmark-pdf text-danger me-2"></i>PDF</a></li>
+            </ul>
+        </div>
+        <a href="{{ url_for('apparecchi.nuovo') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i> Nuovo Apparecchio
+        </a>
+    </div>
+</div>
+
+{# Filter bar #}
+<div class="card mb-4">
+    <div class="card-body filter-bar">
+        <form id="filter-form" method="GET" action="{{ url_for('apparecchi.lista') }}">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label small">Cerca</label>
+                    <input type="text" class="form-control" name="search"
+                           value="{{ filtri.search }}" placeholder="Matricola, marca, modello..."
+                           hx-get="{{ url_for('apparecchi.lista') }}"
+                           hx-target="#apparecchi-table-body"
+                           hx-trigger="keyup changed delay:300ms"
+                           hx-include="#filter-form"
+                           hx-vals='{"partial": "1"}'>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Stato</label>
+                    <select class="form-select" name="stato"
+                            hx-get="{{ url_for('apparecchi.lista') }}"
+                            hx-target="#apparecchi-table-body"
+                            hx-trigger="change"
+                            hx-include="#filter-form"
+                            hx-vals='{"partial": "1"}'>
+                        <option value="">Funzionanti</option>
+                        <option value="funzionante" {% if filtri.stato == 'funzionante' %}selected{% endif %}>Funzionante</option>
+                        <option value="in_manutenzione" {% if filtri.stato == 'in_manutenzione' %}selected{% endif %}>In manutenzione</option>
+                        <option value="da_sostituire" {% if filtri.stato == 'da_sostituire' %}selected{% endif %}>Da sostituire</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Marca</label>
+                    <select class="form-select" name="marca"
+                            hx-get="{{ url_for('apparecchi.lista') }}"
+                            hx-target="#apparecchi-table-body"
+                            hx-trigger="change"
+                            hx-include="#filter-form"
+                            hx-vals='{"partial": "1"}'>
+                        <option value="">Tutte</option>
+                        {% for m in marche %}
+                        <option value="{{ m.marca }}" {% if filtri.marca == m.marca %}selected{% endif %}>{{ m.marca }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Classe</label>
+                    <select class="form-select" name="classificazione"
+                            hx-get="{{ url_for('apparecchi.lista') }}"
+                            hx-target="#apparecchi-table-body"
+                            hx-trigger="change"
+                            hx-include="#filter-form"
+                            hx-vals='{"partial": "1"}'>
+                        <option value="">Tutte</option>
+                        <option value="I" {% if filtri.classificazione == 'I' %}selected{% endif %}>I</option>
+                        <option value="IIa" {% if filtri.classificazione == 'IIa' %}selected{% endif %}>IIa</option>
+                        <option value="IIb" {% if filtri.classificazione == 'IIb' %}selected{% endif %}>IIb</option>
+                        <option value="III" {% if filtri.classificazione == 'III' %}selected{% endif %}>III</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Ubicazione</label>
+                    <input type="text" class="form-control" name="ubicazione"
+                           value="{{ filtri.ubicazione }}" placeholder="Stanza, piano..."
+                           hx-get="{{ url_for('apparecchi.lista') }}"
+                           hx-target="#apparecchi-table-body"
+                           hx-trigger="keyup changed delay:300ms"
+                           hx-include="#filter-form"
+                           hx-vals='{"partial": "1"}'>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Verifica el.</label>
+                    <select class="form-select" name="verifica_el"
+                            hx-get="{{ url_for('apparecchi.lista') }}"
+                            hx-target="#apparecchi-table-body"
+                            hx-trigger="change"
+                            hx-include="#filter-form"
+                            hx-vals='{"partial": "1"}'>
+                        <option value="">Tutte</option>
+                        <option value="scaduta" {% if filtri.verifica_el == 'scaduta' %}selected{% endif %}>🔴 Scaduta</option>
+                        <option value="in_scadenza" {% if filtri.verifica_el == 'in_scadenza' %}selected{% endif %}>🟡 In scadenza (30gg)</option>
+                        <option value="assente" {% if filtri.verifica_el == 'assente' %}selected{% endif %}>⬜ Nessuna</option>
+                        <option value="esente" {% if filtri.verifica_el == 'esente' %}selected{% endif %}>⬛ Esente</option>
+                    </select>
+                </div>
+                <div class="col-md-auto d-flex align-items-end gap-2">
+                    <div class="form-check form-switch mb-2" title="Mostra anche gli apparecchi dismessi">
+                        <input class="form-check-input" type="checkbox" id="mostra_dismessi_toggle"
+                               name="mostra_dismessi" value="1"
+                               {% if filtri.mostra_dismessi == '1' %}checked{% endif %}
+                               hx-get="{{ url_for('apparecchi.lista') }}"
+                               hx-target="#apparecchi-table-body"
+                               hx-trigger="change"
+                               hx-include="#filter-form"
+                               hx-vals='{"partial": "1"}'>
+                        <label class="form-check-label small" for="mostra_dismessi_toggle">Dismessi</label>
+                    </div>
+                    <a href="{{ url_for('apparecchi.lista') }}" class="btn btn-outline-secondary mb-2"
+                       title="Reset filtri">
+                        <i class="bi bi-x-lg"></i>
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Table #}
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Matricola</th>
+                        <th>Marca / Modello</th>
+                        <th>Classe</th>
+                        <th>Ubicazione</th>
+                        <th>Stato</th>
+                        <th>Verifica el.</th>
+                        <th>Divisione</th>
+                        <th>Rete</th>
+                        <th class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody id="apparecchi-table-body">
+                    {% include "partials/apparecchi_table.html" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {# Pagination — wrapper sempre presente: target per HTMX OOB swap #}
+    <div id="pagination-nav">
+    {% if pagination.total_pages > 1 %}
+    <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+        <small class="text-muted">
+            Pagina {{ pagination.page }} di {{ pagination.total_pages }}
+            ({{ pagination.total }} risultati)
+        </small>
+        <nav>
+            <ul class="pagination pagination-sm mb-0">
+                {% if pagination.page > 1 %}
+                <li class="page-item">
+                    <a class="page-link"
+                       hx-get="{{ url_for('apparecchi.lista') }}"
+                       hx-target="#apparecchi-table-body"
+                       hx-include="#filter-form"
+                       hx-vals='{"partial": "1", "page": "{{ pagination.page - 1 }}"}'>&laquo;</a>
+                </li>
+                {% endif %}
+                {% for p in range(1, pagination.total_pages + 1) %}
+                {% if p == pagination.page %}
+                <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                {% elif p <= 3 or p >= pagination.total_pages - 2 or (p >= pagination.page - 1 and p <= pagination.page + 1) %}
+                <li class="page-item">
+                    <a class="page-link"
+                       hx-get="{{ url_for('apparecchi.lista') }}"
+                       hx-target="#apparecchi-table-body"
+                       hx-include="#filter-form"
+                       hx-vals='{"partial": "1", "page": "{{ p }}"}'>{{ p }}</a>
+                </li>
+                {% elif p == 4 or p == pagination.total_pages - 3 %}
+                <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+                {% endif %}
+                {% endfor %}
+                {% if pagination.page < pagination.total_pages %}
+                <li class="page-item">
+                    <a class="page-link"
+                       hx-get="{{ url_for('apparecchi.lista') }}"
+                       hx-target="#apparecchi-table-body"
+                       hx-include="#filter-form"
+                       hx-vals='{"partial": "1", "page": "{{ pagination.page + 1 }}"}'>&raquo;</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+    </div>
+</div>
+
+{# Confirm dismiss modal #}
+<div class="modal fade" id="dismissModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Conferma Dismissione</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Sei sicuro di voler dismettere questo apparecchio?
+                <br><strong id="dismissModalName"></strong>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+                <form id="dismissForm" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-trash me-1"></i> Dismetti
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const dismissModal = document.getElementById('dismissModal');
+    if (dismissModal) {
+        dismissModal.addEventListener('show.bs.modal', function(event) {
+            const button = event.relatedTarget;
+            const name = button.getAttribute('data-name');
+            const url = button.getAttribute('data-url');
+            document.getElementById('dismissModalName').textContent = name;
+            document.getElementById('dismissForm').action = url;
+        });
+    }
+});
+</script>
+{% endblock %}

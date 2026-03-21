@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Gestione Divisioni - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-building me-2"></i>Gestione Divisioni</h2>
+        <p class="text-muted mb-0">{{ divisioni|length }} divisioni configurate</p>
+    </div>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newDivModal">
+        <i class="bi bi-plus-lg me-1"></i> Nuova Divisione
+    </button>
+</div>
+
+<div class="row g-4">
+    {% for d in divisioni %}
+    <div class="col-md-6">
+        <div class="card {% if not d.attiva %}opacity-50{% endif %}" style="border-left: 4px solid {{ d.colore }}">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h5 class="mb-1">
+                            <span class="divisione-dot me-1" style="background-color: {{ d.colore }}"></span>
+                            {{ d.nome }}
+                        </h5>
+                        <small class="text-muted">Codice: <strong>{{ d.codice }}</strong></small>
+                        {% if d.descrizione %}
+                        <p class="text-muted small mt-1 mb-0">{{ d.descrizione }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-outline-primary btn-action"
+                                data-bs-toggle="modal" data-bs-target="#editDiv{{ d.id }}">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <form method="POST" action="{{ url_for('admin.divisione_toggle', id=d.id) }}" class="d-inline">
+                            <button type="submit"
+                                    class="btn btn-outline-{% if d.attiva %}danger{% else %}success{% endif %} btn-action">
+                                <i class="bi bi-{% if d.attiva %}x-circle{% else %}check-circle{% endif %}"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <div class="d-flex gap-3 mt-3">
+                    <div class="text-center">
+                        <div class="fw-bold">{{ d.num_apparecchi }}</div>
+                        <small class="text-muted">Apparecchi</small>
+                    </div>
+                    <div class="text-center">
+                        <div class="fw-bold">{{ d.num_utenti }}</div>
+                        <small class="text-muted">Utenti</small>
+                    </div>
+                    <div class="text-center">
+                        <span class="badge {% if d.attiva %}bg-success{% else %}bg-secondary{% endif %} mt-1">
+                            {% if d.attiva %}Attiva{% else %}Inattiva{% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Edit modal for this division #}
+    <div class="modal fade" id="editDiv{{ d.id }}" tabindex="-1">
+        <div class="modal-dialog">
+            <form method="POST" action="{{ url_for('admin.divisione_modifica', id=d.id) }}">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Modifica Divisione</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Nome</label>
+                            <input type="text" class="form-control" name="nome" value="{{ d.nome }}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Codice</label>
+                            <input type="text" class="form-control" name="codice" value="{{ d.codice }}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Colore</label>
+                            <input type="color" class="form-control form-control-color" name="colore" value="{{ d.colore }}">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Descrizione</label>
+                            <textarea class="form-control" name="descrizione" rows="2">{{ d.descrizione or '' }}</textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+                        <button type="submit" class="btn btn-primary">Salva</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{# New division modal #}
+<div class="modal fade" id="newDivModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form method="POST" action="{{ url_for('admin.divisione_nuova') }}">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Nuova Divisione</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Nome <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="nome" required placeholder="Es. Radiologia">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Codice <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="codice" required placeholder="Es. RAD">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Colore</label>
+                        <input type="color" class="form-control form-control-color" name="colore" value="#0ea5e9">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Descrizione</label>
+                        <textarea class="form-control" name="descrizione" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+                    <button type="submit" class="btn btn-primary">Crea</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

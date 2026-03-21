@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Gestione Utenti - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-people me-2"></i>Gestione Utenti</h2>
+        <p class="text-muted mb-0">{{ utenti|length }} utenti registrati</p>
+    </div>
+    <a href="{{ url_for('admin.utente_nuovo') }}" class="btn btn-primary">
+        <i class="bi bi-plus-lg me-1"></i> Nuovo Utente
+    </a>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Email</th>
+                        <th>Ruolo</th>
+                        <th>Divisioni</th>
+                        <th>Ultimo accesso</th>
+                        <th>Stato</th>
+                        <th class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in utenti %}
+                    <tr class="{% if not u.attivo %}opacity-50{% endif %}">
+                        <td class="fw-medium">{{ u.nome }} {{ u.cognome }}</td>
+                        <td><code>{{ u.email }}</code></td>
+                        <td>
+                            <span class="badge {% if u.ruolo == 'admin' %}bg-primary{% else %}bg-secondary{% endif %}">
+                                {{ u.ruolo|capitalize }}
+                            </span>
+                            {% if u.primo_accesso %}
+                            <span class="badge bg-warning text-dark ms-1">Primo accesso</span>
+                            {% endif %}
+                        </td>
+                        <td><small>{{ u.divisioni_nomi or '-' }}</small></td>
+                        <td><small class="text-muted">{{ u.ultimo_accesso or 'Mai' }}</small></td>
+                        <td>
+                            {% if u.attivo %}
+                            <span class="badge bg-success">Attivo</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Inattivo</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <div class="btn-group">
+                                <a href="{{ url_for('admin.utente_modifica', id=u.id) }}"
+                                   class="btn btn-outline-primary btn-action" title="Modifica">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                <form method="POST" action="{{ url_for('admin.utente_reset_password', id=u.id) }}"
+                                      class="d-inline" onsubmit="return confirm('Resettare la password?')">
+                                    <button type="submit" class="btn btn-outline-warning btn-action" title="Reset Password">
+                                        <i class="bi bi-key"></i>
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('admin.utente_toggle', id=u.id) }}" class="d-inline">
+                                    <button type="submit"
+                                            class="btn btn-outline-{% if u.attivo %}danger{% else %}success{% endif %} btn-action"
+                                            title="{% if u.attivo %}Disattiva{% else %}Attiva{% endif %}">
+                                        <i class="bi bi-{% if u.attivo %}x-circle{% else %}check-circle{% endif %}"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

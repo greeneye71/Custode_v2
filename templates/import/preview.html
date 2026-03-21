@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Preview Import - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-table me-2"></i>Preview Import</h2>
+        <p class="text-muted mb-0">
+            File: <strong>{{ import_rec.filename }}</strong>
+            &middot; Tipo: <span class="badge bg-primary">{{ tipo_label }}</span>
+            &middot; {{ rows|length }} elementi trovati
+            {% if import_rec.tipo_import == 'inventario' %}
+            &middot; {{ rows|length - trovati }} nuovi, {{ trovati }} duplicati
+            {% else %}
+            &middot; {{ trovati }} con apparecchio trovato, {{ nuovi }} da associare
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+<form method="POST" action="{{ url_for('import.esegui', id=import_rec.id) }}">
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Risultati Analisi</span>
+            <div>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="toggleAll(true)">
+                    Seleziona tutti
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-1" onclick="toggleAll(false)">
+                    Deseleziona tutti
+                </button>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">
+                                <input type="checkbox" class="form-check-input" id="selectAll"
+                                       onchange="toggleAll(this.checked)">
+                            </th>
+                            <th>#</th>
+                            <th>Matricola</th>
+
+                            {% if import_rec.tipo_import == 'inventario' %}
+                            <th>Marca / Modello</th>
+                            <th>Classe</th>
+                            <th>Ubicazione</th>
+                            <th>Match</th>
+
+                            {% elif import_rec.tipo_import == 'verbale_manutenzione' %}
+                            <th>Data</th>
+                            <th>Tipo</th>
+                            <th>Descrizione</th>
+                            <th>Esito</th>
+                            <th>Apparecchio</th>
+
+                            {% elif import_rec.tipo_import == 'verifica_elettrica' %}
+                            <th>Data</th>
+                            <th>Esito</th>
+                            <th>Tecnico/Ditta</th>
+                            <th>Periodicit&agrave;</th>
+                            <th>Apparecchio</th>
+                            {% endif %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                        {% set d = row.parsed_data %}
+                        {% set has_error = d.get('_errore', false) %}
+                        <tr {% if has_error %}class="table-danger"{% endif %}>
+                            <td>
+                                <input type="checkbox" class="form-check-input row-check"
+                                       name="selected" value="{{ row.id }}"
+                                       {% if has_error %}disabled{% elif import_rec.tipo_import == 'inventario' and not row.apparecchio_match_id %}checked{% elif import_rec.tipo_import != 'inventario' and row.apparecchio_match_id %}checked{% endif %}>
+                            </td>
+                            <td class="text-muted">
+                                {{ row.riga_numero }}
+                                {% if d.get('_pagina') %}
+                                <br><small class="text-muted">p.{{ d._pagina }}</small>
+                                {% endif %}
+                            </td>
+                            <td><code>{{ d.get('matricola', '-') }}</code></td>
+
+                            {% if import_rec.tipo_import == 'inventario' %}
+                            {# ---- INVENTARIO columns ---- #}
+                            <td>
+                                <div class="fw-medium">{{ d.get('marca', '-') }}</div>
+                                <small class="text-muted">{{ d.get('modello', '-') }}</small>
+                            </td>
+                            <td>
+                                {% if d.get('classificazione') %}
+                                <span class="badge bg-secondary">{{ d.classificazione }}</span>
+                                {% else %}-{% endif %}
+                            </td>
+                            <td><small>{{ d.get('ubicazione', '-') }}</small></td>
+                            <td>
+                                {% if not row.apparecchio_match_id %}
+                                <span class="badge bg-success">Nuovo</span>
+                                {% elif row.match_confidence >= 1.0 %}
+                                <span class="badge bg-warning text-dark" title="{{ row.match_marca }} {{ row.match_modello }}">
+                                    Duplicato esatto
+                                </span>
+                                <br><small class="text-muted">{{ row.match_matricola }}</small>
+                                {% else %}
+                                <span class="badge bg-info text-dark" title="{{ row.match_marca }} {{ row.match_modello }}">
+                                    Possibile ({{ "%.0f"|format(row.match_confidence * 100) }}%)
+                                </span>
+                                <br><small class="text-muted">{{ row.match_matricola }}</small>
+                                {% endif %}
+                            </td>
+
+                            {% elif import_rec.tipo_import == 'verbale_manutenzione' %}
+                            {# ---- VERBALE columns ---- #}
+                            <td><small>{{ d.get('data_intervento', '-') }}</small></td>
+                            <td>
+                                {% set tipo_map = {'preventiva': 'success', 'correttiva': 'warning', 'verifica': 'info', 'calibrazione': 'secondary'} %}
+                                <span class="badge bg-{{ tipo_map.get(d.get('tipo',''), 'secondary') }}">
+                                    {{ d.get('tipo', '-') }}
+                                </span>
+                            </td>
+                            <td><small>{{ d.get('descrizione', '-')|truncate(60) }}</small></td>
+                            <td><small>{{ d.get('esito', '-') }}</small></td>
+                            <td>
+                                {% if row.apparecchio_match_id %}
+                                <span class="badge bg-success">
+                                    {{ row.match_marca }} {{ row.match_modello }}
+                                </span>
+                                <br><small class="text-muted">{{ row.match_matricola }}</small>
+                                {% else %}
+                                <select class="form-select form-select-sm" name="apparecchio_id_{{ row.id }}"
+                                        style="min-width: 200px; font-size: 0.75rem;">
+                                    <option value="">-- Seleziona --</option>
+                                    {% for a in apparecchi_list %}
+                                    <option value="{{ a.id }}">{{ a.matricola }} - {{ a.marca }} {{ a.modello }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% endif %}
+                            </td>
+
+                            {% elif import_rec.tipo_import == 'verifica_elettrica' %}
+                            {# ---- VERIFICA columns ---- #}
+                            <td><small>{{ d.get('data_verifica', '-') }}</small></td>
+                            <td>
+                                {% set esito_color = {'positivo': 'success', 'negativo': 'danger', 'con_riserva': 'warning'} %}
+                                <span class="badge bg-{{ esito_color.get(d.get('esito',''), 'secondary') }}">
+                                    {{ d.get('esito', '-') }}
+                                </span>
+                            </td>
+                            <td><small>{{ d.get('tecnico_ditta', '-') }}</small></td>
+                            <td>
+                                {% if d.get('periodicita_giorni') %}
+                                {{ d.periodicita_giorni }} gg
+                                {% else %}-{% endif %}
+                            </td>
+                            <td>
+                                {% if row.apparecchio_match_id %}
+                                <span class="badge bg-success">
+                                    {{ row.match_marca }} {{ row.match_modello }}
+                                </span>
+                                <br><small class="text-muted">{{ row.match_matricola }}</small>
+                                {% else %}
+                                <select class="form-select form-select-sm" name="apparecchio_id_{{ row.id }}"
+                                        style="min-width: 200px; font-size: 0.75rem;">
+                                    <option value="">-- Seleziona --</option>
+                                    {% for a in apparecchi_list %}
+                                    <option value="{{ a.id }}">{{ a.matricola }} - {{ a.marca }} {{ a.modello }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% endif %}
+                            </td>
+                            {% endif %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-lg me-1"></i> Importa Selezionati
+        </button>
+        <a href="{{ url_for('import.upload') }}" class="btn btn-outline-secondary">Annulla</a>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+function toggleAll(checked) {
+    document.querySelectorAll('.row-check:not(:disabled)').forEach(cb => cb.checked = checked);
+    document.getElementById('selectAll').checked = checked;
+}
+</script>
+{% endblock %}

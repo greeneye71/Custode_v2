@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}Manutenzioni - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-wrench me-2"></i>Manutenzioni</h2>
+        <p class="text-muted mb-0">{{ pagination.total }} interventi registrati</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('export.manutenzioni_excel') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-file-earmark-excel text-success me-1"></i> Excel
+        </a>
+        <a href="{{ url_for('manutenzioni.nuova') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg me-1"></i> Nuova Manutenzione
+        </a>
+    </div>
+</div>
+
+{# Filter bar #}
+<div class="card mb-4">
+    <div class="card-body filter-bar">
+        <form id="filter-form">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label small">Cerca</label>
+                    <input type="text" class="form-control" name="search"
+                           value="{{ filtri.search }}" placeholder="Apparecchio, tecnico..."
+                           hx-get="{{ url_for('manutenzioni.lista') }}"
+                           hx-target="#manutenzioni-table-body"
+                           hx-trigger="keyup changed delay:300ms"
+                           hx-include="#filter-form"
+                           hx-vals='{"partial": "1"}'>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Tipo</label>
+                    <select class="form-select" name="tipo"
+                            hx-get="{{ url_for('manutenzioni.lista') }}"
+                            hx-target="#manutenzioni-table-body"
+                            hx-trigger="change"
+                            hx-include="#filter-form"
+                            hx-vals='{"partial": "1"}'>
+                        <option value="">Tutti</option>
+                        <option value="preventiva" {% if filtri.tipo == 'preventiva' %}selected{% endif %}>Preventiva</option>
+                        <option value="correttiva" {% if filtri.tipo == 'correttiva' %}selected{% endif %}>Correttiva</option>
+                        <option value="verifica" {% if filtri.tipo == 'verifica' %}selected{% endif %}>Verifica</option>
+                        <option value="calibrazione" {% if filtri.tipo == 'calibrazione' %}selected{% endif %}>Calibrazione</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Data da</label>
+                    <input type="date" class="form-control" name="data_da" value="{{ filtri.data_da }}"
+                           hx-get="{{ url_for('manutenzioni.lista') }}"
+                           hx-target="#manutenzioni-table-body"
+                           hx-trigger="change"
+                           hx-include="#filter-form"
+                           hx-vals='{"partial": "1"}'>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small">Data a</label>
+                    <input type="date" class="form-control" name="data_a" value="{{ filtri.data_a }}"
+                           hx-get="{{ url_for('manutenzioni.lista') }}"
+                           hx-target="#manutenzioni-table-body"
+                           hx-trigger="change"
+                           hx-include="#filter-form"
+                           hx-vals='{"partial": "1"}'>
+                </div>
+                <div class="col-md-1">
+                    <a href="{{ url_for('manutenzioni.lista') }}" class="btn btn-outline-secondary w-100">
+                        <i class="bi bi-x-lg"></i>
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# Table #}
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Tipo</th>
+                        <th>Apparecchio</th>
+                        <th>Tecnico/Ditta</th>
+                        <th>Esito</th>
+                        <th>Costo</th>
+                        <th>Prossima Scad.</th>
+                        <th>Verb.</th>
+                        <th class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody id="manutenzioni-table-body">
+                    {% include "partials/manutenzioni_table.html" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="pagination-nav">
+    {% if pagination.total_pages > 1 %}
+    <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+        <small class="text-muted">
+            Pagina {{ pagination.page }} di {{ pagination.total_pages }}
+            ({{ pagination.total }} risultati)
+        </small>
+        <nav>
+            <ul class="pagination pagination-sm mb-0">
+                {% if pagination.page > 1 %}
+                <li class="page-item">
+                    <a class="page-link"
+                       hx-get="{{ url_for('manutenzioni.lista') }}"
+                       hx-target="#manutenzioni-table-body"
+                       hx-include="#filter-form"
+                       hx-vals='{"partial": "1", "page": "{{ pagination.page - 1 }}"}'>&laquo;</a>
+                </li>
+                {% endif %}
+                {% for p in range(1, pagination.total_pages + 1) %}
+                {% if p == pagination.page %}
+                <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                {% elif p <= 3 or p >= pagination.total_pages - 2 or (p >= pagination.page - 1 and p <= pagination.page + 1) %}
+                <li class="page-item">
+                    <a class="page-link"
+                       hx-get="{{ url_for('manutenzioni.lista') }}"
+                       hx-target="#manutenzioni-table-body"
+                       hx-include="#filter-form"
+                       hx-vals='{"partial": "1", "page": "{{ p }}"}'>{{ p }}</a>
+                </li>
+                {% elif p == 4 or p == pagination.total_pages - 3 %}
+                <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+                {% endif %}
+                {% endfor %}
+                {% if pagination.page < pagination.total_pages %}
+                <li class="page-item">
+                    <a class="page-link"
+                       hx-get="{{ url_for('manutenzioni.lista') }}"
+                       hx-target="#manutenzioni-table-body"
+                       hx-include="#filter-form"
+                       hx-vals='{"partial": "1", "page": "{{ pagination.page + 1 }}"}'>&raquo;</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+    </div>
+</div>
+{% endblock %}

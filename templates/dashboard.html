@@ -1,0 +1,421 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ app_name }}{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-speedometer2 me-2"></i>Dashboard</h2>
+        <p class="text-muted mb-0">
+            Panoramica
+            {% if divisione_attiva is defined and divisione_attiva %}
+             &mdash; {{ divisione_attiva.nome }}
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+{# ---- STAT CARDS ---- #}
+<div class="row g-3 mb-3">
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card stat-card-blue">
+            <div class="card-body d-flex align-items-center">
+                <div class="stat-icon bg-primary bg-opacity-10 text-primary me-3">
+                    <i class="bi bi-cpu"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ totale_apparecchi }}</div>
+                    <div class="stat-label">Apparecchi</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card stat-card-red">
+            <div class="card-body d-flex align-items-center">
+                <div class="stat-icon bg-danger bg-opacity-10 text-danger me-3">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ scadenze_attive }}</div>
+                    <div class="stat-label">Scadenze attive</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card stat-card-green">
+            <div class="card-body d-flex align-items-center">
+                <div class="stat-icon bg-success bg-opacity-10 text-success me-3">
+                    <i class="bi bi-wrench"></i>
+                </div>
+                <div>
+                    <div class="stat-value">{{ manutenzioni_mese }}</div>
+                    <div class="stat-label">Manutenzioni (mese)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card stat-card stat-card-orange">
+            <div class="card-body d-flex align-items-center">
+                <div class="stat-icon bg-warning bg-opacity-10 text-warning me-3">
+                    <i class="bi bi-currency-euro"></i>
+                </div>
+                <div>
+                    <div class="stat-value">&euro; {{ "%.2f"|format(costi_mese) }}</div>
+                    <div class="stat-label">Costi (mese)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# ---- STAT CARDS VERIFICHE ---- #}
+<div class="row g-3 mb-4">
+    <div class="col-sm-4">
+        <a href="{{ url_for('apparecchi.lista', verifica_el='scaduta') }}" class="text-decoration-none">
+            <div class="card stat-card {% if verifiche_scadute > 0 %}border-danger border-2{% endif %}">
+                <div class="card-body d-flex align-items-center">
+                    <div class="stat-icon bg-danger bg-opacity-10 text-danger me-3">
+                        <i class="bi bi-shield-x"></i>
+                    </div>
+                    <div>
+                        <div class="stat-value text-danger">{{ verifiche_scadute }}</div>
+                        <div class="stat-label">Verifiche el. scadute</div>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-sm-4">
+        <a href="{{ url_for('apparecchi.lista', verifica_el='in_scadenza') }}" class="text-decoration-none">
+            <div class="card stat-card {% if verifiche_in_scadenza > 0 %}border-warning border-2{% endif %}">
+                <div class="card-body d-flex align-items-center">
+                    <div class="stat-icon bg-warning bg-opacity-10 text-warning me-3">
+                        <i class="bi bi-shield-exclamation"></i>
+                    </div>
+                    <div>
+                        <div class="stat-value" style="color:#f59e0b">{{ verifiche_in_scadenza }}</div>
+                        <div class="stat-label">Verifiche el. in scadenza (30gg)</div>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
+    <div class="col-sm-4">
+        <a href="{{ url_for('apparecchi.lista', verifica_el='assente') }}" class="text-decoration-none">
+            <div class="card stat-card {% if apparecchi_senza_verifica > 0 %}border-secondary{% endif %}">
+                <div class="card-body d-flex align-items-center">
+                    <div class="stat-icon bg-secondary bg-opacity-10 text-secondary me-3">
+                        <i class="bi bi-shield-slash"></i>
+                    </div>
+                    <div>
+                        <div class="stat-value text-secondary">{{ apparecchi_senza_verifica }}</div>
+                        <div class="stat-label">Senza verifica el.</div>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
+</div>
+
+{# ---- SCADENZE + ULTIMI INTERVENTI ---- #}
+<div class="row g-3 mb-4">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-clock-history me-1"></i> Scadenze Imminenti</span>
+                {% if scadenze_imminenti %}
+                <a href="{{ url_for('manutenzioni.scadenzario') }}" class="badge bg-primary text-decoration-none">
+                    Vedi tutte <i class="bi bi-arrow-right ms-1"></i>
+                </a>
+                {% endif %}
+            </div>
+            {% if scadenze_imminenti %}
+            <div class="list-group list-group-flush">
+                {% for s in scadenze_imminenti %}
+                <a href="{{ url_for('apparecchi.dettaglio', id=s.apparecchio_id) }}"
+                   class="list-group-item list-group-item-action py-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <div class="fw-medium" style="font-size: 0.85rem;">
+                                {{ s.marca }} {{ s.modello }}
+                            </div>
+                            <small class="text-muted">
+                                {{ s.matricola }} &middot; {{ s.tipo_manutenzione|capitalize }}
+                            </small>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge badge-{{ s.priorita }}">
+                                {% if s.priorita == 'scaduto' %}Scaduto
+                                {% elif s.priorita == 'urgente' %}{{ s.giorni_rimasti }}gg
+                                {% elif s.priorita == 'attenzione' %}{{ s.giorni_rimasti }}gg
+                                {% elif s.priorita == 'avviso' %}{{ s.giorni_rimasti }}gg
+                                {% else %}{{ s.giorni_rimasti }}gg{% endif %}
+                            </span>
+                            <div class="small text-muted mt-1">{{ s.prossima_scadenza }}</div>
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="card-body text-center text-muted py-5">
+                <i class="bi bi-check-circle text-success" style="font-size: 2rem;"></i>
+                <p class="mt-2 mb-0">Nessuna scadenza imminente</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-list-check me-1"></i> Ultimi Interventi</span>
+                {% if ultimi_interventi %}
+                <a href="{{ url_for('manutenzioni.lista') }}" class="badge bg-primary text-decoration-none">
+                    Vedi tutti <i class="bi bi-arrow-right ms-1"></i>
+                </a>
+                {% endif %}
+            </div>
+            {% if ultimi_interventi %}
+            <div class="list-group list-group-flush">
+                {% for m in ultimi_interventi %}
+                <a href="{{ url_for('apparecchi.dettaglio', id=m.apparecchio_id) }}"
+                   class="list-group-item list-group-item-action py-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="badge badge-{{ m.tipo }} me-1">{{ m.tipo|capitalize }}</span>
+                            <span class="fw-medium" style="font-size: 0.85rem;">
+                                {{ m.marca }} {{ m.modello }}
+                            </span>
+                        </div>
+                        <div class="text-end">
+                            <small class="text-muted">{{ m.data_intervento }}</small>
+                            {% if m.costo %}
+                            <div class="small">&euro; {{ "%.2f"|format(m.costo) }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="card-body text-center text-muted py-5">
+                <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                <p class="mt-2 mb-0">Nessun intervento registrato</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{# ---- CHARTS ---- #}
+<div class="row g-3">
+    <div class="col-lg-3">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-pie-chart me-1"></i> Apparecchi per Classe
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="chartClassificazione"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-graph-up me-1"></i> Costi Mensili
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="chartCosti"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-bar-chart me-1"></i> Interventi per Tipo
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="chartTipi"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-shield-check me-1"></i> Stato Verifiche El.
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="chartVerifiche"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+(function() {
+    const chartColors = {
+        blue: '#0ea5e9',
+        red: '#ef4444',
+        green: '#10b981',
+        orange: '#f59e0b',
+        purple: '#8b5cf6',
+        gray: '#94a3b8'
+    };
+
+    const chartDefaults = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: { font: { family: 'Inter', size: 12 } }
+            }
+        }
+    };
+
+    // Chart 1: Apparecchi per Classificazione (Doughnut)
+    const dataClass = JSON.parse('{{ chart_classificazione_json|safe }}');
+    if (dataClass.length > 0) {
+        new Chart(document.getElementById('chartClassificazione'), {
+            type: 'doughnut',
+            data: {
+                labels: dataClass.map(d => 'Classe ' + d.classificazione),
+                datasets: [{
+                    data: dataClass.map(d => d.cnt),
+                    backgroundColor: [chartColors.blue, chartColors.green, chartColors.orange, chartColors.red],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                ...chartDefaults,
+                plugins: {
+                    ...chartDefaults.plugins,
+                    legend: { position: 'bottom', labels: { font: { family: 'Inter', size: 11 }, padding: 15 } }
+                },
+                cutout: '60%'
+            }
+        });
+    } else {
+        document.getElementById('chartClassificazione').parentElement.innerHTML =
+            '<div class="text-center text-muted py-5"><i class="bi bi-pie-chart" style="font-size:1.5rem"></i><p class="mb-0 mt-2 small">Nessun dato</p></div>';
+    }
+
+    // Chart 2: Costi Mensili (Line)
+    const dataCosti = JSON.parse('{{ chart_costi_json|safe }}');
+    if (dataCosti.length > 0) {
+        new Chart(document.getElementById('chartCosti'), {
+            type: 'line',
+            data: {
+                labels: dataCosti.map(d => d.mese),
+                datasets: [{
+                    label: 'Costi (EUR)',
+                    data: dataCosti.map(d => d.totale),
+                    borderColor: chartColors.orange,
+                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    borderWidth: 2,
+                    pointRadius: 3
+                }]
+            },
+            options: {
+                ...chartDefaults,
+                plugins: { ...chartDefaults.plugins, legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { font: { family: 'Inter', size: 11 } } },
+                    x: { ticks: { font: { family: 'Inter', size: 10 }, maxRotation: 45 } }
+                }
+            }
+        });
+    } else {
+        document.getElementById('chartCosti').parentElement.innerHTML =
+            '<div class="text-center text-muted py-5"><i class="bi bi-graph-up" style="font-size:1.5rem"></i><p class="mb-0 mt-2 small">Nessun dato</p></div>';
+    }
+
+    // Chart 4: Stato Verifiche Elettriche (Doughnut)
+    const dataVerifiche = JSON.parse('{{ chart_verifiche_json|safe }}');
+    const verificheColors = {
+        'Scaduta': chartColors.red,
+        'Nessuna': chartColors.gray,
+        'OK': chartColors.green,
+        'Esente': '#cbd5e1'
+    };
+    if (dataVerifiche.length > 0) {
+        new Chart(document.getElementById('chartVerifiche'), {
+            type: 'doughnut',
+            data: {
+                labels: dataVerifiche.map(d => d.stato),
+                datasets: [{
+                    data: dataVerifiche.map(d => d.cnt),
+                    backgroundColor: dataVerifiche.map(d => verificheColors[d.stato] || chartColors.gray),
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                ...chartDefaults,
+                plugins: {
+                    ...chartDefaults.plugins,
+                    legend: { position: 'bottom', labels: { font: { family: 'Inter', size: 11 }, padding: 12 } }
+                },
+                cutout: '60%'
+            }
+        });
+    } else {
+        document.getElementById('chartVerifiche').parentElement.innerHTML =
+            '<div class="text-center text-muted py-5"><i class="bi bi-shield-check" style="font-size:1.5rem"></i><p class="mb-0 mt-2 small">Nessun dato</p></div>';
+    }
+
+    // Chart 3: Interventi per Tipo (Bar)
+    const dataTipi = JSON.parse('{{ chart_tipi_json|safe }}');
+    const tipoColors = {
+        'preventiva': chartColors.blue,
+        'correttiva': chartColors.red,
+        'verifica': chartColors.green,
+        'calibrazione': chartColors.orange
+    };
+    if (dataTipi.length > 0) {
+        new Chart(document.getElementById('chartTipi'), {
+            type: 'bar',
+            data: {
+                labels: dataTipi.map(d => d.tipo.charAt(0).toUpperCase() + d.tipo.slice(1)),
+                datasets: [{
+                    label: 'Interventi',
+                    data: dataTipi.map(d => d.cnt),
+                    backgroundColor: dataTipi.map(d => tipoColors[d.tipo] || chartColors.gray),
+                    borderRadius: 6,
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                ...chartDefaults,
+                plugins: { ...chartDefaults.plugins, legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { stepSize: 1, font: { family: 'Inter', size: 11 } } },
+                    x: { ticks: { font: { family: 'Inter', size: 11 } } }
+                }
+            }
+        });
+    } else {
+        document.getElementById('chartTipi').parentElement.innerHTML =
+            '<div class="text-center text-muted py-5"><i class="bi bi-bar-chart" style="font-size:1.5rem"></i><p class="mb-0 mt-2 small">Nessun dato</p></div>';
+    }
+})();
+</script>
+{% endblock %}

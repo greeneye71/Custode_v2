@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Scadenzario - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-calendar-event me-2"></i>Scadenzario</h2>
+        <p class="text-muted mb-0">Scadenze manutenzioni e verifiche di sicurezza elettrica</p>
+    </div>
+    <div class="dropdown">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+            <i class="bi bi-download me-1"></i> Esporta
+        </button>
+        <ul class="dropdown-menu">
+            <li><a class="dropdown-item" href="{{ url_for('export.scadenzario_excel') }}">
+                <i class="bi bi-file-earmark-excel text-success me-2"></i>Excel (.xlsx)</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('export.scadenzario_pdf') }}">
+                <i class="bi bi-file-earmark-pdf text-danger me-2"></i>PDF</a></li>
+        </ul>
+    </div>
+</div>
+
+{# Summary cards #}
+<div class="row g-3 mb-4">
+    <div class="col">
+        <div class="card cursor-pointer {% if filtri.priorita == 'scaduto' %}border-danger border-2{% endif %}"
+             hx-get="{{ url_for('manutenzioni.scadenzario', priorita='scaduto', partial=1) }}"
+             hx-target="#scadenze-table-body"
+             hx-push-url="false"
+             onclick="setActivePriorita(this)">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-danger">{{ summary.get('scaduto', 0) }}</div>
+                <small class="text-muted">Scaduti</small>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card cursor-pointer {% if filtri.priorita == 'urgente' %}border-danger border-2{% endif %}"
+             hx-get="{{ url_for('manutenzioni.scadenzario', priorita='urgente', partial=1) }}"
+             hx-target="#scadenze-table-body"
+             hx-push-url="false"
+             onclick="setActivePriorita(this)">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-danger">{{ summary.get('urgente', 0) }}</div>
+                <small class="text-muted">Urgenti (&lt;7gg)</small>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card cursor-pointer {% if filtri.priorita == 'attenzione' %}border-warning border-2{% endif %}"
+             hx-get="{{ url_for('manutenzioni.scadenzario', priorita='attenzione', partial=1) }}"
+             hx-target="#scadenze-table-body"
+             hx-push-url="false"
+             onclick="setActivePriorita(this)">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-warning">{{ summary.get('attenzione', 0) }}</div>
+                <small class="text-muted">Attenzione (7-15gg)</small>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card cursor-pointer {% if filtri.priorita == 'avviso' %}border-warning border-2{% endif %}"
+             hx-get="{{ url_for('manutenzioni.scadenzario', priorita='avviso', partial=1) }}"
+             hx-target="#scadenze-table-body"
+             hx-push-url="false"
+             onclick="setActivePriorita(this)">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold" style="color: #f59e0b;">{{ summary.get('avviso', 0) }}</div>
+                <small class="text-muted">Avviso (15-30gg)</small>
+            </div>
+        </div>
+    </div>
+    <div class="col">
+        <div class="card cursor-pointer {% if filtri.priorita == 'ok' %}border-success border-2{% endif %}"
+             hx-get="{{ url_for('manutenzioni.scadenzario', priorita='ok', partial=1) }}"
+             hx-target="#scadenze-table-body"
+             hx-push-url="false"
+             onclick="setActivePriorita(this)">
+            <div class="card-body text-center py-3">
+                <div class="fs-3 fw-bold text-success">{{ summary.get('ok', 0) }}</div>
+                <small class="text-muted">OK (&gt;30gg)</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Filter row #}
+<div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+    {# Filtro tipo_record #}
+    <div class="btn-group btn-group-sm" role="group">
+        <a href="{{ url_for('manutenzioni.scadenzario', tipo=filtri.tipo, priorita=filtri.priorita) }}"
+           class="btn {% if not filtri.tipo_record %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+            Tutte
+            <span class="badge bg-white text-dark ms-1">{{ (tipo_summary.get('manutenzione',0) + tipo_summary.get('verifica',0)) }}</span>
+        </a>
+        <a href="{{ url_for('manutenzioni.scadenzario', tipo=filtri.tipo, priorita=filtri.priorita, tipo_record='manutenzione') }}"
+           class="btn {% if filtri.tipo_record == 'manutenzione' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+            <i class="bi bi-wrench me-1"></i>Manutenzioni
+            <span class="badge bg-white text-dark ms-1">{{ tipo_summary.get('manutenzione', 0) }}</span>
+        </a>
+        <a href="{{ url_for('manutenzioni.scadenzario', tipo=filtri.tipo, priorita=filtri.priorita, tipo_record='verifica') }}"
+           class="btn {% if filtri.tipo_record == 'verifica' %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+            <i class="bi bi-shield-check me-1"></i>Verifiche el.
+            <span class="badge bg-white text-dark ms-1">{{ tipo_summary.get('verifica', 0) }}</span>
+        </a>
+    </div>
+    {# Filtro tipo manutenzione (solo se non filtro su verifiche) #}
+    {% if filtri.tipo_record != 'verifica' %}
+    <select class="form-select form-select-sm" style="max-width: 200px;" name="tipo"
+            hx-get="{{ url_for('manutenzioni.scadenzario') }}"
+            hx-target="#scadenze-table-body"
+            hx-include="[name='tipo_record']"
+            hx-vals='{"partial": "1"}'>
+        <option value="">Tutti i tipi manut.</option>
+        <option value="preventiva" {% if filtri.tipo == 'preventiva' %}selected{% endif %}>Preventiva</option>
+        <option value="correttiva" {% if filtri.tipo == 'correttiva' %}selected{% endif %}>Correttiva</option>
+        <option value="verifica" {% if filtri.tipo == 'verifica' %}selected{% endif %}>Verifica</option>
+        <option value="calibrazione" {% if filtri.tipo == 'calibrazione' %}selected{% endif %}>Calibrazione</option>
+    </select>
+    {% endif %}
+    <a href="{{ url_for('manutenzioni.scadenzario') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-x-lg me-1"></i> Reset
+    </a>
+</div>
+
+{# Table #}
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Apparecchio</th>
+                        <th>Matricola</th>
+                        <th>Ubicazione</th>
+                        <th>Tipo</th>
+                        <th>Prossima Scadenza</th>
+                        <th>Giorni</th>
+                        <th>Priorit&agrave;</th>
+                        <th>Divisione</th>
+                    </tr>
+                </thead>
+                <tbody id="scadenze-table-body">
+                    {% include "partials/scadenze_table.html" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+function setActivePriorita(el) {
+    document.querySelectorAll('.row .card').forEach(c => {
+        c.classList.remove('border-2', 'border-danger', 'border-warning', 'border-success');
+    });
+    el.classList.add('border-2');
+}
+</script>
+{% endblock %}

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Preview Import Verifiche - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2><i class="bi bi-list-check me-2"></i>Preview Import Verifiche</h2>
+    <p class="text-muted mb-0">
+        File: <strong>{{ record.filename }}</strong> &mdash;
+        {{ righe|length }} verifiche estratte dall'AI
+    </p>
+</div>
+
+<form method="POST" action="{{ url_for('verifiche.import_esegui', id=record.id) }}">
+    <div class="mb-3 d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = true)">
+            Seleziona tutti
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = false)">
+            Deseleziona tutti
+        </button>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width:40px;"></th>
+                            <th>#</th>
+                            <th>Matricola (AI)</th>
+                            <th>Apparecchio Abbinato</th>
+                            <th>Data Verifica</th>
+                            <th>Esito</th>
+                            <th>Prossima Scad.</th>
+                            <th>Tecnico/Ditta</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in righe %}
+                        <tr class="{% if r.match_confidence >= 1.0 %}table-success{% elif not r.apparecchio_match_id %}table-warning{% endif %}">
+                            <td>
+                                <input type="checkbox" class="form-check-input row-check"
+                                       name="righe_selezionate" value="{{ r.id }}"
+                                       {% if r.apparecchio_match_id %}checked{% endif %}>
+                            </td>
+                            <td>{{ r.riga_numero }}</td>
+                            <td><code>{{ r.dati.get('matricola', '-') }}</code></td>
+                            <td>
+                                {% if r.apparecchio_match_id %}
+                                <span class="badge bg-success me-1">Match</span>
+                                {{ r.app_matricola }} — {{ r.marca }} {{ r.modello }}
+                                <input type="hidden" name="apparecchio_id_{{ r.id }}" value="{{ r.apparecchio_match_id }}">
+                                {% else %}
+                                <span class="badge bg-warning me-1">Nessun match</span>
+                                <select class="form-select form-select-sm" name="apparecchio_id_{{ r.id }}"
+                                        style="max-width: 260px; display: inline-block;">
+                                    <option value="">-- Seleziona manualmente --</option>
+                                    {% for a in apparecchi_list %}
+                                    <option value="{{ a.id }}">{{ a.matricola }} — {{ a.marca }} {{ a.modello }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% endif %}
+                            </td>
+                            <td>{{ r.dati.get('data_verifica', '-') }}</td>
+                            <td>
+                                {% set esito = r.dati.get('esito', '') %}
+                                {% if esito == 'positivo' %}
+                                <span class="badge bg-success">Positivo</span>
+                                {% elif esito == 'negativo' %}
+                                <span class="badge bg-danger">Negativo</span>
+                                {% elif esito == 'con_riserva' %}
+                                <span class="badge bg-warning text-dark">Con riserva</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ esito or '-' }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ r.dati.get('prossima_scadenza', '-') }}</td>
+                            <td>{{ r.dati.get('tecnico_ditta', '-') }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="8" class="text-center text-muted py-4">
+                                Nessuna verifica estratta dal file.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-lg me-1"></i> Importa Selezionate
+        </button>
+        <a href="{{ url_for('verifiche.import_upload') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left me-1"></i> Annulla
+        </a>
+    </div>
+</form>
+{% endblock %}

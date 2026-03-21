@@ -1,0 +1,28 @@
+# MedInventory - Dependencies
+# by Studio Bergamaschi
+
+# Web framework
+flask>=3.0
+
+# AI integration (Claude API)
+anthropic>=0.40
+
+# Excel read/write
+openpyxl>=3.1
+
+# PDF generation
+fpdf2>=2.8
+
+# PDF text extraction & manipulation
+pdfplumber>=0.11
+pypdf>=4.0
+
+# Encryption for IMAP credentials
+cryptography>=42.0
+
+# Production WSGI server (Windows-compatible)
+waitress>=3.0
+
+# Windows launcher with system tray icon
+pystray>=0.19
+Pillow>=10.0

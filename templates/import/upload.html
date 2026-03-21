@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Import Documenti - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2><i class="bi bi-cloud-upload me-2"></i>Import Documenti</h2>
+    <p class="text-muted mb-0">Carica un file per importare automaticamente apparecchi, verbali o verifiche tramite AI</p>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-body p-4">
+                <form method="POST" action="{{ url_for('import.analizza') }}" enctype="multipart/form-data">
+                    <div class="mb-4">
+                        <label class="form-label fw-medium">Divisione di destinazione</label>
+                        <select class="form-select" name="divisione_id" required>
+                            <option value="">-- Seleziona Divisione --</option>
+                            {% for d in divisioni %}
+                            <option value="{{ d.id }}"
+                                    {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == d.id %}selected{% endif %}>
+                                {{ d.nome }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label fw-medium">Documento da importare</label>
+                        <div class="border border-2 border-dashed rounded-3 p-5 text-center bg-light">
+                            <i class="bi bi-file-earmark-arrow-up text-primary" style="font-size: 2.5rem;"></i>
+                            <p class="mt-2 mb-2 fw-medium">Seleziona o trascina un file</p>
+                            <p class="text-muted small mb-3">Formati supportati: Excel (.xlsx), PDF, CSV</p>
+                            <input type="file" class="form-control mx-auto" name="file"
+                                   accept=".xlsx,.xls,.pdf,.csv" required style="max-width: 350px;">
+                        </div>
+                    </div>
+
+                    <div class="alert alert-info small">
+                        <i class="bi bi-robot me-1"></i>
+                        <strong>Classificazione automatica:</strong> Il documento verr&agrave; analizzato dall'AI
+                        per determinare automaticamente il tipo (inventario, verbale di manutenzione o verifica elettrica)
+                        e importare i dati corrispondenti.
+                        <hr class="my-2">
+                        <i class="bi bi-file-pdf me-1"></i>
+                        <strong>PDF multipagina:</strong> Per i verbali e le verifiche, ogni pagina del PDF verr&agrave;
+                        trattata come un documento separato e analizzata singolarmente.
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100 py-2">
+                        <i class="bi bi-cpu me-1"></i> Classifica e Analizza con AI
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="text-center mt-3">
+            <a href="{{ url_for('import.storico') }}" class="text-muted small">
+                <i class="bi bi-clock-history me-1"></i> Storico importazioni
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

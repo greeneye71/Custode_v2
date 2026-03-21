@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if verifica %}Modifica{% else %}Nuova{% endif %} Verifica - {{ app_name }}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>
+        <i class="bi bi-{% if verifica %}pencil{% else %}shield-check{% endif %} me-2"></i>
+        {% if verifica %}Modifica Verifica Elettrica{% else %}Nuova Verifica Elettrica{% endif %}
+    </h2>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <form method="POST" enctype="multipart/form-data">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-shield-check me-1"></i> Dati Verifica
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-12">
+                            <label for="apparecchio_id" class="form-label">Apparecchio <span class="text-danger">*</span></label>
+                            <select class="form-select {% if errors.get('apparecchio_id') %}is-invalid{% endif %}"
+                                    id="apparecchio_id" name="apparecchio_id" required>
+                                <option value="">-- Seleziona Apparecchio --</option>
+                                {% for a in apparecchi %}
+                                <option value="{{ a.id }}"
+                                        {% if form_data.get('apparecchio_id')|string == a.id|string %}selected{% endif %}>
+                                    {{ a.marca }} {{ a.modello }} ({{ a.matricola }})
+                                    {% if a.divisione_nome %} - {{ a.divisione_nome }}{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if errors.get('apparecchio_id') %}
+                            <div class="invalid-feedback">{{ errors.apparecchio_id }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label for="data_verifica" class="form-label">Data Verifica <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control {% if errors.get('data_verifica') %}is-invalid{% endif %}"
+                                   id="data_verifica" name="data_verifica"
+                                   value="{{ form_data.get('data_verifica', '') }}" required>
+                            {% if errors.get('data_verifica') %}
+                            <div class="invalid-feedback">{{ errors.data_verifica }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-6">
+                            <label for="esito" class="form-label">Esito <span class="text-danger">*</span></label>
+                            <select class="form-select {% if errors.get('esito') %}is-invalid{% endif %}"
+                                    id="esito" name="esito" required>
+                                <option value="">-- Seleziona --</option>
+                                <option value="positivo" {% if form_data.get('esito') == 'positivo' %}selected{% endif %}>
+                                    Positivo
+                                </option>
+                                <option value="negativo" {% if form_data.get('esito') == 'negativo' %}selected{% endif %}>
+                                    Negativo
+                                </option>
+                                <option value="con_riserva" {% if form_data.get('esito') == 'con_riserva' %}selected{% endif %}>
+                                    Con riserva
+                                </option>
+                            </select>
+                            {% if errors.get('esito') %}
+                            <div class="invalid-feedback">{{ errors.esito }}</div>
+                            {% endif %}
+                        </div>
+
+                        <div class="col-md-12">
+                            <label for="tecnico_ditta" class="form-label">Tecnico / Ditta</label>
+                            <input type="text" class="form-control"
+                                   id="tecnico_ditta" name="tecnico_ditta"
+                                   value="{{ form_data.get('tecnico_ditta', '') }}">
+                        </div>
+
+                        <div class="col-md-12">
+                            <label for="note" class="form-label">Note</label>
+                            <textarea class="form-control" id="note" name="note" rows="3">{{ form_data.get('note', '') }}</textarea>
+                        </div>
+
+                        <div class="col-md-12">
+                            <label for="documento" class="form-label">Documento PDF</label>
+                            <input type="file" class="form-control" id="documento" name="documento" accept=".pdf">
+                            {% if verifica and verifica.get('documento_path') %}
+                            <div class="form-text">
+                                <i class="bi bi-file-earmark-pdf text-danger me-1"></i>
+                                Documento attuale:
+                                <a href="{{ url_for('verifiche.scarica_documento', id=verifica.id) }}">
+                                    Scarica
+                                </a> (carica nuovo per sostituire)
+                            </div>
+                            {% else %}
+                            <div class="form-text">Solo file PDF. Opzionale.</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Scheduling #}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-calendar-event me-1"></i> Programmazione Prossima Verifica
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Periodicit&agrave;</label>
+                            <div class="d-flex gap-4 mt-1">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio"
+                                           name="periodicita_giorni" id="periodo_2anni" value="730"
+                                           {% if form_data.get('periodicita_giorni')|string != '365' %}checked{% endif %}
+                                           onchange="calcolaScadenza()">
+                                    <label class="form-check-label" for="periodo_2anni">2 anni</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio"
+                                           name="periodicita_giorni" id="periodo_1anno" value="365"
+                                           {% if form_data.get('periodicita_giorni')|string == '365' %}checked{% endif %}
+                                           onchange="calcolaScadenza()">
+                                    <label class="form-check-label" for="periodo_1anno">1 anno</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="prossima_scadenza" class="form-label">Prossima Scadenza</label>
+                            <input type="date" class="form-control"
+                                   id="prossima_scadenza" name="prossima_scadenza"
+                                   value="{{ form_data.get('prossima_scadenza', '') }}">
+                            <div class="form-text">Calcolata automaticamente dalla periodicit&agrave;</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>
+                    {% if verifica %}Salva Modifiche{% else %}Registra Verifica{% endif %}
+                </button>
+                <a href="{{ url_for('verifiche.lista') }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-x-lg me-1"></i> Annulla
+                </a>
+                {% if verifica %}
+                <form method="POST" action="{{ url_for('verifiche.elimina', id=verifica.id) }}"
+                      class="ms-auto"
+                      onsubmit="return confirm('Eliminare questa verifica?')">
+                    <button type="submit" class="btn btn-outline-danger">
+                        <i class="bi bi-trash me-1"></i> Elimina
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+function calcolaScadenza() {
+    const dataVerifica = document.getElementById('data_verifica').value;
+    const periodicita = document.querySelector('input[name="periodicita_giorni"]:checked');
+    if (dataVerifica && periodicita) {
+        const date = new Date(dataVerifica);
+        date.setDate(date.getDate() + parseInt(periodicita.value));
+        const formatted = date.toISOString().split('T')[0];
+        document.getElementById('prossima_scadenza').value = formatted;
+    }
+}
+document.getElementById('data_verifica').addEventListener('change', calcolaScadenza);
+</script>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% for s in scadenze %}
+<tr>
+    <td>
+        <a href="{{ url_for('apparecchi.dettaglio', id=s.apparecchio_id) }}" class="text-decoration-none fw-medium">
+            {{ s.marca }} {{ s.modello }}
+        </a>
+        {% if s.descrizione %}
+        <br><small class="text-muted">{{ s.descrizione }}</small>
+        {% endif %}
+    </td>
+    <td><code>{{ s.matricola }}</code></td>
+    <td>{{ s.ubicazione or '-' }}</td>
+    <td>
+        {% if s.tipo_manutenzione == 'verifica_elettrica' %}
+        <span class="badge bg-info text-dark"><i class="bi bi-shield-check me-1"></i>Verifica Elettrica</span>
+        {% else %}
+        <span class="badge badge-{{ s.tipo_manutenzione }}">{{ s.tipo_manutenzione|capitalize }}</span>
+        {% endif %}
+    </td>
+    <td class="fw-medium">{{ s.prossima_scadenza }}</td>
+    <td>
+        {% if s.giorni_rimasti < 0 %}
+        <span class="text-danger fw-bold">{{ s.giorni_rimasti }}gg</span>
+        {% elif s.giorni_rimasti <= 7 %}
+        <span class="text-danger">{{ s.giorni_rimasti }}gg</span>
+        {% elif s.giorni_rimasti <= 30 %}
+        <span class="text-warning">{{ s.giorni_rimasti }}gg</span>
+        {% else %}
+        <span class="text-success">{{ s.giorni_rimasti }}gg</span>
+        {% endif %}
+    </td>
+    <td>
+        <span class="badge badge-{{ s.priorita }}">
+            {% if s.priorita == 'scaduto' %}<i class="bi bi-exclamation-triangle me-1"></i>Scaduto
+            {% elif s.priorita == 'urgente' %}<i class="bi bi-exclamation-circle me-1"></i>Urgente
+            {% elif s.priorita == 'attenzione' %}<i class="bi bi-clock me-1"></i>Attenzione
+            {% elif s.priorita == 'avviso' %}<i class="bi bi-info-circle me-1"></i>Avviso
+            {% else %}<i class="bi bi-check-circle me-1"></i>OK
+            {% endif %}
+        </span>
+    </td>
+    <td>
+        <span class="d-inline-flex align-items-center">
+            <span class="divisione-dot me-1" style="background-color: {{ s.divisione_colore or '#6b7280' }}"></span>
+            <small>{{ s.divisione_nome or '-' }}</small>
+        </span>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="8" class="text-center text-muted py-4">
+        <i class="bi bi-check-circle text-success" style="font-size: 1.5rem;"></i>
+        <p class="mb-0 mt-2">Nessuna scadenza trovata</p>
+    </td>
+</tr>
+{% endfor %}

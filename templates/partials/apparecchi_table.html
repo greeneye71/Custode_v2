@@ -1,0 +1,144 @@
+{#
+  Nota: questo partial viene restituito per richieste HTMX (partial=1).
+  Il blocco OOB alla fine aggiorna #pagination-nav fuori dal tbody in modo sincrono.
+#}
+{% for a in apparecchi %}
+<tr>
+    <td>
+        <a href="{{ url_for('apparecchi.dettaglio', id=a.id) }}" class="text-decoration-none fw-medium">
+            {{ a.matricola }}
+        </a>
+        {% if a.descrizione %}
+        <br><small class="text-muted">{{ a.descrizione }}</small>
+        {% endif %}
+    </td>
+    <td>
+        <div class="fw-medium">{{ a.marca }}</div>
+        <small class="text-muted">{{ a.modello }}</small>
+    </td>
+    <td>
+        {% if a.classificazione %}
+        <span class="badge bg-secondary">{{ a.classificazione }}</span>
+        {% else %}
+        <span class="text-muted">-</span>
+        {% endif %}
+    </td>
+    <td>{{ a.ubicazione or '-' }}</td>
+    <td>
+        <span class="badge badge-{{ a.stato }}">
+            {% if a.stato == 'funzionante' %}Funzionante
+            {% elif a.stato == 'in_manutenzione' %}In manutenzione
+            {% elif a.stato == 'da_sostituire' %}Da sostituire
+            {% elif a.stato == 'dismesso' %}Dismesso
+            {% endif %}
+        </span>
+    </td>
+    <td>
+        {% if a.stato_verifica_el == 'esente' %}
+            <span class="badge bg-secondary" title="Non soggetto a verifica">Esente</span>
+        {% elif a.stato_verifica_el == 'assente' %}
+            <span class="badge bg-warning text-dark" title="Nessuna verifica registrata">
+                <i class="bi bi-exclamation-triangle me-1"></i>Nessuna
+            </span>
+        {% elif a.stato_verifica_el == 'ok' %}
+            <span class="badge bg-success" title="Scadenza: {{ a.ultima_verifica_scadenza or 'n.d.' }}">
+                <i class="bi bi-shield-check me-1"></i>{{ a.ultima_verifica_data }}
+            </span>
+        {% elif a.stato_verifica_el == 'scaduta' %}
+            <span class="badge bg-danger" title="Scaduta il: {{ a.ultima_verifica_scadenza }}">
+                <i class="bi bi-shield-x me-1"></i>{{ a.ultima_verifica_data }}
+            </span>
+        {% endif %}
+    </td>
+    <td>
+        <span class="d-inline-flex align-items-center">
+            <span class="divisione-dot me-1" style="background-color: {{ a.divisione_colore or '#6b7280' }}"></span>
+            <small>{{ a.divisione_nome or '-' }}</small>
+        </span>
+    </td>
+    <td>
+        {% if a.connesso_rete %}
+        <i class="bi bi-wifi text-success" title="{{ a.ip_address or '' }}"></i>
+        {% else %}
+        <i class="bi bi-wifi-off text-muted"></i>
+        {% endif %}
+    </td>
+    <td class="text-end">
+        <div class="btn-group">
+            <a href="{{ url_for('apparecchi.dettaglio', id=a.id) }}"
+               class="btn btn-outline-primary btn-action" title="Visualizza">
+                <i class="bi bi-eye"></i>
+            </a>
+            <a href="{{ url_for('apparecchi.modifica', id=a.id) }}"
+               class="btn btn-outline-secondary btn-action" title="Modifica">
+                <i class="bi bi-pencil"></i>
+            </a>
+            {% if a.stato != 'dismesso' %}
+            <button type="button" class="btn btn-outline-danger btn-action"
+                    data-bs-toggle="modal" data-bs-target="#dismissModal"
+                    data-name="{{ a.marca }} {{ a.modello }} ({{ a.matricola }})"
+                    data-url="{{ url_for('apparecchi.dismetti', id=a.id) }}"
+                    title="Dismetti">
+                <i class="bi bi-trash"></i>
+            </button>
+            {% endif %}
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="9" class="text-center text-muted py-4">
+        <i class="bi bi-inbox" style="font-size: 1.5rem;"></i>
+        <p class="mb-0 mt-2">Nessun apparecchio trovato</p>
+    </td>
+</tr>
+{% endfor %}
+
+{# OOB swap: aggiorna la paginazione fuori dal tbody ad ogni risposta HTMX #}
+<div id="pagination-nav" hx-swap-oob="true">
+{% if pagination.total_pages > 1 %}
+<div class="card-footer bg-white d-flex justify-content-between align-items-center">
+    <small class="text-muted">
+        Pagina {{ pagination.page }} di {{ pagination.total_pages }}
+        ({{ pagination.total }} risultati)
+    </small>
+    <nav>
+        <ul class="pagination pagination-sm mb-0">
+            {% if pagination.page > 1 %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('apparecchi.lista') }}"
+                   hx-target="#apparecchi-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ pagination.page - 1 }}"}'>&laquo;</a>
+            </li>
+            {% endif %}
+            {% for p in range(1, pagination.total_pages + 1) %}
+            {% if p == pagination.page %}
+            <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+            {% elif p <= 3 or p >= pagination.total_pages - 2 or (p >= pagination.page - 1 and p <= pagination.page + 1) %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('apparecchi.lista') }}"
+                   hx-target="#apparecchi-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ p }}"}'>{{ p }}</a>
+            </li>
+            {% elif p == 4 or p == pagination.total_pages - 3 %}
+            <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+            {% endif %}
+            {% endfor %}
+            {% if pagination.page < pagination.total_pages %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('apparecchi.lista') }}"
+                   hx-target="#apparecchi-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ pagination.page + 1 }}"}'>&raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+</div>
+{% endif %}
+</div>

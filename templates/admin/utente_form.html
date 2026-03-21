@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{% if utente %}Modifica{% else %}Nuovo{% endif %} Utente - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>
+        <i class="bi bi-{% if utente %}pencil{% else %}person-plus{% endif %} me-2"></i>
+        {% if utente %}Modifica Utente{% else %}Nuovo Utente{% endif %}
+    </h2>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <form method="POST">
+            <div class="card mb-4">
+                <div class="card-header"><i class="bi bi-person me-1"></i> Dati Utente</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Nome <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control {% if errors.get('nome') %}is-invalid{% endif %}"
+                                   name="nome" value="{{ form_data.get('nome', '') }}" required>
+                            {% if errors.get('nome') %}<div class="invalid-feedback">{{ errors.nome }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Cognome <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control {% if errors.get('cognome') %}is-invalid{% endif %}"
+                                   name="cognome" value="{{ form_data.get('cognome', '') }}" required>
+                            {% if errors.get('cognome') %}<div class="invalid-feedback">{{ errors.cognome }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Email <span class="text-danger">*</span></label>
+                            <input type="email" class="form-control {% if errors.get('email') %}is-invalid{% endif %}"
+                                   name="email" value="{{ form_data.get('email', '') }}" required>
+                            {% if errors.get('email') %}<div class="invalid-feedback">{{ errors.email }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Ruolo</label>
+                            <select class="form-select" name="ruolo">
+                                <option value="utente" {% if form_data.get('ruolo', 'utente') == 'utente' %}selected{% endif %}>Utente</option>
+                                <option value="admin" {% if form_data.get('ruolo') == 'admin' %}selected{% endif %}>Amministratore</option>
+                            </select>
+                        </div>
+                        {% if not utente %}
+                        <div class="col-md-6">
+                            <label class="form-label">Password <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control {% if errors.get('password') %}is-invalid{% endif %}"
+                                   name="password" value="{{ form_data.get('password', '') }}" required
+                                   placeholder="Min. 8 caratteri">
+                            {% if errors.get('password') %}<div class="invalid-feedback">{{ errors.password }}</div>{% endif %}
+                            <div class="form-text">L'utente dovrà cambiarla al primo accesso.</div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header"><i class="bi bi-building me-1"></i> Divisioni Assegnate</div>
+                <div class="card-body">
+                    {% for d in divisioni %}
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" name="divisioni"
+                               value="{{ d.id }}" id="div{{ d.id }}"
+                               {% if d.id|string in (form_data.get('divisioni') or []) %}checked{% endif %}>
+                        <label class="form-check-label d-flex align-items-center" for="div{{ d.id }}">
+                            <span class="divisione-dot me-2" style="background-color: {{ d.colore }}"></span>
+                            {{ d.nome }}
+                        </label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i> {% if utente %}Salva{% else %}Crea{% endif %}
+                </button>
+                <a href="{{ url_for('admin.utenti') }}" class="btn btn-outline-secondary">Annulla</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

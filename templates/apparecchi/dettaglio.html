@@ -1,0 +1,588 @@
+{% extends "base.html" %}
+
+{% block title %}{{ apparecchio.marca }} {{ apparecchio.modello }} - {{ app_name }}{% endblock %}
+
+{% block head_extra %}
+<style>
+@media print {
+    nav.navbar, nav.sidebar, .card-footer, footer { display: none !important; }
+    .main-content { margin-left: 0 !important; padding: 1rem !important; }
+    body { font-size: 11pt; }
+    .badge { border: 1px solid #ccc !important; }
+    a[href]:after { content: none !important; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{# Page header #}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2>
+            <i class="bi bi-cpu me-2"></i>{{ apparecchio.marca }} {{ apparecchio.modello }}
+        </h2>
+        <p class="text-muted mb-0">
+            Matricola: <strong>{{ apparecchio.matricola }}</strong>
+            {% if apparecchio.descrizione %}
+            &middot; <strong>{{ apparecchio.descrizione }}</strong>
+            {% endif %}
+        </p>
+    </div>
+    <div class="d-flex gap-2">
+        <button onclick="window.print()" class="btn btn-outline-secondary d-print-none">
+            <i class="bi bi-printer me-1"></i> Stampa
+        </button>
+        <a href="{{ url_for('apparecchi.modifica', id=apparecchio.id) }}" class="btn btn-primary d-print-none">
+            <i class="bi bi-pencil me-1"></i> Modifica
+        </a>
+        <a href="{{ url_for('apparecchi.lista') }}" class="btn btn-outline-secondary d-print-none">
+            <i class="bi bi-arrow-left me-1"></i> Lista
+        </a>
+    </div>
+</div>
+
+{# Status and deadline badges #}
+<div class="d-flex flex-wrap gap-2 mb-4">
+    <span class="badge badge-{{ apparecchio.stato }} fs-6">
+        {% if apparecchio.stato == 'funzionante' %}
+        <i class="bi bi-check-circle me-1"></i>Funzionante
+        {% elif apparecchio.stato == 'in_manutenzione' %}
+        <i class="bi bi-wrench me-1"></i>In manutenzione
+        {% elif apparecchio.stato == 'da_sostituire' %}
+        <i class="bi bi-arrow-repeat me-1"></i>Da programmare sostituzione
+        {% else %}
+        <i class="bi bi-x-circle me-1"></i>Dismesso
+        {% endif %}
+    </span>
+    <span class="d-inline-flex align-items-center badge bg-light text-dark border fs-6">
+        <span class="divisione-dot me-1" style="background-color: {{ apparecchio.divisione_colore }}"></span>
+        {{ apparecchio.divisione_nome }}
+    </span>
+    {# Badge verifica elettrica #}
+    {% if stato_verifica_el == 'esente' %}
+    <span class="badge bg-secondary fs-6">
+        <i class="bi bi-slash-circle me-1"></i>Non soggetto a verifica el.
+    </span>
+    {% elif stato_verifica_el == 'assente' %}
+    <span class="badge bg-warning text-dark fs-6">
+        <i class="bi bi-exclamation-triangle me-1"></i>Nessuna verifica elettrica
+    </span>
+    {% elif stato_verifica_el == 'ok' %}
+    <span class="badge bg-success fs-6"
+          title="Scadenza: {{ ultima_verifica.prossima_scadenza or 'n.d.' }}">
+        <i class="bi bi-shield-check me-1"></i>Verifica el. OK
+        &mdash; {{ ultima_verifica.data_verifica }}
+    </span>
+    {% elif stato_verifica_el == 'scaduta' %}
+    <span class="badge bg-danger fs-6"
+          title="Scaduta il: {{ ultima_verifica.prossima_scadenza }}">
+        <i class="bi bi-shield-x me-1"></i>Verifica el. SCADUTA
+        &mdash; {{ ultima_verifica.data_verifica }}
+    </span>
+    {% endif %}
+    {% if prossima_scadenza %}
+    <span class="badge badge-{{ prossima_scadenza.priorita }} fs-6">
+        <i class="bi bi-calendar-event me-1"></i>
+        Scadenza: {{ prossima_scadenza.prossima_scadenza }}
+        ({{ prossima_scadenza.giorni_rimasti }}gg)
+    </span>
+    {% endif %}
+</div>
+
+<div class="row g-4">
+    {# ---- Left column: data ---- #}
+    <div class="col-lg-8">
+
+        {# Device info #}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-1"></i> Anagrafica
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <dl class="row mb-0">
+                            <dt class="col-sm-5 text-muted">Matricola</dt>
+                            <dd class="col-sm-7 fw-medium">{{ apparecchio.matricola }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Descrizione</dt>
+                            <dd class="col-sm-7">{{ apparecchio.descrizione or '-' }}</dd>
+
+                            <dt class="col-sm-5 text-muted">N. Inventario</dt>
+                            <dd class="col-sm-7">{{ apparecchio.numero_inventario or '-' }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Marca</dt>
+                            <dd class="col-sm-7 fw-medium">{{ apparecchio.marca }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Modello</dt>
+                            <dd class="col-sm-7 fw-medium">{{ apparecchio.modello }}</dd>
+                        </dl>
+                    </div>
+                    <div class="col-md-6">
+                        <dl class="row mb-0">
+                            <dt class="col-sm-5 text-muted">Anno</dt>
+                            <dd class="col-sm-7">{{ apparecchio.anno_fabbricazione or '-' }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Classificazione</dt>
+                            <dd class="col-sm-7">
+                                {% if apparecchio.classificazione %}
+                                <span class="badge bg-secondary">Classe {{ apparecchio.classificazione }}</span>
+                                {% else %}-{% endif %}
+                            </dd>
+
+                            <dt class="col-sm-5 text-muted">Ubicazione</dt>
+                            <dd class="col-sm-7">{{ apparecchio.ubicazione or '-' }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Fornitore</dt>
+                            <dd class="col-sm-7">{{ apparecchio.fornitore or '-' }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Scad. Garanzia</dt>
+                            <dd class="col-sm-7">{{ apparecchio.garanzia_scadenza or '-' }}</dd>
+
+                            <dt class="col-sm-5 text-muted">Verifica el.</dt>
+                            <dd class="col-sm-7">
+                                {% if apparecchio.soggetto_verifica %}
+                                <span class="badge bg-primary">Soggetto</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Esente</span>
+                                {% endif %}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Network info (if connected) #}
+        {% if apparecchio.connesso_rete %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-wifi me-1 text-success"></i> Connettivit&agrave; di Rete
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-3 text-muted">IP Address</dt>
+                    <dd class="col-sm-3"><code>{{ apparecchio.ip_address or '-' }}</code></dd>
+
+                    <dt class="col-sm-3 text-muted">MAC Address</dt>
+                    <dd class="col-sm-3"><code>{{ apparecchio.mac_address or '-' }}</code></dd>
+
+                    <dt class="col-sm-3 text-muted">Hostname</dt>
+                    <dd class="col-sm-3">{{ apparecchio.hostname or '-' }}</dd>
+
+                    <dt class="col-sm-3 text-muted">Porta</dt>
+                    <dd class="col-sm-3">{{ apparecchio.porta or '-' }}</dd>
+
+                    {% if apparecchio.url_interfaccia %}
+                    <dt class="col-sm-3 text-muted">Interfaccia Web</dt>
+                    <dd class="col-sm-9">
+                        <a href="{{ apparecchio.url_interfaccia }}" target="_blank" rel="noopener">
+                            {{ apparecchio.url_interfaccia }} <i class="bi bi-box-arrow-up-right ms-1"></i>
+                        </a>
+                    </dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+        {% endif %}
+
+        {# Accessories #}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-box-seam me-1"></i> Accessori
+            </div>
+            <div class="card-body p-0">
+                {% if accessori %}
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Descrizione</th>
+                                <th>Produttore</th>
+                                <th>Modello</th>
+                                <th>Matricola</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for acc in accessori %}
+                            <tr>
+                                <td>{{ acc.descrizione }}</td>
+                                <td>{{ acc.produttore or '-' }}</td>
+                                <td>{{ acc.modello or '-' }}</td>
+                                <td>{% if acc.matricola %}<code>{{ acc.matricola }}</code>{% else %}-{% endif %}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-box-seam" style="font-size: 1.5rem;"></i>
+                    <p class="mb-0 mt-2 small">Nessun accessorio registrato</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {# Notes #}
+        {% if apparecchio.note %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-chat-text me-1"></i> Note
+            </div>
+            <div class="card-body">
+                <p class="mb-0">{{ apparecchio.note }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {# Maintenance history #}
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-wrench me-1"></i> Storico Manutenzioni</span>
+                <a href="{{ url_for('manutenzioni.nuova', apparecchio_id=apparecchio.id) }}" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-plus-lg me-1"></i> Nuova
+                </a>
+            </div>
+            <div class="card-body p-0">
+                {% if manutenzioni %}
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Data</th>
+                                <th>Tipo</th>
+                                <th>Tecnico/Ditta</th>
+                                <th>Esito</th>
+                                <th>Costo</th>
+                                <th>Prossima Scad.</th>
+                                <th>Verb.</th>
+                                <th class="text-end">Azioni</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in manutenzioni %}
+                            <tr>
+                                <td class="fw-medium">{{ m.data_intervento }}</td>
+                                <td><span class="badge badge-{{ m.tipo }}">{{ m.tipo|capitalize }}</span></td>
+                                <td>{{ m.tecnico_ditta or '-' }}</td>
+                                <td>{{ m.esito or '-' }}</td>
+                                <td>{% if m.costo %}&euro; {{ "%.2f"|format(m.costo) }}{% else %}-{% endif %}</td>
+                                <td>{{ m.prossima_scadenza or '-' }}</td>
+                                <td>
+                                    {% if m.verbale_path %}
+                                    <a href="{{ url_for('manutenzioni.scarica_verbale', id=m.id) }}"
+                                       class="btn btn-sm btn-outline-secondary" title="Scarica verbale">
+                                        <i class="bi bi-file-earmark-pdf text-danger"></i>
+                                    </a>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <div class="btn-group">
+                                        <a href="{{ url_for('manutenzioni.modifica', id=m.id) }}"
+                                           class="btn btn-sm btn-outline-secondary" title="Modifica">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
+                                        <button type="button" class="btn btn-sm btn-outline-danger"
+                                                title="Elimina"
+                                                data-bs-toggle="modal"
+                                                data-bs-target="#eliminaManutenzioneModal"
+                                                data-manutenzione-id="{{ m.id }}"
+                                                data-manutenzione-data="{{ m.data_intervento }}">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-inbox" style="font-size: 1.5rem;"></i>
+                    <p class="mb-0 mt-2">Nessuna manutenzione registrata</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {# Verifiche history #}
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-shield-check me-1"></i> Storico Verifiche Elettriche</span>
+                {% if apparecchio.soggetto_verifica %}
+                <a href="{{ url_for('verifiche.nuova', apparecchio_id=apparecchio.id) }}" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-plus-lg me-1"></i> Nuova
+                </a>
+                {% else %}
+                <span class="badge bg-secondary">Esente da verifica</span>
+                {% endif %}
+            </div>
+            <div class="card-body p-0">
+                {% if verifiche %}
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Data</th>
+                                <th>Esito</th>
+                                <th>Tecnico/Ditta</th>
+                                <th>Prossima Scad.</th>
+                                <th>Doc.</th>
+                                <th class="text-end">Azioni</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for v in verifiche %}
+                            <tr>
+                                <td class="fw-medium">{{ v.data_verifica }}</td>
+                                <td>
+                                    {% if v.esito == 'positivo' %}
+                                    <span class="badge bg-success">Positivo</span>
+                                    {% elif v.esito == 'negativo' %}
+                                    <span class="badge bg-danger">Negativo</span>
+                                    {% else %}
+                                    <span class="badge bg-warning text-dark">Con riserva</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ v.tecnico_ditta or '-' }}</td>
+                                <td>{{ v.prossima_scadenza or '-' }}</td>
+                                <td>
+                                    {% if v.documento_path %}
+                                    <a href="{{ url_for('verifiche.scarica_documento', id=v.id) }}"
+                                       class="btn btn-sm btn-outline-secondary" title="Scarica PDF">
+                                        <i class="bi bi-file-earmark-pdf text-danger"></i>
+                                    </a>
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <div class="btn-group">
+                                        <a href="{{ url_for('verifiche.modifica', id=v.id) }}"
+                                           class="btn btn-sm btn-outline-secondary" title="Modifica">
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
+                                        <button type="button" class="btn btn-sm btn-outline-danger"
+                                                title="Elimina"
+                                                data-bs-toggle="modal"
+                                                data-bs-target="#eliminaVerificaModal"
+                                                data-verifica-id="{{ v.id }}"
+                                                data-verifica-data="{{ v.data_verifica }}">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-shield-check" style="font-size: 1.5rem;"></i>
+                    <p class="mb-0 mt-2">Nessuna verifica registrata</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {# ---- Right column: photo, documents, metadata ---- #}
+    <div class="col-lg-4">
+
+        {# Photo #}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-image me-1"></i> Foto
+            </div>
+            <div class="card-body text-center">
+                {% if apparecchio.foto_path %}
+                <img src="{{ url_for('uploaded_file', filename=apparecchio.foto_path) }}"
+                     class="img-fluid rounded mb-3" alt="Foto apparecchio"
+                     style="max-height: 250px;">
+                {% else %}
+                <div class="bg-light rounded d-flex align-items-center justify-content-center mb-3"
+                     style="height: 150px;">
+                    <i class="bi bi-camera text-muted" style="font-size: 2.5rem;"></i>
+                </div>
+                {% endif %}
+                <form method="POST" action="{{ url_for('apparecchi.upload_foto', id=apparecchio.id) }}"
+                      enctype="multipart/form-data">
+                    <div class="input-group input-group-sm">
+                        <input type="file" class="form-control" name="foto" accept="image/*">
+                        <button type="submit" class="btn btn-outline-primary">
+                            <i class="bi bi-upload"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {# Documents #}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-file-earmark me-1"></i> Documenti
+            </div>
+            <div class="card-body">
+                {% if documenti %}
+                <ul class="list-group list-group-flush mb-3">
+                    {% for doc in documenti %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                        <div>
+                            <i class="bi bi-file-earmark-{{ 'pdf' if doc.filename.endswith('.pdf') else 'text' }} me-1 text-muted"></i>
+                            <small>{{ doc.filename }}</small>
+                            <br><span class="badge bg-light text-dark border">{{ doc.tipo }}</span>
+                        </div>
+                        <a href="{{ url_for('apparecchi.scarica_documento', id=apparecchio.id, doc_id=doc.id) }}"
+                           class="btn btn-sm btn-outline-primary" title="Scarica">
+                            <i class="bi bi-download"></i>
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted small mb-3">Nessun documento allegato</p>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('apparecchi.upload_documento', id=apparecchio.id) }}"
+                      enctype="multipart/form-data">
+                    <div class="mb-2">
+                        <select class="form-select form-select-sm" name="tipo_documento">
+                            <option value="report">Report</option>
+                            <option value="manuale">Manuale</option>
+                            <option value="certificato">Certificato</option>
+                            <option value="foto">Foto</option>
+                        </select>
+                    </div>
+                    <div class="input-group input-group-sm">
+                        <input type="file" class="form-control" name="documento">
+                        <button type="submit" class="btn btn-outline-primary">
+                            <i class="bi bi-upload"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {# Metadata #}
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-clock-history me-1"></i> Metadati
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0 small">
+                    <dt class="col-sm-5 text-muted">Creato il</dt>
+                    <dd class="col-sm-7">{{ apparecchio.created_at }}</dd>
+
+                    <dt class="col-sm-5 text-muted">Creato da</dt>
+                    <dd class="col-sm-7">{{ apparecchio.creato_da or '-' }}</dd>
+
+                    <dt class="col-sm-5 text-muted">Modificato</dt>
+                    <dd class="col-sm-7">{{ apparecchio.updated_at }}</dd>
+
+                    <dt class="col-sm-5 text-muted">Modificato da</dt>
+                    <dd class="col-sm-7">{{ apparecchio.modificato_da or '-' }}</dd>
+                </dl>
+            </div>
+        </div>
+
+        {# Activity log #}
+        <div class="card d-print-none">
+            <div class="card-header">
+                <i class="bi bi-journal-text me-1"></i> Attivit&agrave; recente
+            </div>
+            <div class="card-body p-0">
+                {% if attivita_recente %}
+                <ul class="list-group list-group-flush">
+                    {% for ev in attivita_recente %}
+                    <li class="list-group-item px-3 py-2">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <span class="badge bg-secondary me-1 text-capitalize">{{ ev.azione }}</span>
+                                <small class="text-muted">{{ ev.entita }}</small>
+                                {% if ev.dettagli %}
+                                <div class="small mt-1">{{ ev.dettagli }}</div>
+                                {% endif %}
+                            </div>
+                            <small class="text-muted text-nowrap ms-2">{{ ev.created_at[:16] }}</small>
+                        </div>
+                        {% if ev.utente_nome %}
+                        <small class="text-muted"><i class="bi bi-person me-1"></i>{{ ev.utente_nome }}</small>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="text-center text-muted py-3">
+                    <small>Nessuna attività registrata</small>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Modal conferma eliminazione manutenzione #}
+<div class="modal fade" id="eliminaManutenzioneModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Conferma Eliminazione</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Eliminare la manutenzione del <strong id="eliminaManutenzioneData"></strong>?
+                <br><small class="text-muted">L'operazione non è reversibile.</small>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+                <form id="eliminaManutenzioneForm" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-trash me-1"></i> Elimina
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Modal conferma eliminazione verifica #}
+<div class="modal fade" id="eliminaVerificaModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Conferma Eliminazione</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                Eliminare la verifica del <strong id="eliminaVerificaData"></strong>?
+                <br><small class="text-muted">L'operazione non è reversibile.</small>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+                <form id="eliminaVerificaForm" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-trash me-1"></i> Elimina
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+document.getElementById('eliminaManutenzioneModal').addEventListener('show.bs.modal', function(event) {
+    const btn = event.relatedTarget;
+    document.getElementById('eliminaManutenzioneData').textContent = btn.dataset.manutenzioneData;
+    document.getElementById('eliminaManutenzioneForm').action =
+        '/manutenzioni/' + btn.dataset.manutenzioneId + '/elimina';
+});
+document.getElementById('eliminaVerificaModal').addEventListener('show.bs.modal', function(event) {
+    const btn = event.relatedTarget;
+    document.getElementById('eliminaVerificaData').textContent = btn.dataset.verificaData;
+    document.getElementById('eliminaVerificaForm').action =
+        '/verifiche/' + btn.dataset.verificaId + '/elimina';
+});
+</script>
+{% endblock %}

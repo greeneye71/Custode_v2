@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Coda Email - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="mb-1"><i class="bi bi-envelope-paper me-2"></i>Coda Email Verbali</h2>
+        <p class="text-muted mb-0">Verbali di manutenzione ricevuti via email in attesa di revisione</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('import.upload') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-cloud-upload me-1"></i> Import Manuale
+        </a>
+        <a href="{{ url_for('import.storico') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-clock-history me-1"></i> Storico
+        </a>
+    </div>
+</div>
+
+{# Summary cards #}
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-warning">{{ pending|length }}</div>
+                <div class="stat-label">In attesa</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-success">{{ completed_count }}</div>
+                <div class="stat-label">Auto-importati</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-danger">{{ failed_count }}</div>
+                <div class="stat-label">Errori</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-info">{{ total_count }}</div>
+                <div class="stat-label">Totale processati</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Pending items #}
+{% if pending %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-hourglass-split me-2"></i>In attesa di revisione</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Mittente</th>
+                        <th>Oggetto</th>
+                        <th>File</th>
+                        <th>Matricola</th>
+                        <th>Tipo</th>
+                        <th class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in pending %}
+                    <tr>
+                        <td>
+                            <small>{{ item.created_at[:16] if item.created_at else '-' }}</small>
+                        </td>
+                        <td>
+                            <small class="text-truncate d-inline-block" style="max-width: 200px;"
+                                   title="{{ item.email_from or '' }}">
+                                {{ item.email_from or '-' }}
+                            </small>
+                        </td>
+                        <td>
+                            <small class="text-truncate d-inline-block" style="max-width: 200px;"
+                                   title="{{ item.email_subject or '' }}">
+                                {{ item.email_subject or '-' }}
+                            </small>
+                        </td>
+                        <td>
+                            <i class="bi bi-file-pdf text-danger me-1"></i>
+                            <small>{{ item.filename }}</small>
+                        </td>
+                        <td>
+                            {% if item.parsed_data %}
+                                {% set pdata = item.parsed_data|tojson if item.parsed_data is mapping else item.parsed_data %}
+                                <span class="badge bg-light text-dark">
+                                    {{ item.matricola_estratta or '-' }}
+                                </span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.tipo_estratto %}
+                                <span class="badge badge-tipo-{{ item.tipo_estratto }}">
+                                    {{ item.tipo_estratto|capitalize }}
+                                </span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end">
+                            <a href="{{ url_for('import.email_dettaglio', id=item.id) }}"
+                               class="btn btn-sm btn-outline-primary" title="Revisiona">
+                                <i class="bi bi-eye"></i> Revisiona
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="card-body text-center py-5">
+        <i class="bi bi-inbox display-4 text-muted"></i>
+        <p class="text-muted mt-3 mb-0">Nessun verbale in attesa di revisione.</p>
+        <p class="text-muted small">I verbali ricevuti via email che non possono essere importati automaticamente appariranno qui.</p>
+    </div>
+</div>
+{% endif %}
+
+{# Recent auto-imported #}
+{% if recent_completed %}
+<div class="card mt-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-check-circle text-success me-2"></i>Ultimi auto-importati</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Data</th>
+                        <th>Mittente</th>
+                        <th>Oggetto</th>
+                        <th>File</th>
+                        <th>Stato</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in recent_completed %}
+                    <tr>
+                        <td><small>{{ item.created_at[:16] if item.created_at else '-' }}</small></td>
+                        <td><small>{{ item.email_from or '-' }}</small></td>
+                        <td><small>{{ item.email_subject or '-' }}</small></td>
+                        <td><small>{{ item.filename }}</small></td>
+                        <td>
+                            <span class="badge bg-success">
+                                <i class="bi bi-check me-1"></i>Importato
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

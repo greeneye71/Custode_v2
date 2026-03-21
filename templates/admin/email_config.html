@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Configurazione Email - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+    <div>
+        <h2><i class="bi bi-envelope me-2"></i>Configurazione Email IMAP</h2>
+        <p class="text-muted mb-0">Account email per il monitoraggio automatico dei verbali</p>
+    </div>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newEmailModal">
+        <i class="bi bi-plus-lg me-1"></i> Nuova Configurazione
+    </button>
+</div>
+
+{% if configs %}
+<div class="row g-3">
+    {% for ec in configs %}
+    <div class="col-md-6">
+        <div class="card {% if not ec.attivo %}opacity-50{% endif %}">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>
+                    {% if ec.divisione_nome %}
+                    <span class="divisione-dot me-1" style="background-color: {{ ec.divisione_colore }}"></span>
+                    {{ ec.divisione_nome }}
+                    {% else %}
+                    Generale
+                    {% endif %}
+                </span>
+                <span class="badge {% if ec.attivo %}bg-success{% else %}bg-secondary{% endif %}">
+                    {% if ec.attivo %}Attivo{% else %}Inattivo{% endif %}
+                </span>
+            </div>
+            <div class="card-body">
+                <dl class="row mb-2 small">
+                    <dt class="col-sm-4 text-muted">Account</dt>
+                    <dd class="col-sm-8"><code>{{ ec.email_account }}</code></dd>
+                    <dt class="col-sm-4 text-muted">Server IMAP</dt>
+                    <dd class="col-sm-8">{{ ec.imap_server }}:{{ ec.imap_port }}</dd>
+                    <dt class="col-sm-4 text-muted">Ultimo check</dt>
+                    <dd class="col-sm-8">{{ ec.ultima_verifica or 'Mai' }}</dd>
+                </dl>
+                <div class="d-flex gap-1">
+                    <form method="POST" action="{{ url_for('admin.email_config_toggle', id=ec.id) }}" class="d-inline">
+                        <button type="submit"
+                                class="btn btn-sm btn-outline-{% if ec.attivo %}danger{% else %}success{% endif %}">
+                            <i class="bi bi-{% if ec.attivo %}pause{% else %}play{% endif %}-fill me-1"></i>
+                            {% if ec.attivo %}Disattiva{% else %}Attiva{% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-envelope" style="font-size: 2rem;"></i>
+        <p class="mt-2 mb-0">Nessuna configurazione email. Crea la prima per abilitare il monitoraggio.</p>
+    </div>
+</div>
+{% endif %}
+
+{# New email config modal #}
+<div class="modal fade" id="newEmailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <form method="POST" action="{{ url_for('admin.email_config_nuova') }}">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Nuova Configurazione Email</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Divisione</label>
+                        <select class="form-select" name="divisione_id">
+                            <option value="">-- Generale --</option>
+                            {% for d in divisioni %}
+                            <option value="{{ d.id }}">{{ d.nome }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Account Email <span class="text-danger">*</span></label>
+                        <input type="email" class="form-control" name="email_account" required
+                               placeholder="manutenzioni@esempio.it">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password <span class="text-danger">*</span></label>
+                        <input type="password" class="form-control" name="email_password" required>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-8">
+                            <label class="form-label">Server IMAP <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" name="imap_server" required
+                                   placeholder="imap.esempio.it">
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Porta</label>
+                            <input type="number" class="form-control" name="imap_port" value="993">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+                    <button type="submit" class="btn btn-primary">Crea</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+# Configurazione (contiene chiavi crittografiche e credenziali)
+config.json
+config.local.json
+
+# Virtual environment
+venv/
+
+# Database e dati utente
+data/
+uploads/
+backups/
+
+# Log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code settings locali
+.claude/settings.local.json
+
+# File temporanei e test
+Cartel1.xlsx
+*.tmp
+NDH6SA~M

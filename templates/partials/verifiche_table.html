@@ -1,0 +1,98 @@
+{% for v in verifiche %}
+<tr>
+    <td class="fw-medium">{{ v.data_verifica }}</td>
+    <td>
+        <a href="{{ url_for('apparecchi.dettaglio', id=v.apparecchio_id) }}" class="text-decoration-none">
+            {{ v.marca }} {{ v.modello }}
+        </a>
+        <br><small class="text-muted">{{ v.matricola }}</small>
+    </td>
+    <td>
+        {% if v.esito == 'positivo' %}
+        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Positivo</span>
+        {% elif v.esito == 'negativo' %}
+        <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Negativo</span>
+        {% elif v.esito == 'con_riserva' %}
+        <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>Con riserva</span>
+        {% else %}
+        <span class="badge bg-secondary">{{ v.esito }}</span>
+        {% endif %}
+    </td>
+    <td>{{ v.tecnico_ditta or '-' }}</td>
+    <td>{{ v.prossima_scadenza or '-' }}</td>
+    <td>
+        {% if v.documento_path %}
+        <a href="{{ url_for('verifiche.scarica_documento', id=v.id) }}"
+           class="btn btn-sm btn-outline-secondary" title="Scarica PDF">
+            <i class="bi bi-file-earmark-pdf text-danger"></i>
+        </a>
+        {% else %}
+        <span class="text-muted">-</span>
+        {% endif %}
+    </td>
+    <td class="text-end">
+        <div class="btn-group">
+            <a href="{{ url_for('verifiche.modifica', id=v.id) }}"
+               class="btn btn-outline-secondary btn-action" title="Modifica">
+                <i class="bi bi-pencil"></i>
+            </a>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="7" class="text-center text-muted py-4">
+        <i class="bi bi-shield-check" style="font-size: 1.5rem;"></i>
+        <p class="mb-0 mt-2">Nessuna verifica trovata</p>
+    </td>
+</tr>
+{% endfor %}
+
+{# OOB swap: aggiorna la paginazione fuori dal tbody ad ogni risposta HTMX #}
+<div id="pagination-nav" hx-swap-oob="true">
+{% if pagination.total_pages > 1 %}
+<div class="card-footer bg-white d-flex justify-content-between align-items-center">
+    <small class="text-muted">
+        Pagina {{ pagination.page }} di {{ pagination.total_pages }}
+        ({{ pagination.total }} risultati)
+    </small>
+    <nav>
+        <ul class="pagination pagination-sm mb-0">
+            {% if pagination.page > 1 %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('verifiche.lista') }}"
+                   hx-target="#verifiche-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ pagination.page - 1 }}"}'>&laquo;</a>
+            </li>
+            {% endif %}
+            {% for p in range(1, pagination.total_pages + 1) %}
+            {% if p == pagination.page %}
+            <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+            {% elif p <= 3 or p >= pagination.total_pages - 2 or (p >= pagination.page - 1 and p <= pagination.page + 1) %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('verifiche.lista') }}"
+                   hx-target="#verifiche-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ p }}"}'>{{ p }}</a>
+            </li>
+            {% elif p == 4 or p == pagination.total_pages - 3 %}
+            <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+            {% endif %}
+            {% endfor %}
+            {% if pagination.page < pagination.total_pages %}
+            <li class="page-item">
+                <a class="page-link"
+                   hx-get="{{ url_for('verifiche.lista') }}"
+                   hx-target="#verifiche-table-body"
+                   hx-include="#filter-form"
+                   hx-vals='{"partial": "1", "page": "{{ pagination.page + 1 }}"}'>&raquo;</a>
+            </li>
+            {% endif %}
+        </ul>
+    </nav>
+</div>
+{% endif %}
+</div>
