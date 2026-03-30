@@ -29,3 +29,6 @@ Thumbs.db
 Cartel1.xlsx
 *.tmp
 NDH6SA~M
+
+# Git worktrees
+.worktrees/
