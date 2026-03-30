@@ -34,6 +34,9 @@ Devi estrarre i dati e restituire un array JSON con i seguenti campi per ogni ap
 - classificazione (opzionale, uno tra: I, IIa, IIb, III)
 - ubicazione (opzionale)
 - fornitore (opzionale)
+- codice_fornitore (opzionale, codice articolo o ricambio del fornitore)
+- garanzia_scadenza (opzionale, data scadenza garanzia formato YYYY-MM-DD)
+- contratto_manutenzione (opzionale, riferimento a contratto di manutenzione)
 - ip_address (opzionale)
 - note (opzionale)
 
@@ -95,7 +98,7 @@ Devi estrarre i dati e restituire un array JSON. Ogni elemento dell'array rappre
 - matricola (il numero di serie/matricola dell'apparecchio verificato - fondamentale)
 - data_verifica (formato YYYY-MM-DD - obbligatorio)
 - prossima_scadenza (formato YYYY-MM-DD - opzionale, calcolata dalla periodicità se non esplicitata)
-- periodicita_giorni (365 per annuale, 730 per biennale - default 365)
+- periodicita_giorni (365 per annuale, 730 per biennale - default 730 se non specificato)
 - esito (uno tra: positivo, negativo, con_riserva - obbligatorio)
 - tecnico_ditta (nome del tecnico e/o ditta che ha eseguito la verifica - opzionale)
 - note (osservazioni o note del rapporto - opzionale)
@@ -407,6 +410,25 @@ def _parse_json_response(response_text, array=True):
         )
 
 
+def _parse_classification_result(result):
+    """Parse document type from AI response using exact match before substring match."""
+    r = result.lower().strip().rstrip('.')
+    if r in ('verifica_elettrica', 'verifica'):
+        return 'verifica_elettrica'
+    if r in ('verbale_manutenzione', 'verbale'):
+        return 'verbale_manutenzione'
+    if r == 'inventario':
+        return 'inventario'
+    # Full-phrase substring fallback
+    if 'verifica_elettrica' in r:
+        return 'verifica_elettrica'
+    if 'verbale_manutenzione' in r:
+        return 'verbale_manutenzione'
+    if 'inventario' in r:
+        return 'inventario'
+    return 'inventario'
+
+
 # ---------------------------------------------------------------------------
 # Inventory analysis
 # ---------------------------------------------------------------------------
@@ -593,46 +615,25 @@ def classify_document_type(text, api_key, model='claude-haiku-4-5-20251001', con
     if i_score >= 1 and m_score == 0 and v_score == 0:
         return 'inventario'
 
-    # Ambiguous: use AI
-    try:
-        result = _call_ai(
-            CLASSIFICATION_SYSTEM_PROMPT,
-            f"Classifica questo documento:\n\n{text[:3000]}",
-            api_key, model, max_tokens=20, config=config
-        )
-        result_lower = result.lower().strip()
-        if 'verifica' in result_lower:
-            return 'verifica_elettrica'
-        if 'verbale' in result_lower or 'manutenzione' in result_lower:
-            return 'verbale_manutenzione'
-        if 'inventario' in result_lower:
-            return 'inventario'
-    except Exception:
-        pass
-
-    return 'inventario'
+    # Ambiguous: use AI — exception propagates to caller
+    result = _call_ai(
+        CLASSIFICATION_SYSTEM_PROMPT,
+        f"Classifica questo documento:\n\n{text[:3000]}",
+        api_key, model, max_tokens=20, config=config
+    )
+    return _parse_classification_result(result)
 
 
 def classify_document_type_from_pdf(filepath, api_key, model='claude-haiku-4-5-20251001', config=None):
     """Classify document type from a scanned PDF.
     Returns: 'inventario' | 'verbale_manutenzione' | 'verifica_elettrica'
     """
-    try:
-        result = _call_ai_with_pdf(
-            CLASSIFICATION_SYSTEM_PROMPT,
-            "Classifica questo documento.",
-            filepath, api_key, model, max_tokens=20, config=config
-        )
-        result_lower = result.lower().strip()
-        if 'verifica' in result_lower:
-            return 'verifica_elettrica'
-        if 'verbale' in result_lower or 'manutenzione' in result_lower:
-            return 'verbale_manutenzione'
-        if 'inventario' in result_lower:
-            return 'inventario'
-    except Exception:
-        pass
-    return 'inventario'
+    result = _call_ai_with_pdf(
+        CLASSIFICATION_SYSTEM_PROMPT,
+        "Classifica questo documento.",
+        filepath, api_key, model, max_tokens=20, config=config
+    )
+    return _parse_classification_result(result)
 
 
 # ---------------------------------------------------------------------------
@@ -673,9 +674,9 @@ def find_duplicates(items, divisione_id):
                 "SELECT * FROM apparecchi WHERE descrizione = ?", (descrizione,)
             )
             if existing:
-                result['match_type'] = 'esatto'
+                result['match_type'] = 'fuzzy'
                 result['match_id'] = existing['id']
-                result['match_confidence'] = 1.0
+                result['match_confidence'] = 0.5
                 result['match_info'] = f"{existing['marca']} {existing['modello']}"
                 results.append(result)
                 continue

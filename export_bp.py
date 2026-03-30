@@ -225,13 +225,27 @@ def scadenzario_excel():
                ORDER BY ps.prossima_scadenza ASC""",
             [div['id']]
         )
-    else:
+    elif getattr(g, 'user', {}).get('ruolo') == 'admin':
         scadenze = query_all(
             """SELECT ps.*, d.nome as divisione_nome
                FROM prossime_scadenze ps
                LEFT JOIN divisioni d ON ps.divisione_id = d.id
                ORDER BY ps.prossima_scadenza ASC"""
         )
+    else:
+        ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if ids:
+            ph = ','.join('?' * len(ids))
+            scadenze = query_all(
+                f"""SELECT ps.*, d.nome as divisione_nome
+                   FROM prossime_scadenze ps
+                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
+                   WHERE ps.divisione_id IN ({ph})
+                   ORDER BY ps.prossima_scadenza ASC""",
+                ids
+            )
+        else:
+            scadenze = []
 
     divisione_nome = _get_divisione_nome()
     buffer = export_scadenzario_excel(scadenze, divisione_nome)
@@ -260,13 +274,27 @@ def scadenzario_pdf():
                ORDER BY ps.prossima_scadenza ASC""",
             [div['id']]
         )
-    else:
+    elif getattr(g, 'user', {}).get('ruolo') == 'admin':
         scadenze = query_all(
             """SELECT ps.*, d.nome as divisione_nome
                FROM prossime_scadenze ps
                LEFT JOIN divisioni d ON ps.divisione_id = d.id
                ORDER BY ps.prossima_scadenza ASC"""
         )
+    else:
+        ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if ids:
+            ph = ','.join('?' * len(ids))
+            scadenze = query_all(
+                f"""SELECT ps.*, d.nome as divisione_nome
+                   FROM prossime_scadenze ps
+                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
+                   WHERE ps.divisione_id IN ({ph})
+                   ORDER BY ps.prossima_scadenza ASC""",
+                ids
+            )
+        else:
+            scadenze = []
 
     config = current_app.config['APP_CONFIG']
     divisione_nome = _get_divisione_nome()

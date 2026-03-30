@@ -146,11 +146,22 @@ def _load_user_from_session():
                WHERE divisione_id = ? AND priorita IN ('scaduto', 'urgente', 'attenzione')""",
             (g.divisione_attiva['id'],)
         )
-    else:
+    elif g.user['ruolo'] == 'admin':
         result = query_one(
             """SELECT COUNT(*) as cnt FROM prossime_scadenze
                WHERE priorita IN ('scaduto', 'urgente', 'attenzione')"""
         )
+    else:
+        ids = [d['id'] for d in g.divisioni]
+        if ids:
+            ph = ','.join('?' * len(ids))
+            result = query_one(
+                f"""SELECT COUNT(*) as cnt FROM prossime_scadenze
+                   WHERE divisione_id IN ({ph}) AND priorita IN ('scaduto', 'urgente', 'attenzione')""",
+                ids
+            )
+        else:
+            result = None
     g.scadenze_alert_count = result['cnt'] if result else 0
 
     return True

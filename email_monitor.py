@@ -72,9 +72,9 @@ def check_emails_for_division(email_cfg, app_config, db_path):
     try:
         use_ssl = email_cfg.get('imap_ssl', True)
         if use_ssl:
-            mail = imaplib.IMAP4_SSL(server, port)
+            mail = imaplib.IMAP4_SSL(server, port, timeout=30)
         else:
-            mail = imaplib.IMAP4(server, port)
+            mail = imaplib.IMAP4(server, port, timeout=30)
             mail.starttls()
         mail.login(account, password)
         mail.select('INBOX')
@@ -199,7 +199,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 apparecchio_id = None
                 tipo_import_value = 'verifica_elettrica'
 
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(db_path, timeout=10)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA foreign_keys = ON")
                 try:
@@ -209,11 +209,19 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
 
                         if item_app_id and item.get('data_verifica'):
                             try:
-                                prossima = item.get('prossima_scadenza')
-                                if not prossima and item.get('periodicita_giorni'):
-                                    d = datetime.strptime(item['data_verifica'], '%Y-%m-%d')
-                                    d += timedelta(days=int(item['periodicita_giorni']))
-                                    prossima = d.strftime('%Y-%m-%d')
+                                # Default 730 giorni (2 anni) se non indicato
+                                periodicita_v = int(item.get('periodicita_giorni') or 730)
+                                prossima = item.get('prossima_scadenza') or None
+                                if not prossima:
+                                    try:
+                                        d = datetime.strptime(item['data_verifica'], '%Y-%m-%d')
+                                        d += timedelta(days=periodicita_v)
+                                        prossima = d.strftime('%Y-%m-%d')
+                                    except ValueError:
+                                        pass
+                                esito_v = (item.get('esito') or 'positivo').strip().lower()
+                                if esito_v not in ('positivo', 'negativo', 'con_riserva'):
+                                    esito_v = 'positivo'
 
                                 conn.execute(
                                     """INSERT INTO verifiche
@@ -224,8 +232,8 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                                         item_app_id,
                                         item.get('data_verifica'),
                                         prossima,
-                                        item.get('periodicita_giorni', 365),
-                                        item.get('esito', 'positivo'),
+                                        periodicita_v,
+                                        esito_v,
                                         item.get('tecnico_ditta'),
                                         item.get('note'),
                                     )
@@ -262,7 +270,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 shutil.copy2(pdf_path, verbale_dest)
                 verbale_rel_path = f"verbali/{verbale_name}"
 
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(db_path, timeout=10)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA foreign_keys = ON")
                 try:
@@ -275,6 +283,9 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
 
                         if apparecchio_id and parsed_data.get('data_intervento'):
                             try:
+                                tipo_m = (parsed_data.get('tipo') or 'preventiva').strip().lower()
+                                if tipo_m not in ('preventiva', 'correttiva', 'verifica', 'calibrazione'):
+                                    tipo_m = 'preventiva'
                                 conn.execute(
                                     """INSERT INTO manutenzioni
                                        (apparecchio_id, tipo, data_intervento, prossima_scadenza,
@@ -283,9 +294,9 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                     (
                                         apparecchio_id,
-                                        parsed_data.get('tipo', 'preventiva'),
+                                        tipo_m,
                                         parsed_data.get('data_intervento'),
-                                        parsed_data.get('prossima_scadenza'),
+                                        parsed_data.get('prossima_scadenza') or None,
                                         parsed_data.get('periodicita_giorni'),
                                         parsed_data.get('tecnico_ditta'),
                                         parsed_data.get('descrizione'),
@@ -378,7 +389,7 @@ def _save_email_import(db_path, divisione_id, filename, filepath, email_from, em
     if righe_importate is None:
         righe_importate = 1 if stato == 'completed' else 0
     import sqlite3
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10)
     try:
         conn.execute(
             """INSERT INTO import_history
@@ -401,7 +412,7 @@ def _save_email_import(db_path, divisione_id, filename, filepath, email_from, em
 def _update_ultima_verifica(db_path, config_id):
     """Update the last check timestamp for an email config."""
     import sqlite3
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10)
     try:
         conn.execute(
             "UPDATE email_config SET ultima_verifica = datetime('now') WHERE id = ?",

@@ -6,6 +6,215 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [1.4.3] - 2026-03-29
+
+### Modificato — Schema database
+
+- **Vincolo UNIQUE rimosso dalla sola colonna `matricola`** (`schema.sql`, `migrate_v1_4.py`):
+  apparecchi di modelli diversi possono condividere la stessa matricola (numero di serie del
+  costruttore, non globalmente univoco). Il vincolo è stato spostato sulla coppia composita
+  `UNIQUE(modello, matricola)`, che garantisce comunque l'unicità all'interno di uno stesso modello.
+- **Validazione aggiornata** (`apparecchi.py`): il controllo di duplicato nel form ora verifica
+  la combinazione `modello + matricola` anziché la sola matricola. Il messaggio di errore è stato
+  aggiornato di conseguenza.
+- **Migrazione** (`migrate_v1_4.py`): ricrea la tabella `apparecchi` con il nuovo vincolo,
+  preservando tutti i dati e gli indici esistenti. Eseguire prima di avviare la nuova versione.
+
+---
+
+## [1.4.2] - 2026-03-28
+
+### Corretto — Robustezza e affidabilità
+
+- **Nessun handler HTTP per 404/403/413/500** (`app.py`): aggiunto set completo di error handler
+  che restituisce una pagina standalone (`templates/errors/error.html`) senza dipendenza dal
+  context processor. Previene le eccezioni non gestite che mostravano stack trace all'utente.
+- **`session.permanent` senza `PERMANENT_SESSION_LIFETIME`** (`app.py`): aggiunto
+  `PERMANENT_SESSION_LIFETIME = timedelta(hours=session_lifetime_hours)`. In precedenza Flask
+  applicava la sua default (31 giorni) indipendentemente dal valore configurato.
+- **Eccezioni DB silenziate in `query_one`, `query_all`, `execute`** (`models.py`): aggiunti
+  blocchi `try/except` che registrano l'errore con logger prima di rilanciare l'eccezione.
+  Permette di correlare errori di produzione ai log senza perdere il tracciato.
+- **`sqlite3.connect()` senza timeout nell'email monitor** (`email_monitor.py`): aggiunti
+  `timeout=10` a tutte le connessioni dirette aperte dal thread di monitoraggio email.
+  Senza timeout, un lock DB poteva bloccare il thread scheduler indefinitamente.
+- **Logging applicativo assente** (`app.py`): aggiunta funzione `_setup_logging()` che configura
+  un `RotatingFileHandler` su `logs/medinventory.log` (5 MB × 5 file di backup). L'handler
+  si attiva all'import del modulo prima della creazione dell'app.
+- **`config.example.json` ancora alla versione 1.1.6**: aggiornato a 1.4.2.
+
+---
+
+## [1.4.1] - 2026-03-28
+
+### Miglioramento — Import AI asincrono
+
+- **Analisi AI non bloccante** (`import_bp.py`): l'operazione di import non occupa più
+  un thread HTTP per 15–50 secondi. Il file viene salvato e il record `import_history`
+  creato in ~1 secondo; l'elaborazione (classificazione + analisi AI + popolamento preview)
+  prosegue in un thread daemon separato. Il browser viene reindirizzato a una pagina di
+  attesa che fa polling ogni 2 secondi verso il nuovo endpoint `/import/<id>/stato`.
+- **Pagina di attesa** (`templates/import/attendi.html`): nuovo template con spinner
+  Bootstrap, barra di progresso animata e redirect automatico alla preview al termine.
+  In caso di errore mostra il messaggio e un link per riprovare.
+- **Cleanup import bloccati** (`models.py`): al riavvio del server, eventuali record
+  `import_history` rimasti in stato `processing` vengono marcati automaticamente come
+  `failed` (i thread vengono terminati allo shutdown).
+
+### Miglioramento — Capacità server
+
+- **Thread Waitress** (`run_production.py`): aumentati da 4 a 8. Combinato con l'import
+  asincrono, consente di gestire più utenti simultanei senza che le operazioni AI
+  monopolizzino il pool di thread HTTP.
+
+---
+
+## [1.4.0] - 2026-03-28
+
+### Corretto — Sicurezza
+
+- **Path traversal nel download documenti apparecchi** (`apparecchi.py`): aggiunta validazione
+  `os.path.realpath` che verifica che il percorso risolto sia dentro la cartella `uploads/`
+  prima di invocare `send_from_directory`. Previene accesso a file arbitrari dal DB.
+- **Path traversal nelle operazioni backup** (`admin.py`): i tre endpoint
+  `backup_scarica`, `backup_ripristina`, `backup_elimina` ora rifiutano qualunque filename
+  contenga `/`, `\` o `..`, oltre al check `startswith`/`endswith` già presente.
+- **Limite dimensione upload mancante** (`app.py`): aggiunto `MAX_CONTENT_LENGTH = 32 MB`
+  alla configurazione Flask, che impedisce upload di file enormi.
+
+### Corretto — Validazione input
+
+- **Porta di rete accettava valori fuori range** (`apparecchi.py`): aggiunto controllo
+  `1 <= porta <= 65535` dopo la conversione a intero.
+- **Indirizzo IP accettava ottetti > 255** (`apparecchi.py`): sostituita regex `\d{1,3}` con
+  `ipaddress.ip_address()` che valida correttamente sia IPv4 che IPv6.
+- **Data intervento senza validazione formato** (`manutenzioni.py`): aggiunto
+  `datetime.strptime(value, '%Y-%m-%d')` con messaggio di errore appropriato.
+- **Data verifica senza validazione formato** (`verifiche.py`): stesso fix applicato.
+
+### Corretto — Email e Scheduler
+
+- **Thread scheduler bloccato su IMAP irraggiungibile** (`email_monitor.py`): aggiunto
+  `timeout=30` alle istanze `IMAP4_SSL` e `IMAP4`. In precedenza un server IMAP che non
+  rispondeva bloccava il thread del scheduler indefinitamente.
+
+### Corretto — Backup
+
+- **Nessun backup di sicurezza prima del ripristino** (`admin.py`): `backup_ripristina`
+  ora chiama `create_backup()` sul DB corrente prima di sovrascriverlo con il ripristino.
+  Il backup di sicurezza viene contato fuori dal numero di retention configurato.
+
+### Corretto — Recovery schema DB
+
+- **`import_preview` con FK rotta verso `_import_history_old`** (`models.py`): aggiunta
+  funzione `_fix_import_tables()` chiamata a ogni avvio da `apply_schema_updates()`.
+  Rileva automaticamente database con `import_history` mancante o `import_preview` con FK
+  verso la tabella temporanea della migrazione v1.3.2. Corregge entrambe le condizioni
+  senza intervento manuale.
+
+---
+
+## [1.3.4] - 2026-03-27
+
+### Corretto — Sicurezza
+
+- **Route `/uploads/` accessibile senza autenticazione**: qualunque utente non autenticato
+  poteva scaricare verbali, foto e PDF indovinando il percorso. Aggiunto `@login_required`
+  sulla route `uploaded_file` in `app.py`.
+- **Controllo divisione mancante nelle route di modifica/eliminazione**: le route
+  `apparecchi/modifica`, `manutenzioni/modifica`, `manutenzioni/elimina`,
+  `verifiche/modifica`, `verifiche/elimina` non verificavano che l'utente avesse accesso
+  alla divisione del record. Un utente non-admin poteva modificare o cancellare qualsiasi
+  record indovinando l'ID. Aggiunto controllo `accessible_ids` su tutte le route. Le query
+  di `modifica` sono state estese per includere `a.divisione_id`; le query di `elimina`
+  ora usano un JOIN su `apparecchi`.
+
+### Corretto — Vista `prossime_scadenze` (scadenzario)
+
+- **Vista che restituiva tutte le manutenzioni invece dell'ultima**: il JOIN sulla vista
+  `prossime_scadenze` non aveva un filtro sull'ultima manutenzione/verifica per tipo,
+  producendo righe duplicate e date di scadenza errate. Aggiunta subquery correlata
+  `ORDER BY data_intervento DESC LIMIT 1` per entrambi i branch (manutenzioni e verifiche).
+- **Aggiornamento automatico della vista**: `apply_schema_updates()` in `models.py` esegue
+  ora `DROP VIEW IF EXISTS prossime_scadenze` + `CREATE VIEW` al primo avvio, aggiornando
+  i database esistenti senza migrazione manuale.
+
+### Corretto — Logica filtro divisione
+
+- **Badge navbar e stat dashboard mancanti per utenti non-admin senza divisione attiva**:
+  il contatore delle scadenze in `auth.py` e la stat "scadenze attive" in `app.py` usavano
+  una logica binaria (divisione specifica / tutto) che escludeva il caso utente non-admin
+  con `divisione_attiva = None`. Corretto con la logica a tre rami coerente con gli altri
+  blueprint.
+- **Export scadenzario (Excel/PDF) ignorava il filtro divisione** per utenti non-admin con
+  divisione attiva nulla. Corretto in `export_bp.py`.
+
+### Corretto — Sistema di import AI
+
+- **Classificazione AI con eccezione silenziosa**: `classify_document_type()` e
+  `classify_document_type_from_pdf()` ingoiavano silenziosamente le eccezioni e restituivano
+  sempre `'inventario'`, mascherando errori di rete o di configurazione AI. Le eccezioni
+  propagano ora al chiamante.
+- **Parsing classificazione AI non robusto**: aggiunto `_parse_classification_result()` che
+  applica prima corrispondenza esatta poi substring fallback sui tre tipi validi.
+- **Modello AI errato per verbali/verifiche**: `_process_verbali()` e `_process_verifiche()`
+  usavano `ai_email_model` (Haiku) invece di `ai_import_model` (Sonnet). Corretto.
+- **Matching matricola case-sensitive**: `_match_apparecchi()` non trovava corrispondenze
+  se la matricola nel documento aveva capitalizzazione diversa dal database. Ora usa
+  `LOWER()` su entrambi i lati.
+- **`_execute_verbali` e `_execute_verifiche`**: corretti multipli bug di validazione:
+  elementi con `_errore=True` ora scartati invece di crashare; `apparecchio_id` da form
+  verificato contro le divisioni accessibili; `data_intervento`/`data_verifica` validati
+  non vuoti; `tipo` normalizzato su `TIPI_VALIDI_MANUTENZIONE`, `esito` su
+  `ESITI_VALIDI_VERIFICA`; `periodicita_giorni` convertito con `int(float(...))` per
+  gestire valori come `"365.0"`; `prossima_scadenza` stringa vuota coerced a NULL.
+- **`_execute_inventario` — match per `descrizione`**: `find_duplicates()` usava
+  `match_type='esatto', confidence=1.0` per il match su `descrizione` nonostante il campo
+  non sia più UNIQUE dalla v1.2.0. Corretto in `match_type='fuzzy', confidence=0.5`.
+- **`analizza()` — divisione non validata**: `divisione_id` dal form non veniva convertito
+  in intero né verificato contro le divisioni accessibili all'utente. Aggiunta validazione.
+- **Conversione `costo` non sicura**: `float(data['costo'])` crashava su valori non numerici.
+  Aggiunto try/except con fallback a `None`.
+
+### Corretto — Monitor email
+
+- **Default periodicità verifiche 365 invece di 730**: in `email_monitor.py` il valore di
+  default per `periodicita_giorni` delle verifiche era 365 giorni (1 anno) invece dei 730
+  richiesti (2 anni). Corretto.
+- **Auto-calcolo `prossima_scadenza` verifiche non eseguito**: il calcolo automatico della
+  data di scadenza era condizionato alla presenza di `periodicita_giorni` nell'output AI.
+  Se il campo era null, la scadenza restava NULL anche con una data di verifica valida.
+  Ora usa sempre il default 730 se `periodicita_giorni` manca.
+- **`tipo` manutenzioni non normalizzato**: valori non validi restituiti dall'AI (es. `"repair"`)
+  causavano violazione del CHECK constraint SQLite. Aggiunta normalizzazione verso
+  `TIPI_VALIDI_MANUTENZIONE` con fallback `'preventiva'`.
+- **`esito` verifiche non normalizzato**: stessa problematica per il campo `esito`. Aggiunta
+  normalizzazione verso `ESITI_VALIDI_VERIFICA` con fallback `'positivo'`.
+
+### Migliorato — Import inventario
+
+- **Prompt AI inventario**: aggiunti tre nuovi campi estratti dall'AI: `codice_fornitore`,
+  `garanzia_scadenza`, `contratto_manutenzione`.
+- **INSERT nuovo apparecchio**: include ora `codice_fornitore`, `garanzia_scadenza`,
+  `contratto_manutenzione` oltre ai campi già presenti.
+- **UPDATE apparecchio esistente**: ora integra i campi mancanti con `COALESCE(campo, ?)`:
+  `descrizione`, `anno_fabbricazione`, `classificazione`, `codice_fornitore`,
+  `garanzia_scadenza`, `contratto_manutenzione`. I valori già presenti non vengono
+  sovrascritti; quelli NULL vengono completati.
+
+### Migliorato — Default verifiche
+
+- **Default periodicità verifiche 365→730**: il prompt `VERIFICA_BATCH_SYSTEM_PROMPT` e il
+  codice di `_execute_verifiche()` usavano 365 giorni (1 anno) come default per la
+  periodicità. Allineati a 730 giorni (2 anni) come richiesto dalle normative IEC 62353.
+
+### Migliorato — Affidabilità
+
+- **Logging migrazioni schema**: le eccezioni in `apply_schema_updates()` ora producono un
+  `logger.warning` invece di essere ingoiate silenziosamente.
+
+---
+
 ## [1.3.3] - 2026-03-08
 
 ### Corretto

@@ -76,6 +76,11 @@ def _validate_verifica(form_data):
     data['data_verifica'] = form_data.get('data_verifica', '').strip()
     if not data['data_verifica']:
         errors['data_verifica'] = "La data della verifica è obbligatoria."
+    else:
+        try:
+            datetime.strptime(data['data_verifica'], '%Y-%m-%d')
+        except ValueError:
+            errors['data_verifica'] = "Formato data non valido (YYYY-MM-DD)."
 
     # Required: esito
     data['esito'] = form_data.get('esito', '')
@@ -251,7 +256,7 @@ def nuova():
 def modifica(id):
     """Edit a verifica record."""
     verifica = query_one(
-        """SELECT v.*, a.marca, a.modello, a.matricola
+        """SELECT v.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
            WHERE v.id = ?""", (id,)
@@ -259,6 +264,12 @@ def modifica(id):
     if not verifica:
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
+
+    if g.user['ruolo'] != 'admin':
+        accessible_ids = [d['id'] for d in g.divisioni]
+        if verifica['divisione_id'] not in accessible_ids:
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('verifiche.lista'))
 
     if request.method == 'GET':
         apparecchi = _get_accessible_apparecchi()
@@ -303,10 +314,20 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a verifica record."""
-    verifica = query_one("SELECT * FROM verifiche WHERE id = ?", (id,))
+    verifica = query_one(
+        """SELECT v.*, a.divisione_id FROM verifiche v
+           JOIN apparecchi a ON v.apparecchio_id = a.id
+           WHERE v.id = ?""", (id,)
+    )
     if not verifica:
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
+
+    if g.user['ruolo'] != 'admin':
+        accessible_ids = [d['id'] for d in g.divisioni]
+        if verifica['divisione_id'] not in accessible_ids:
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('verifiche.lista'))
 
     # Delete associated document file if present
     if verifica['documento_path']:

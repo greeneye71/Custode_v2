@@ -638,8 +638,9 @@ def backup_scarica(filename):
     from werkzeug.utils import safe_join
 
     backups_path = current_app.config['BACKUPS_PATH']
-    # Security: ensure the filename is valid
-    if not filename.startswith('medinventory_backup_') or not filename.endswith('.sqlite'):
+    if (not filename.startswith('medinventory_backup_')
+            or not filename.endswith('.sqlite')
+            or '/' in filename or '\\' in filename or '..' in filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -650,18 +651,30 @@ def backup_scarica(filename):
 @admin_required
 def backup_ripristina(filename):
     """Restore database from a backup."""
-    from backup_service import restore_backup
+    from backup_service import create_backup, restore_backup
 
     backups_path = current_app.config['BACKUPS_PATH']
     db_path = current_app.config['DATABASE_PATH']
 
-    if not filename.startswith('medinventory_backup_') or not filename.endswith('.sqlite'):
+    # Strict filename validation: no path separators or traversal sequences
+    if (not filename.startswith('medinventory_backup_')
+            or not filename.endswith('.sqlite')
+            or '/' in filename or '\\' in filename or '..' in filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
+    # Verify the resolved path stays inside backups_path
     backup_path = os.path.join(backups_path, filename)
+    if not os.path.realpath(backup_path).startswith(
+            os.path.realpath(backups_path) + os.sep):
+        flash('Percorso backup non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
 
     try:
+        # Create a safety backup of the current DB before overwriting it
+        retention = current_app.config['APP_CONFIG'].get('backup_retention', 4)
+        create_backup(db_path, backups_path, retention=retention + 1)
+
         restore_backup(backup_path, db_path)
 
         log_attivita(g.user['id'], 'backup_ripristino', 'backup', None,
@@ -682,7 +695,9 @@ def backup_elimina(filename):
 
     backups_path = current_app.config['BACKUPS_PATH']
 
-    if not filename.startswith('medinventory_backup_') or not filename.endswith('.sqlite'):
+    if (not filename.startswith('medinventory_backup_')
+            or not filename.endswith('.sqlite')
+            or '/' in filename or '\\' in filename or '..' in filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 

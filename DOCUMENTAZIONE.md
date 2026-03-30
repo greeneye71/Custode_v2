@@ -1,7 +1,75 @@
 # MedInventory - Documentazione
 
 **Gestione Apparecchi Elettromedicali**
-*Versione 1.3.2 - by Studio Bergamaschi*
+*Versione 1.4.3 - by Studio Bergamaschi*
+
+---
+
+## Novità v1.4.2
+
+### Robustezza e affidabilità
+- **Pagine di errore HTTP** — errori 404, 403, 413 e 500 mostrano ora una pagina grafica chiara invece di un'eccezione Flask grezza o una pagina bianca.
+- **Durata sessione corretta** — `PERMANENT_SESSION_LIFETIME` è ora derivato da `session_lifetime_hours` (default 8h). In precedenza Flask applicava 31 giorni indipendentemente dalla configurazione.
+- **Logging su file** — tutti i log applicativi vengono scritti in `logs/medinventory.log` con rotazione automatica (5 MB × 5 file). Facilita la diagnosi di problemi in produzione.
+- **Errori DB registrati** — le funzioni `query_one`, `query_all`, `execute` registrano ora l'errore e la query SQL prima di rilanciarla, rendendo diagnosticabili gli errori di database.
+- **Timeout connessioni DB nell'email monitor** — le connessioni dirette SQLite nel thread di monitoraggio email hanno ora `timeout=10`. Senza timeout un lock DB prolungato bloccava il thread scheduler.
+
+---
+
+## Novità v1.4.1
+
+### Import AI asincrono
+- **Nessun blocco durante l'analisi** — caricare un file non occupa più il server per 15–50 secondi. L'elaborazione AI avviene in background; il browser mostra una pagina di attesa con aggiornamento automatico e viene reindirizzato alla preview al termine.
+- **Più utenti simultanei** — i thread del server sono stati portati da 4 a 8. Con l'import asincrono, un'analisi AI in corso non rallenta più gli altri utenti.
+
+---
+
+## Novità v1.4.0
+
+### Sicurezza
+- **Protezione path traversal nei download** — il download di documenti allegati agli apparecchi ora verifica che il percorso risolto sia dentro la cartella `uploads/`, impedendo accessi a file arbitrari.
+- **Validazione backup più rigorosa** — le operazioni di scarica, ripristino ed eliminazione backup rifiutano filename con separatori di percorso o sequenze `..`.
+- **Limite dimensione upload** — i caricamenti di file sono ora limitati a 32 MB; file più grandi vengono rifiutati prima di essere salvati.
+
+### Validazione input
+- **Porta di rete** — valori fuori dall'intervallo 1–65535 vengono ora rifiutati con messaggio di errore.
+- **Indirizzo IP** — validazione sostituita con `ipaddress.ip_address()` che controlla correttamente gli ottetti (precedentemente accettava `256.999.0.1`).
+- **Date intervento e verifica** — il formato `YYYY-MM-DD` è ora verificato esplicitamente; date malformate producono un messaggio di errore invece di essere inserite in DB.
+
+### Email e scheduler
+- **Thread scheduler bloccato su IMAP** — aggiunto timeout di 30 secondi sulla connessione IMAP. In precedenza un server IMAP non raggiungibile bloccava il thread del scheduler indefinitamente.
+
+### Backup
+- **Backup di sicurezza automatico prima del ripristino** — l'operazione "Ripristina" crea ora un backup datato del database corrente prima di sovrascriverlo, permettendo un recupero in caso di ripristino errato.
+
+### Stabilità
+- **Riparazione automatica schema import** — l'avvio rileva e corregge automaticamente database con la tabella `import_history` mancante o con la foreign key di `import_preview` corrotta (problema lasciato dalla migrazione v1.3.2 su SQLite ≥ 3.26).
+
+---
+
+## Novità v1.3.4
+
+### Sicurezza
+- **Accesso ai file protetto da autenticazione** — la route `/uploads/` richiedeva ora il login; in precedenza qualunque utente non autenticato poteva scaricare verbali, foto e PDF indovinando il percorso.
+- **Controllo divisione su modifica/eliminazione** — le pagine di modifica ed eliminazione di apparecchi, manutenzioni e verifiche ora verificano che l'utente abbia accesso alla divisione del record. In precedenza un utente non-admin poteva modificare o cancellare qualsiasi record indovinando l'ID nell'URL.
+
+### Scadenzario
+- **Calcolo scadenze corretto** — la vista `prossime_scadenze` considerava tutte le manutenzioni/verifiche invece dell'ultima per tipo, producendo scadenze duplicate e date errate. Ora viene considerato solo il record più recente. La correzione viene applicata automaticamente al primo avvio senza migrazione manuale.
+
+### Import AI
+- **Verbali e verifiche analizzati con il modello corretto** — ora viene usato `ai_import_model` (Sonnet) invece del modello email (Haiku).
+- **Matching matricola case-insensitive** — trova corrispondenze indipendentemente da maiuscole/minuscole.
+- **Validazione dati AI più robusta** — date obbligatorie, tipo intervento e esito verifica vengono ora validati e normalizzati prima dell'inserimento; valori non validi non causano più errori DB.
+- **Default periodicità verifiche corretto** — il default è ora 730 giorni (2 anni) come previsto da IEC 62353, non 365.
+- **Scadenza verifiche auto-calcolata** — anche via email, la `prossima_scadenza` viene sempre calcolata se mancante.
+- **Import inventario più completo** — l'AI estrae ora anche `codice_fornitore`, `garanzia_scadenza` e `contratto_manutenzione`. Per gli apparecchi già presenti, i campi vuoti vengono integrati senza sovrascrivere i dati esistenti.
+
+---
+
+## Novità v1.3.3
+
+- **Bug salvataggio provider AI** — le chiavi `ai_provider`, `ai_local_base_url` e `ai_local_model` non venivano salvate correttamente in `config.local.json`.
+- **Miglioramenti efficienza** — query batch per matching matricole, consolidamento contatori email, singola connessione DB nei loop di auto-import.
 
 ---
 

@@ -5,7 +5,10 @@ Provides connection management and query helpers for SQLite.
 
 import sqlite3
 import os
+import logging
 from flask import g, current_app
+
+logger = logging.getLogger('medinventory.models')
 
 
 def get_db():
@@ -40,33 +43,184 @@ def init_db():
 
 def query_one(sql, params=()):
     """Execute a query and return one row as dict, or None."""
-    db = get_db()
-    row = db.execute(sql, params).fetchone()
-    if row is None:
-        return None
-    return dict(row)
+    try:
+        db = get_db()
+        row = db.execute(sql, params).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+    except Exception as e:
+        logger.error(f"query_one failed: {e} | SQL: {sql[:100]!r}")
+        raise
 
 
 def query_all(sql, params=()):
     """Execute a query and return all rows as list of dicts."""
-    db = get_db()
-    rows = db.execute(sql, params).fetchall()
-    return [dict(row) for row in rows]
+    try:
+        db = get_db()
+        rows = db.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"query_all failed: {e} | SQL: {sql[:100]!r}")
+        raise
 
 
 def execute(sql, params=()):
     """Execute an INSERT/UPDATE/DELETE and return the cursor.
     Use cursor.lastrowid for inserts, cursor.rowcount for updates/deletes.
     """
+    try:
+        db = get_db()
+        cursor = db.execute(sql, params)
+        db.commit()
+        return cursor
+    except Exception as e:
+        logger.error(f"execute failed: {e} | SQL: {sql[:100]!r}")
+        raise
+
+
+def _fix_import_tables():
+    """Ripara import_history e import_preview se danneggiate dalla migrazione v1.3.2.
+
+    SQLite >= 3.26 aggiorna automaticamente le FK dei figli quando si rinomina
+    una tabella padre.  migrate_v1_3_2.py rinominava import_history in
+    _import_history_old e poi la ricreava; SQLite aggiornava la FK in
+    import_preview per puntare a _import_history_old.  Se la migrazione veniva
+    interrotta o il recovery precedente eliminava _import_history_old senza
+    ricreare import_preview, l'app smetteva di funzionare con
+    "no such table: main._import_history_old".
+    """
     db = get_db()
-    cursor = db.execute(sql, params)
-    db.commit()
-    return cursor
+
+    def table_exists(name):
+        row = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        return row is not None
+
+    def get_table_sql(name):
+        row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        return row[0] if row else None
+
+    try:
+        # Abilita legacy_alter_table per evitare nuovi aggiornamenti FK automatici
+        db.execute("PRAGMA legacy_alter_table = ON")
+
+        # 1. Crea import_history se mancante
+        if not table_exists('import_history'):
+            logger.warning("import_history mancante — creazione automatica")
+            db.execute("""CREATE TABLE import_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo_import TEXT NOT NULL CHECK(tipo_import IN
+                    ('inventario', 'verbale_email', 'verbale_manutenzione', 'verifica_elettrica')),
+                filename TEXT NOT NULL,
+                filepath TEXT NOT NULL,
+                tipo_documento TEXT,
+                divisione_id INTEGER,
+                email_from TEXT,
+                email_subject TEXT,
+                totale_righe INTEGER,
+                righe_importate INTEGER,
+                righe_errori INTEGER,
+                stato TEXT CHECK(stato IN ('pending', 'processing', 'completed', 'failed')),
+                ai_prompt TEXT,
+                ai_response TEXT,
+                errori_dettaglio TEXT,
+                imported_by INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME,
+                FOREIGN KEY (divisione_id) REFERENCES divisioni(id),
+                FOREIGN KEY (imported_by) REFERENCES utenti(id)
+            )""")
+            if table_exists('_import_history_old'):
+                db.execute(
+                    "INSERT INTO import_history SELECT * FROM _import_history_old")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_import_history_tipo ON import_history(tipo_import)")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_import_history_stato ON import_history(stato)")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_import_history_created ON import_history(created_at)")
+            db.commit()
+
+        # 2. Rimuovi _import_history_old residua
+        if table_exists('_import_history_old'):
+            db.execute("DROP TABLE _import_history_old")
+            db.commit()
+
+        # 3. Ricrea import_preview se la FK punta a _import_history_old
+        ip_sql = get_table_sql('import_preview')
+        if ip_sql and '_import_history_old' in ip_sql:
+            logger.warning("import_preview ha FK rotta — ricreazione automatica")
+            db.execute(
+                "ALTER TABLE import_preview RENAME TO _import_preview_old")
+            db.execute("""CREATE TABLE import_preview (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_id INTEGER NOT NULL,
+                riga_numero INTEGER,
+                dati_estratti TEXT,
+                apparecchio_match_id INTEGER,
+                match_confidence DECIMAL(3,2),
+                stato TEXT CHECK(stato IN ('pending', 'approved', 'rejected', 'imported')),
+                note_revisione TEXT,
+                FOREIGN KEY (import_id) REFERENCES import_history(id) ON DELETE CASCADE,
+                FOREIGN KEY (apparecchio_match_id) REFERENCES apparecchi(id)
+            )""")
+            db.execute(
+                "INSERT INTO import_preview SELECT * FROM _import_preview_old")
+            db.execute("DROP TABLE _import_preview_old")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_import_preview_import ON import_preview(import_id)")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_import_preview_stato ON import_preview(stato)")
+            db.commit()
+
+    except Exception as e:
+        logger.error(f"Errore in _fix_import_tables: {e}")
+    finally:
+        try:
+            db.execute("PRAGMA legacy_alter_table = OFF")
+        except Exception:
+            pass
+
+
+def get_schema_version():
+    """Ritorna la versione dello schema DB (PRAGMA user_version).
+    Convenzione: major*100 + minor*10 + patch  →  v1.4.3 = 143.
+    Restituisce 0 per DB creati prima dell'introduzione del versioning.
+    """
+    db = get_db()
+    return db.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _matricola_unique_solo(db):
+    """Ritorna True se esiste ancora un indice UNIQUE sulla sola colonna matricola
+    (schema pre-v1.4.3). Usato per rilevare se migrate_v1_4.py è stato eseguito."""
+    for idx in db.execute("PRAGMA index_list(apparecchi)").fetchall():
+        if not idx[2]:  # not unique
+            continue
+        cols = db.execute(f"PRAGMA index_info({idx[1]})").fetchall()
+        if len(cols) == 1 and cols[0][2] == 'matricola':
+            return True
+    return False
 
 
 def apply_schema_updates():
     """Applica aggiornamenti incrementali allo schema (idempotente) all'avvio."""
+    _fix_import_tables()
     db = get_db()
+    # Mark any import jobs left in 'processing' state by a previous server run as failed.
+    # Background threads are killed on shutdown, so 'processing' records are stale.
+    try:
+        db.execute(
+            "UPDATE import_history SET stato='failed', errori_dettaglio='Interrotto al riavvio del server' "
+            "WHERE stato='processing'"
+        )
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Cleanup import_history processing: {e}")
     migrations = [
         "ALTER TABLE apparecchi ADD COLUMN soggetto_verifica INTEGER NOT NULL DEFAULT 1",
         """CREATE TABLE IF NOT EXISTS accessori (
@@ -82,13 +236,101 @@ def apply_schema_updates():
             FOREIGN KEY (created_by) REFERENCES utenti(id)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_accessori_apparecchio ON accessori(apparecchio_id)",
+        # Ricrea la vista prossime_scadenze per mostrare solo l'ultima manutenzione/verifica
+        # per ogni (apparecchio, tipo) invece di tutti i record storici
+        "DROP VIEW IF EXISTS prossime_scadenze",
+        """CREATE VIEW prossime_scadenze AS
+SELECT
+  a.id AS apparecchio_id,
+  a.divisione_id,
+  a.descrizione,
+  a.marca,
+  a.modello,
+  a.matricola,
+  a.ubicazione,
+  m.id AS manutenzione_id,
+  m.id AS record_id,
+  'manutenzione' AS tipo_record,
+  m.tipo AS tipo_manutenzione,
+  m.prossima_scadenza,
+  CAST((julianday(m.prossima_scadenza) - julianday('now')) AS INTEGER) AS giorni_rimasti,
+  CASE
+    WHEN julianday(m.prossima_scadenza) - julianday('now') < 0  THEN 'scaduto'
+    WHEN julianday(m.prossima_scadenza) - julianday('now') <= 7  THEN 'urgente'
+    WHEN julianday(m.prossima_scadenza) - julianday('now') <= 15 THEN 'attenzione'
+    WHEN julianday(m.prossima_scadenza) - julianday('now') <= 30 THEN 'avviso'
+    ELSE 'ok'
+  END AS priorita
+FROM apparecchi a
+INNER JOIN manutenzioni m ON a.id = m.apparecchio_id
+WHERE a.stato != 'dismesso'
+  AND m.prossima_scadenza IS NOT NULL
+  AND m.id = (
+    SELECT m2.id FROM manutenzioni m2
+    WHERE m2.apparecchio_id = m.apparecchio_id
+      AND m2.tipo = m.tipo
+    ORDER BY m2.data_intervento DESC, m2.id DESC
+    LIMIT 1
+  )
+UNION ALL
+SELECT
+  a.id AS apparecchio_id,
+  a.divisione_id,
+  a.descrizione,
+  a.marca,
+  a.modello,
+  a.matricola,
+  a.ubicazione,
+  NULL AS manutenzione_id,
+  v.id AS record_id,
+  'verifica' AS tipo_record,
+  'verifica_elettrica' AS tipo_manutenzione,
+  v.prossima_scadenza,
+  CAST((julianday(v.prossima_scadenza) - julianday('now')) AS INTEGER) AS giorni_rimasti,
+  CASE
+    WHEN julianday(v.prossima_scadenza) - julianday('now') < 0  THEN 'scaduto'
+    WHEN julianday(v.prossima_scadenza) - julianday('now') <= 7  THEN 'urgente'
+    WHEN julianday(v.prossima_scadenza) - julianday('now') <= 15 THEN 'attenzione'
+    WHEN julianday(v.prossima_scadenza) - julianday('now') <= 30 THEN 'avviso'
+    ELSE 'ok'
+  END AS priorita
+FROM apparecchi a
+INNER JOIN verifiche v ON a.id = v.apparecchio_id
+WHERE a.stato != 'dismesso'
+  AND v.prossima_scadenza IS NOT NULL
+  AND v.id = (
+    SELECT v2.id FROM verifiche v2
+    WHERE v2.apparecchio_id = v.apparecchio_id
+    ORDER BY v2.data_verifica DESC, v2.id DESC
+    LIMIT 1
+  )
+ORDER BY prossima_scadenza ASC""",
     ]
     for sql in migrations:
         try:
             db.execute(sql)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Migration step skipped (may already be applied): {e}")
     db.commit()
+
+    # Versioning schema DB tramite PRAGMA user_version
+    # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)
+    schema_ver = db.execute("PRAGMA user_version").fetchone()[0]
+    if schema_ver == 0:
+        # DB precedente all'introduzione del versioning: rileva lo stato reale
+        if not _matricola_unique_solo(db):
+            # Schema già allineato a v1.4.3 (o installazione fresca)
+            db.execute("PRAGMA user_version = 143")
+            db.commit()
+            logger.info("Schema DB: versione impostata a 143 (v1.4.3)")
+        else:
+            # migrate_v1_4.py non ancora eseguito
+            logger.warning(
+                "Schema DB non aggiornato: eseguire 'python migrate_v1_4.py' "
+                "per rimuovere il vincolo UNIQUE su matricola (richiesto da v1.4.3)"
+            )
+    else:
+        logger.debug(f"Schema DB versione {schema_ver}")
 
 
 def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None, ip_address=None):

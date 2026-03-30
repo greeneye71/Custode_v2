@@ -4,13 +4,15 @@ AI-powered unified import: upload, classify, analyze, preview, approve.
 Supports: inventario, verbale di manutenzione, verifica di sicurezza elettrica.
 """
 
-import os
 import json
-import time
+import logging
+import os
 import shutil
+import threading
+import time
 
 from flask import (
-    Blueprint, render_template, request, redirect, url_for,
+    Blueprint, jsonify, render_template, request, redirect, url_for,
     flash, g, current_app
 )
 from werkzeug.utils import secure_filename
@@ -19,6 +21,7 @@ from auth import login_required
 from models import query_one, query_all, execute, log_attivita
 
 import_bp = Blueprint('import', __name__)
+logger = logging.getLogger('medinventory.import')
 
 ALLOWED_IMPORT_EXT = {'xlsx', 'xls', 'pdf', 'csv'}
 
@@ -44,6 +47,9 @@ DOC_TYPE_LABELS = {
     'verifica_elettrica': 'Verifica di Sicurezza Elettrica',
 }
 
+TIPI_VALIDI_MANUTENZIONE = {'preventiva', 'correttiva', 'verifica', 'calibrazione'}
+ESITI_VALIDI_VERIFICA = {'positivo', 'negativo', 'con_riserva'}
+
 
 @import_bp.route('/import')
 @login_required
@@ -55,7 +61,7 @@ def upload():
 @import_bp.route('/import/analizza', methods=['POST'])
 @login_required
 def analizza():
-    """Upload file, classify document type, analyze with AI, create preview."""
+    """Upload file, create pending import record, start AI analysis in background thread."""
     file = request.files.get('file')
     divisione_id = request.form.get('divisione_id')
 
@@ -67,9 +73,29 @@ def analizza():
         flash('Seleziona una divisione.', 'warning')
         return redirect(url_for('import.upload'))
 
+    try:
+        divisione_id = int(divisione_id)
+    except ValueError:
+        flash('Divisione non valida.', 'danger')
+        return redirect(url_for('import.upload'))
+
+    if g.user['ruolo'] != 'admin':
+        accessible_ids = [d['id'] for d in g.divisioni]
+        if divisione_id not in accessible_ids:
+            flash('Divisione non accessibile.', 'danger')
+            return redirect(url_for('import.upload'))
+
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
     if ext not in ALLOWED_IMPORT_EXT:
         flash(f'Formato non supportato. Usa: {", ".join(ALLOWED_IMPORT_EXT)}', 'danger')
+        return redirect(url_for('import.upload'))
+
+    # Check AI config before saving file
+    config = current_app.config['APP_CONFIG']
+    from ai_service import check_ai_configured
+    ai_ok, ai_error = check_ai_configured(config)
+    if not ai_ok:
+        flash(ai_error, 'danger')
         return redirect(url_for('import.upload'))
 
     # Save uploaded file
@@ -80,96 +106,170 @@ def analizza():
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
 
-    # Check AI config
-    config = current_app.config['APP_CONFIG']
-    api_key = config.get('anthropic_api_key', '')
-
-    from ai_service import (
-        extract_text_from_file, check_ai_configured,
-        classify_document_type, classify_document_type_from_pdf
+    # Create import_history record in 'processing' state.
+    # tipo_import is set to 'inventario' as placeholder; the background thread
+    # will update it once the document is classified.
+    cursor = execute(
+        """INSERT INTO import_history
+           (tipo_import, filename, filepath, tipo_documento, divisione_id,
+            stato, imported_by)
+           VALUES ('inventario', ?, ?, ?, ?, 'processing', ?)""",
+        (file.filename, f"import/{filename}", ext, divisione_id, g.user['id'])
     )
+    import_id = cursor.lastrowid
 
-    ai_ok, ai_error = check_ai_configured(config)
-    if not ai_ok:
-        flash(ai_error, 'danger')
+    # Capture request-context values before leaving the request
+    app_obj = current_app._get_current_object()
+    uploads_path = current_app.config['UPLOADS_PATH']
+    api_key = config.get('anthropic_api_key', '')
+    user_id = g.user['id']
+    remote_addr = request.remote_addr
+
+    t = threading.Thread(
+        target=_run_import_async,
+        args=(app_obj, import_id, filepath, ext, file.filename, filename,
+              divisione_id, config, api_key, timestamp,
+              user_id, remote_addr, uploads_path),
+        daemon=True,
+        name=f'import-{import_id}',
+    )
+    t.start()
+
+    return redirect(url_for('import.attendi', id=import_id))
+
+
+@import_bp.route('/import/<int:id>/attendi')
+@login_required
+def attendi(id):
+    """Waiting page: polls status while AI analysis runs in background."""
+    import_rec = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    if not import_rec:
+        flash('Import non trovato.', 'danger')
         return redirect(url_for('import.upload'))
-
-    try:
-        # Step 1: Extract text
-        text = extract_text_from_file(filepath, ext)
-        is_scanned = not text or len(text.strip()) < 10
-
-        # Step 2: Classify document type
-        classify_model = config.get('ai_email_model', 'claude-haiku-4-5-20251001')
-        if is_scanned and ext == 'pdf':
-            from ai_service import is_anthropic_provider
-            if not is_anthropic_provider(config):
-                flash('PDF scansionato: non supportato con provider AI locale. '
-                      'Utilizzare Anthropic Claude.', 'danger')
-                return redirect(url_for('import.upload'))
-            doc_type = classify_document_type_from_pdf(
-                filepath, api_key, classify_model, config=config)
-        else:
-            doc_type = classify_document_type(
-                text, api_key, classify_model, config=config)
-
-        # Step 3: Route to type-specific analysis
-        if doc_type == 'inventario':
-            return _process_inventario(
-                filepath, ext, text, is_scanned, file.filename, filename,
-                int(divisione_id), config, api_key)
-        elif doc_type == 'verbale_manutenzione':
-            return _process_verbali(
-                filepath, ext, text, is_scanned, file.filename, filename,
-                int(divisione_id), config, api_key, timestamp)
-        elif doc_type == 'verifica_elettrica':
-            return _process_verifiche(
-                filepath, ext, text, is_scanned, file.filename, filename,
-                int(divisione_id), config, api_key, timestamp)
-
-    except Exception as e:
-        flash(f'Errore durante l\'analisi: {str(e)}', 'danger')
+    # If already done (e.g. page refresh), redirect straight to result
+    if import_rec['stato'] == 'completed':
+        return redirect(url_for('import.preview', id=id))
+    if import_rec['stato'] == 'failed':
+        flash(import_rec.get('errori_dettaglio') or 'Analisi fallita.', 'danger')
         return redirect(url_for('import.upload'))
+    return render_template('import/attendi.html', import_rec=import_rec)
+
+
+@import_bp.route('/import/<int:id>/stato')
+@login_required
+def stato(id):
+    """Return current processing status as JSON (polled by attendi.html)."""
+    import_rec = query_one(
+        "SELECT stato, tipo_import, errori_dettaglio FROM import_history WHERE id = ?",
+        (id,))
+    if not import_rec:
+        return jsonify({'stato': 'failed', 'errori_dettaglio': 'Import non trovato.'})
+
+    resp = {'stato': import_rec['stato']}
+    if import_rec['stato'] == 'completed':
+        resp['redirect'] = url_for('import.preview', id=id)
+        resp['tipo_label'] = DOC_TYPE_LABELS.get(
+            import_rec['tipo_import'], import_rec['tipo_import'])
+    elif import_rec['stato'] == 'failed':
+        resp['errori_dettaglio'] = import_rec['errori_dettaglio'] or 'Errore sconosciuto.'
+    return jsonify(resp)
 
 
 # ---------------------------------------------------------------------------
-# Type-specific analysis helpers
+# Background async analysis (no Flask request context)
 # ---------------------------------------------------------------------------
 
-def _process_inventario(filepath, ext, text, is_scanned, orig_name, safe_name,
-                        divisione_id, config, api_key):
-    """Analyze as inventory document (existing flow)."""
+def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
+                      divisione_id, config, api_key, timestamp,
+                      user_id, remote_addr, uploads_path):
+    """Thread target: classify + analyze document, populate import_preview."""
+    with app.app_context():
+        try:
+            from ai_service import (
+                extract_text_from_file,
+                classify_document_type, classify_document_type_from_pdf,
+                is_anthropic_provider,
+            )
+
+            text = extract_text_from_file(filepath, ext)
+            is_scanned = not text or len(text.strip()) < 10
+
+            classify_model = config.get('ai_email_model', 'claude-haiku-4-5-20251001')
+            if is_scanned and ext == 'pdf':
+                if not is_anthropic_provider(config):
+                    execute(
+                        "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
+                        ('PDF scansionato non supportato con provider AI locale.', import_id))
+                    return
+                doc_type = classify_document_type_from_pdf(
+                    filepath, api_key, classify_model, config=config)
+            else:
+                doc_type = classify_document_type(
+                    text, api_key, classify_model, config=config)
+
+            if doc_type not in ('inventario', 'verbale_manutenzione', 'verifica_elettrica'):
+                execute(
+                    "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
+                    ('Tipo documento non riconosciuto dall\'AI.', import_id))
+                return
+
+            execute("UPDATE import_history SET tipo_import=? WHERE id=?",
+                    (doc_type, import_id))
+
+            if doc_type == 'inventario':
+                _run_inventario(import_id, filepath, ext, text, is_scanned,
+                                orig_name, safe_name, divisione_id, config, api_key,
+                                user_id, remote_addr, uploads_path)
+            elif doc_type == 'verbale_manutenzione':
+                _run_verbali(import_id, filepath, ext, text, is_scanned,
+                             orig_name, safe_name, divisione_id, config, api_key,
+                             timestamp, user_id, remote_addr, uploads_path)
+            else:
+                _run_verifiche(import_id, filepath, ext, text, is_scanned,
+                               orig_name, safe_name, divisione_id, config, api_key,
+                               timestamp, user_id, remote_addr, uploads_path)
+
+        except Exception as e:
+            logger.error(f"Import async error (import_id={import_id}): {e}", exc_info=True)
+            try:
+                execute(
+                    "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
+                    (str(e)[:1000], import_id))
+            except Exception:
+                pass
+
+
+def _run_inventario(import_id, filepath, ext, text, is_scanned,
+                    orig_name, safe_name, divisione_id, config, api_key,
+                    user_id, remote_addr, uploads_path):
+    """Analyze inventory document and populate import_preview. Runs in background thread."""
     from ai_service import (
         analyze_inventory_with_ai, analyze_inventory_from_pdf_document,
-        find_duplicates
+        find_duplicates,
     )
     model = config.get('ai_import_model', 'claude-sonnet-4-20250514')
 
     if is_scanned and ext == 'pdf':
         items, ai_response = analyze_inventory_from_pdf_document(
             filepath, api_key, model, config=config)
-        text = f"[PDF scansionato — analisi diretta AI ({len(ai_response)} chars)]"
+        text_summary = f"[PDF scansionato — analisi diretta AI ({len(ai_response)} chars)]"
     else:
-        items, ai_response = analyze_inventory_with_ai(
-            text, api_key, model, config=config)
+        items, ai_response = analyze_inventory_with_ai(text, api_key, model, config=config)
+        text_summary = f"[System prompt + extracted text ({len(text)} chars)]"
 
     if not items:
-        flash("L'analisi AI non ha trovato apparecchi nel documento.", 'warning')
-        return redirect(url_for('import.upload'))
+        execute(
+            "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
+            ('Nessun apparecchio trovato nel documento.', import_id))
+        return
 
     enriched_items = find_duplicates(items, divisione_id)
 
-    cursor = execute(
-        """INSERT INTO import_history
-           (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            totale_righe, stato, ai_prompt, ai_response, imported_by)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-        ('inventario', orig_name, f"import/{safe_name}", ext,
-         divisione_id, len(items),
-         f"[System prompt + extracted text ({len(text)} chars)]",
-         ai_response, g.user['id'])
-    )
-    import_id = cursor.lastrowid
+    execute(
+        """UPDATE import_history SET
+           tipo_import='inventario', totale_righe=?, ai_prompt=?, ai_response=?
+           WHERE id=?""",
+        (len(items), text_summary, ai_response, import_id))
 
     for i, item in enumerate(enriched_items):
         execute(
@@ -181,38 +281,30 @@ def _process_inventario(filepath, ext, text, is_scanned, orig_name, safe_name,
              item['match_id'], item['match_confidence'])
         )
 
-    log_attivita(g.user['id'], 'import_analisi', 'import_history', import_id,
-                 f"Inventario: {orig_name} ({len(items)} apparecchi trovati)",
-                 request.remote_addr)
-
-    flash(f'Documento classificato come <strong>Inventario</strong>. '
-          f'Trovati {len(items)} apparecchi.', 'success')
-    return redirect(url_for('import.preview', id=import_id))
+    execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
+    log_attivita(user_id, 'import_analisi', 'import_history', import_id,
+                 f"Inventario: {orig_name} ({len(items)} apparecchi trovati)", remote_addr)
 
 
-def _process_verbali(filepath, ext, text, is_scanned, orig_name, safe_name,
-                     divisione_id, config, api_key, timestamp):
-    """Analyze as maintenance report(s). PDF pages are split individually."""
+def _run_verbali(import_id, filepath, ext, text, is_scanned,
+                 orig_name, safe_name, divisione_id, config, api_key,
+                 timestamp, user_id, remote_addr, uploads_path):
+    """Analyze maintenance report(s). Runs in background thread."""
     from ai_service import (
         parse_verbale_with_ai, parse_verbale_from_pdf_document,
-        get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages
+        get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages,
     )
-    model = config.get('ai_email_model', 'claude-haiku-4-5-20251001')
+    model = config.get('ai_import_model', 'claude-sonnet-4-20250514')
     all_items = []
 
     if ext == 'pdf':
         page_count = get_pdf_page_count(filepath)
-
         if page_count > 1:
-            # Multi-page PDF: split and analyze page by page
-            pages_dir = os.path.join(
-                current_app.config['UPLOADS_PATH'], 'import', f'pages_{timestamp}')
+            pages_dir = os.path.join(uploads_path, 'import', f'pages_{timestamp}')
             page_paths = split_pdf_pages(filepath, pages_dir)
-
             for i, page_path in enumerate(page_paths):
                 page_text = extract_text_from_pdf_page(filepath, i)
                 page_is_scanned = not page_text or len(page_text.strip()) < 10
-
                 try:
                     if page_is_scanned:
                         items, _ = parse_verbale_from_pdf_document(
@@ -220,67 +312,49 @@ def _process_verbali(filepath, ext, text, is_scanned, orig_name, safe_name,
                     else:
                         items, _ = parse_verbale_with_ai(
                             page_text, api_key, model, config=config)
-
                     for item in items:
                         item['_pagina'] = i + 1
-                        item['_page_file'] = os.path.relpath(
-                            page_path, current_app.config['UPLOADS_PATH'])
+                        item['_page_file'] = os.path.relpath(page_path, uploads_path)
                     all_items.extend(items)
                 except Exception as e:
                     all_items.append({
                         'matricola': '', 'tipo': '', 'data_intervento': '',
                         'descrizione': f'Errore analisi pagina {i+1}: {e}',
                         '_pagina': i + 1,
-                        '_page_file': os.path.relpath(
-                            page_path, current_app.config['UPLOADS_PATH']),
+                        '_page_file': os.path.relpath(page_path, uploads_path),
                         '_errore': True,
                     })
         else:
-            # Single page
-            try:
-                if is_scanned:
-                    items, _ = parse_verbale_from_pdf_document(
-                        filepath, api_key, model, config=config)
-                else:
-                    items, _ = parse_verbale_with_ai(
-                        text, api_key, model, config=config)
-                for item in items:
-                    item['_pagina'] = 1
-                    item['_page_file'] = f"import/{safe_name}"
-                all_items = items
-            except Exception as e:
-                flash(f'Errore analisi verbale: {e}', 'danger')
-                return redirect(url_for('import.upload'))
-    else:
-        # Non-PDF (Excel, CSV): analyze whole text
-        try:
-            items, _ = parse_verbale_with_ai(text, api_key, model, config=config)
+            if is_scanned:
+                items, _ = parse_verbale_from_pdf_document(
+                    filepath, api_key, model, config=config)
+            else:
+                items, _ = parse_verbale_with_ai(text, api_key, model, config=config)
             for item in items:
-                item['_pagina'] = 0
+                item['_pagina'] = 1
+                item['_page_file'] = f"import/{safe_name}"
             all_items = items
-        except Exception as e:
-            flash(f'Errore analisi verbale: {e}', 'danger')
-            return redirect(url_for('import.upload'))
+    else:
+        items, _ = parse_verbale_with_ai(text, api_key, model, config=config)
+        for item in items:
+            item['_pagina'] = 0
+        all_items = items
 
     if not all_items:
-        flash("L'analisi AI non ha trovato interventi di manutenzione.", 'warning')
-        return redirect(url_for('import.upload'))
+        execute(
+            "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
+            ('Nessun intervento di manutenzione trovato nel documento.', import_id))
+        return
 
-    # Match matricole to apparecchi
     _match_apparecchi(all_items)
 
-    # Save to import_history + import_preview
-    cursor = execute(
-        """INSERT INTO import_history
-           (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            totale_righe, stato, ai_prompt, ai_response, imported_by)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-        ('verbale_manutenzione', orig_name, f"import/{safe_name}", ext,
-         divisione_id, len(all_items),
+    execute(
+        """UPDATE import_history SET
+           tipo_import='verbale_manutenzione', totale_righe=?, ai_prompt=?, ai_response=?
+           WHERE id=?""",
+        (len(all_items),
          f"[VERBALE_SYSTEM_PROMPT — {len(all_items)} interventi]",
-         json.dumps(all_items, ensure_ascii=False), g.user['id'])
-    )
-    import_id = cursor.lastrowid
+         json.dumps(all_items, ensure_ascii=False), import_id))
 
     for i, item in enumerate(all_items):
         match_id = item.pop('_match_id', None)
@@ -293,37 +367,30 @@ def _process_verbali(filepath, ext, text, is_scanned, orig_name, safe_name,
              match_id, 1.0 if match_id else 0.0)
         )
 
-    log_attivita(g.user['id'], 'import_analisi', 'import_history', import_id,
-                 f"Verbali: {orig_name} ({len(all_items)} interventi trovati)",
-                 request.remote_addr)
-
-    flash(f'Documento classificato come <strong>Verbale di Manutenzione</strong>. '
-          f'Trovati {len(all_items)} interventi.', 'success')
-    return redirect(url_for('import.preview', id=import_id))
+    execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
+    log_attivita(user_id, 'import_analisi', 'import_history', import_id,
+                 f"Verbali: {orig_name} ({len(all_items)} interventi trovati)", remote_addr)
 
 
-def _process_verifiche(filepath, ext, text, is_scanned, orig_name, safe_name,
-                       divisione_id, config, api_key, timestamp):
-    """Analyze as electrical safety verification(s). PDF pages split individually."""
+def _run_verifiche(import_id, filepath, ext, text, is_scanned,
+                   orig_name, safe_name, divisione_id, config, api_key,
+                   timestamp, user_id, remote_addr, uploads_path):
+    """Analyze electrical safety verification(s). Runs in background thread."""
     from ai_service import (
         analyze_verifiche_with_ai, analyze_verifiche_from_pdf_document,
-        get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages
+        get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages,
     )
-    model = config.get('ai_email_model', 'claude-haiku-4-5-20251001')
+    model = config.get('ai_import_model', 'claude-sonnet-4-20250514')
     all_items = []
 
     if ext == 'pdf':
         page_count = get_pdf_page_count(filepath)
-
         if page_count > 1:
-            pages_dir = os.path.join(
-                current_app.config['UPLOADS_PATH'], 'import', f'pages_{timestamp}')
+            pages_dir = os.path.join(uploads_path, 'import', f'pages_{timestamp}')
             page_paths = split_pdf_pages(filepath, pages_dir)
-
             for i, page_path in enumerate(page_paths):
                 page_text = extract_text_from_pdf_page(filepath, i)
                 page_is_scanned = not page_text or len(page_text.strip()) < 10
-
                 try:
                     if page_is_scanned:
                         items, _ = analyze_verifiche_from_pdf_document(
@@ -331,63 +398,49 @@ def _process_verifiche(filepath, ext, text, is_scanned, orig_name, safe_name,
                     else:
                         items, _ = analyze_verifiche_with_ai(
                             page_text, api_key, model, config=config)
-
                     for item in items:
                         item['_pagina'] = i + 1
-                        item['_page_file'] = os.path.relpath(
-                            page_path, current_app.config['UPLOADS_PATH'])
+                        item['_page_file'] = os.path.relpath(page_path, uploads_path)
                     all_items.extend(items)
                 except Exception as e:
                     all_items.append({
                         'matricola': '', 'data_verifica': '', 'esito': '',
                         'note': f'Errore analisi pagina {i+1}: {e}',
                         '_pagina': i + 1,
-                        '_page_file': os.path.relpath(
-                            page_path, current_app.config['UPLOADS_PATH']),
+                        '_page_file': os.path.relpath(page_path, uploads_path),
                         '_errore': True,
                     })
         else:
-            try:
-                if is_scanned:
-                    items, _ = analyze_verifiche_from_pdf_document(
-                        filepath, api_key, model, config=config)
-                else:
-                    items, _ = analyze_verifiche_with_ai(
-                        text, api_key, model, config=config)
-                for item in items:
-                    item['_pagina'] = 1
-                    item['_page_file'] = f"import/{safe_name}"
-                all_items = items
-            except Exception as e:
-                flash(f'Errore analisi verifiche: {e}', 'danger')
-                return redirect(url_for('import.upload'))
-    else:
-        try:
-            items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config)
+            if is_scanned:
+                items, _ = analyze_verifiche_from_pdf_document(
+                    filepath, api_key, model, config=config)
+            else:
+                items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config)
             for item in items:
-                item['_pagina'] = 0
+                item['_pagina'] = 1
+                item['_page_file'] = f"import/{safe_name}"
             all_items = items
-        except Exception as e:
-            flash(f'Errore analisi verifiche: {e}', 'danger')
-            return redirect(url_for('import.upload'))
+    else:
+        items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config)
+        for item in items:
+            item['_pagina'] = 0
+        all_items = items
 
     if not all_items:
-        flash("L'analisi AI non ha trovato verifiche di sicurezza.", 'warning')
-        return redirect(url_for('import.upload'))
+        execute(
+            "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
+            ('Nessuna verifica di sicurezza trovata nel documento.', import_id))
+        return
 
     _match_apparecchi(all_items)
 
-    cursor = execute(
-        """INSERT INTO import_history
-           (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            totale_righe, stato, ai_prompt, ai_response, imported_by)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-        ('verifica_elettrica', orig_name, f"import/{safe_name}", ext,
-         divisione_id, len(all_items),
+    execute(
+        """UPDATE import_history SET
+           tipo_import='verifica_elettrica', totale_righe=?, ai_prompt=?, ai_response=?
+           WHERE id=?""",
+        (len(all_items),
          f"[VERIFICA_BATCH_SYSTEM_PROMPT — {len(all_items)} verifiche]",
-         json.dumps(all_items, ensure_ascii=False), g.user['id'])
-    )
-    import_id = cursor.lastrowid
+         json.dumps(all_items, ensure_ascii=False), import_id))
 
     for i, item in enumerate(all_items):
         match_id = item.pop('_match_id', None)
@@ -400,28 +453,23 @@ def _process_verifiche(filepath, ext, text, is_scanned, orig_name, safe_name,
              match_id, 1.0 if match_id else 0.0)
         )
 
-    log_attivita(g.user['id'], 'import_analisi', 'import_history', import_id,
-                 f"Verifiche: {orig_name} ({len(all_items)} verifiche trovate)",
-                 request.remote_addr)
-
-    flash(f'Documento classificato come <strong>Verifica di Sicurezza Elettrica</strong>. '
-          f'Trovate {len(all_items)} verifiche.', 'success')
-    return redirect(url_for('import.preview', id=import_id))
+    execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
+    log_attivita(user_id, 'import_analisi', 'import_history', import_id,
+                 f"Verifiche: {orig_name} ({len(all_items)} verifiche trovate)", remote_addr)
 
 
 def _match_apparecchi(items):
     """Match matricole in items to existing apparecchi. Sets _match_id on each item."""
-    # Batch-fetch all unique matricole in one query
     matricole = list({(item.get('matricola') or '').strip() for item in items} - {''})
     lookup = {}
     if matricole:
         placeholders = ','.join('?' * len(matricole))
         rows = query_all(
-            f"SELECT id, matricola FROM apparecchi WHERE matricola IN ({placeholders}) AND stato != 'dismesso'",
-            matricole)
-        lookup = {r['matricola']: r['id'] for r in rows}
+            f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso'",
+            [m.lower() for m in matricole])
+        lookup = {r['matricola'].lower(): r['id'] for r in rows}
     for item in items:
-        matricola = (item.get('matricola') or '').strip()
+        matricola = (item.get('matricola') or '').strip().lower()
         item['_match_id'] = lookup.get(matricola)
 
 
@@ -461,12 +509,36 @@ def preview(id):
     apparecchi_list = []
     tipo = import_rec['tipo_import']
     if tipo in ('verbale_manutenzione', 'verifica_elettrica'):
-        apparecchi_list = query_all(
-            """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
-               FROM apparecchi a
-               LEFT JOIN divisioni d ON a.divisione_id = d.id
-               WHERE a.stato != 'dismesso'
-               ORDER BY a.matricola""")
+        div = getattr(g, 'divisione_attiva', None)
+        if div and div.get('id') != 'tutte':
+            apparecchi_list = query_all(
+                """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
+                   FROM apparecchi a
+                   LEFT JOIN divisioni d ON a.divisione_id = d.id
+                   WHERE a.stato != 'dismesso' AND a.divisione_id = ?
+                   ORDER BY a.matricola""",
+                [div['id']]
+            )
+        elif getattr(g, 'user', {}).get('ruolo') == 'admin':
+            apparecchi_list = query_all(
+                """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
+                   FROM apparecchi a
+                   LEFT JOIN divisioni d ON a.divisione_id = d.id
+                   WHERE a.stato != 'dismesso'
+                   ORDER BY a.matricola"""
+            )
+        else:
+            ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+            if ids:
+                ph = ','.join('?' * len(ids))
+                apparecchi_list = query_all(
+                    f"""SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
+                       FROM apparecchi a
+                       LEFT JOIN divisioni d ON a.divisione_id = d.id
+                       WHERE a.stato != 'dismesso' AND a.divisione_id IN ({ph})
+                       ORDER BY a.matricola""",
+                    ids
+                )
 
     tipo_label = DOC_TYPE_LABELS.get(tipo, tipo)
 
@@ -540,12 +612,22 @@ def _execute_inventario(import_id, selected_ids, import_rec):
             if row['apparecchio_match_id']:
                 execute(
                     """UPDATE apparecchi SET
+                       descrizione = COALESCE(descrizione, ?),
+                       anno_fabbricazione = COALESCE(anno_fabbricazione, ?),
+                       classificazione = COALESCE(classificazione, ?),
                        ubicazione = COALESCE(?, ubicazione),
                        fornitore = COALESCE(?, fornitore),
+                       codice_fornitore = COALESCE(codice_fornitore, ?),
+                       garanzia_scadenza = COALESCE(garanzia_scadenza, ?),
+                       contratto_manutenzione = COALESCE(contratto_manutenzione, ?),
                        note = COALESCE(?, note),
                        updated_by = ?, updated_at = datetime('now')
                        WHERE id = ?""",
-                    (data.get('ubicazione'), data.get('fornitore'),
+                    (data.get('descrizione'), data.get('anno_fabbricazione'),
+                     data.get('classificazione'),
+                     data.get('ubicazione'), data.get('fornitore'),
+                     data.get('codice_fornitore'), data.get('garanzia_scadenza'),
+                     data.get('contratto_manutenzione'),
                      data.get('note'), g.user['id'], row['apparecchio_match_id'])
                 )
             else:
@@ -553,8 +635,9 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                     """INSERT INTO apparecchi
                        (divisione_id, matricola, descrizione, numero_inventario,
                         marca, modello, anno_fabbricazione, classificazione,
-                        ubicazione, fornitore, ip_address, note, created_by)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        ubicazione, fornitore, codice_fornitore, garanzia_scadenza,
+                        contratto_manutenzione, ip_address, note, created_by)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (import_rec['divisione_id'],
                      data.get('matricola', ''),
                      data.get('descrizione'),
@@ -565,6 +648,9 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                      data.get('classificazione'),
                      data.get('ubicazione'),
                      data.get('fornitore'),
+                     data.get('codice_fornitore'),
+                     data.get('garanzia_scadenza'),
+                     data.get('contratto_manutenzione'),
                      data.get('ip_address'),
                      data.get('note'),
                      g.user['id'])
@@ -593,9 +679,30 @@ def _execute_verbali(import_id, selected_ids, import_rec):
         try:
             data = json.loads(row['dati_estratti'])
 
+            # Bug K: skip error items produced during page analysis
+            if data.get('_errore'):
+                execute("UPDATE import_preview SET stato = 'rejected', "
+                        "note_revisione = 'Errore analisi pagina' WHERE id = ?",
+                        (int(row_id),))
+                errors += 1
+                continue
+
             # Determine apparecchio: user override or AI match
             app_override = request.form.get(f'apparecchio_id_{row_id}')
-            apparecchio_id = int(app_override) if app_override else row['apparecchio_match_id']
+            if app_override:
+                try:
+                    apparecchio_id = int(app_override)
+                except (ValueError, TypeError):
+                    apparecchio_id = None
+                # Bug I: validate override is within accessible divisions
+                if apparecchio_id and g.user['ruolo'] != 'admin':
+                    accessible_ids = [d['id'] for d in g.divisioni]
+                    app_rec = query_one(
+                        "SELECT divisione_id FROM apparecchi WHERE id = ?", (apparecchio_id,))
+                    if not app_rec or app_rec['divisione_id'] not in accessible_ids:
+                        apparecchio_id = None
+            else:
+                apparecchio_id = row['apparecchio_match_id']
 
             if not apparecchio_id:
                 execute("UPDATE import_preview SET stato = 'rejected', "
@@ -603,6 +710,15 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                         (int(row_id),))
                 errors += 1
                 continue
+
+            # Bug E: validate required date field
+            data_intervento = (data.get('data_intervento') or '').strip()
+            if not data_intervento:
+                raise ValueError("data_intervento mancante")
+
+            # Normalize tipo to valid set
+            tipo_raw = (data.get('tipo') or 'preventiva').strip().lower()
+            tipo = tipo_raw if tipo_raw in TIPI_VALIDI_MANUTENZIONE else 'preventiva'
 
             # Copy page PDF to verbali folder if available
             verbale_path = None
@@ -617,6 +733,19 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                     shutil.copy2(src, dest)
                     verbale_path = f"verbali/{dest_name}"
 
+            # Safe periodicita conversion (handles floats like "365.0")
+            periodicita_giorni = None
+            if data.get('periodicita_giorni'):
+                try:
+                    periodicita_giorni = int(float(data['periodicita_giorni']))
+                except (ValueError, TypeError):
+                    periodicita_giorni = None
+
+            try:
+                costo = float(data['costo']) if data.get('costo') else None
+            except (ValueError, TypeError):
+                costo = None
+
             cursor = execute(
                 """INSERT INTO manutenzioni
                    (apparecchio_id, tipo, data_intervento, prossima_scadenza,
@@ -625,14 +754,14 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     apparecchio_id,
-                    data.get('tipo', 'preventiva'),
-                    data.get('data_intervento'),
-                    data.get('prossima_scadenza'),
-                    int(data['periodicita_giorni']) if data.get('periodicita_giorni') else None,
+                    tipo,
+                    data_intervento,
+                    data.get('prossima_scadenza') or None,
+                    periodicita_giorni,
                     data.get('tecnico_ditta'),
                     data.get('descrizione'),
                     data.get('esito'),
-                    float(data['costo']) if data.get('costo') else None,
+                    costo,
                     verbale_path,
                     g.user['id']
                 )
@@ -662,8 +791,29 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
         try:
             data = json.loads(row['dati_estratti'])
 
+            # Bug K: skip error items produced during page analysis
+            if data.get('_errore'):
+                execute("UPDATE import_preview SET stato = 'rejected', "
+                        "note_revisione = 'Errore analisi pagina' WHERE id = ?",
+                        (int(row_id),))
+                errors += 1
+                continue
+
             app_override = request.form.get(f'apparecchio_id_{row_id}')
-            apparecchio_id = int(app_override) if app_override else row['apparecchio_match_id']
+            if app_override:
+                try:
+                    apparecchio_id = int(app_override)
+                except (ValueError, TypeError):
+                    apparecchio_id = None
+                # Bug I: validate override is within accessible divisions
+                if apparecchio_id and g.user['ruolo'] != 'admin':
+                    accessible_ids = [d['id'] for d in g.divisioni]
+                    app_rec = query_one(
+                        "SELECT divisione_id FROM apparecchi WHERE id = ?", (apparecchio_id,))
+                    if not app_rec or app_rec['divisione_id'] not in accessible_ids:
+                        apparecchio_id = None
+            else:
+                apparecchio_id = row['apparecchio_match_id']
 
             if not apparecchio_id:
                 execute("UPDATE import_preview SET stato = 'rejected', "
@@ -671,6 +821,15 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                         (int(row_id),))
                 errors += 1
                 continue
+
+            # Bug E: validate required date field
+            data_verifica = (data.get('data_verifica') or '').strip()
+            if not data_verifica:
+                raise ValueError("data_verifica mancante")
+
+            # Normalize esito to valid set
+            esito_raw = (data.get('esito') or 'positivo').strip().lower()
+            esito = esito_raw if esito_raw in ESITI_VALIDI_VERIFICA else 'positivo'
 
             # Copy page PDF to verifiche folder if available
             documento_path = None
@@ -685,12 +844,12 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                     shutil.copy2(src, dest)
                     documento_path = f"verifiche/{dest_name}"
 
-            # Auto-calculate prossima_scadenza
-            periodicita = int(data.get('periodicita_giorni', 365))
-            prossima = data.get('prossima_scadenza')
-            if not prossima and data.get('data_verifica'):
+            # Bug F: safe periodicita conversion (handles floats like "365.0"); default 730 (2 anni)
+            periodicita = int(float(data.get('periodicita_giorni') or 730))
+            prossima = data.get('prossima_scadenza') or None
+            if not prossima:
                 try:
-                    d = datetime.strptime(data['data_verifica'], '%Y-%m-%d')
+                    d = datetime.strptime(data_verifica, '%Y-%m-%d')
                     d += timedelta(days=periodicita)
                     prossima = d.strftime('%Y-%m-%d')
                 except ValueError:
@@ -704,10 +863,10 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     apparecchio_id,
-                    data.get('data_verifica'),
+                    data_verifica,
                     prossima,
                     periodicita,
-                    data.get('esito', 'positivo'),
+                    esito,
                     data.get('tecnico_ditta'),
                     data.get('note'),
                     documento_path,

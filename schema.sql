@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS apparecchi (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   divisione_id INTEGER NOT NULL,
   descrizione TEXT,
-  matricola TEXT UNIQUE NOT NULL,
+  matricola TEXT NOT NULL,
   numero_inventario TEXT,
   marca TEXT NOT NULL,
   modello TEXT NOT NULL,
@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS apparecchi (
   updated_by INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(modello, matricola),
   FOREIGN KEY (divisione_id) REFERENCES divisioni(id),
   FOREIGN KEY (created_by) REFERENCES utenti(id),
   FOREIGN KEY (updated_by) REFERENCES utenti(id)
@@ -322,6 +323,13 @@ FROM apparecchi a
 INNER JOIN manutenzioni m ON a.id = m.apparecchio_id
 WHERE a.stato != 'dismesso'
   AND m.prossima_scadenza IS NOT NULL
+  AND m.id = (
+    SELECT m2.id FROM manutenzioni m2
+    WHERE m2.apparecchio_id = m.apparecchio_id
+      AND m2.tipo = m.tipo
+    ORDER BY m2.data_intervento DESC, m2.id DESC
+    LIMIT 1
+  )
 
 UNION ALL
 
@@ -350,5 +358,11 @@ FROM apparecchi a
 INNER JOIN verifiche v ON a.id = v.apparecchio_id
 WHERE a.stato != 'dismesso'
   AND v.prossima_scadenza IS NOT NULL
+  AND v.id = (
+    SELECT v2.id FROM verifiche v2
+    WHERE v2.apparecchio_id = v.apparecchio_id
+    ORDER BY v2.data_verifica DESC, v2.id DESC
+    LIMIT 1
+  )
 
 ORDER BY prossima_scadenza ASC;

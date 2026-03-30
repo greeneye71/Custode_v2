@@ -66,6 +66,11 @@ def _validate_manutenzione(form_data):
     data['data_intervento'] = form_data.get('data_intervento', '').strip()
     if not data['data_intervento']:
         errors['data_intervento'] = "La data dell'intervento è obbligatoria."
+    else:
+        try:
+            datetime.strptime(data['data_intervento'], '%Y-%m-%d')
+        except ValueError:
+            errors['data_intervento'] = "Formato data non valido (YYYY-MM-DD)."
 
     # Optional: periodicita_giorni
     periodicita = form_data.get('periodicita_giorni', '').strip()
@@ -253,7 +258,7 @@ def nuova():
 def modifica(id):
     """Edit a maintenance record."""
     manutenzione = query_one(
-        """SELECT m.*, a.marca, a.modello, a.matricola
+        """SELECT m.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
            WHERE m.id = ?""", (id,)
@@ -261,6 +266,12 @@ def modifica(id):
     if not manutenzione:
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
+
+    if g.user['ruolo'] != 'admin':
+        accessible_ids = [d['id'] for d in g.divisioni]
+        if manutenzione['divisione_id'] not in accessible_ids:
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('manutenzioni.lista'))
 
     if request.method == 'GET':
         apparecchi = _get_accessible_apparecchi()
@@ -306,10 +317,20 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a maintenance record."""
-    manutenzione = query_one("SELECT * FROM manutenzioni WHERE id = ?", (id,))
+    manutenzione = query_one(
+        """SELECT m.*, a.divisione_id FROM manutenzioni m
+           JOIN apparecchi a ON m.apparecchio_id = a.id
+           WHERE m.id = ?""", (id,)
+    )
     if not manutenzione:
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
+
+    if g.user['ruolo'] != 'admin':
+        accessible_ids = [d['id'] for d in g.divisioni]
+        if manutenzione['divisione_id'] not in accessible_ids:
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('manutenzioni.lista'))
 
     # Delete associated verbale file if present
     if manutenzione.get('verbale_path'):
@@ -353,9 +374,6 @@ def scarica_verbale(id):
 def scadenzario():
     """Deadline tracking view with priority badges."""
     div_clause, div_params = _get_divisione_filter('ps')
-
-    # Rename table alias for the view
-    div_clause = div_clause.replace('ps.divisione_id', 'ps.divisione_id')
 
     tipo = request.args.get('tipo', '')
     priorita = request.args.get('priorita', '')

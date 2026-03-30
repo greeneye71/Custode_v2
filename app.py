@@ -10,14 +10,16 @@ import os
 import json
 import shutil
 import secrets
-from datetime import datetime
+import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime, timedelta
 
 # Force UTF-8 I/O on Windows (avoids 'ascii' codec errors with Italian text / Anthropic SDK)
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-from flask import Flask, g, session, redirect, url_for, render_template
+from flask import Flask, g, session, redirect, url_for, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from models import close_db, init_db, get_db
@@ -27,13 +29,38 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.4.3"
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
+def _setup_logging(log_dir):
+    """Configure rotating file logging for the entire application."""
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, 'medinventory.log')
+    handler = RotatingFileHandler(
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding='utf-8'
+    )
+    handler.setFormatter(
+        logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    )
+    handler.setLevel(logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+    else:
+        root.addHandler(handler)
+
 
 # ---------------------------------------------------------------------------
 # Configuration helpers
 # ---------------------------------------------------------------------------
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_setup_logging(os.path.join(_BASE_DIR, 'logs'))
+
 CONFIG_PATH         = os.path.join(_BASE_DIR, 'config.json')
 LOCAL_CONFIG_PATH   = os.path.join(_BASE_DIR, 'config.local.json')
 LOCAL_EXAMPLE_PATH  = os.path.join(_BASE_DIR, 'config.local.example.json')
@@ -173,6 +200,10 @@ def create_app():
         config.get('backups_path', 'backups')
     )
     app.config['APP_CONFIG'] = config
+    app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB upload limit
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
+        hours=config.get('session_lifetime_hours', 8)
+    )
 
     # ProxyFix: corregge request.remote_addr e scheme quando l'app è dietro
     # un reverse proxy o tunnel (Cloudflare Tunnel, Nginx, ecc.).
@@ -284,10 +315,20 @@ def create_app():
                 "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id = ? AND priorita IN ('scaduto','urgente','attenzione','avviso')",
                 [div['id']]
             )
-        else:
+        elif getattr(g, 'user', {}).get('ruolo') == 'admin':
             r = query_one(
                 "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE priorita IN ('scaduto','urgente','attenzione','avviso')"
             )
+        else:
+            ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+            if ids:
+                ph = ','.join('?' * len(ids))
+                r = query_one(
+                    f"SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id IN ({ph}) AND priorita IN ('scaduto','urgente','attenzione','avviso')",
+                    ids
+                )
+            else:
+                r = None
         scadenze_attive = r['cnt'] if r else 0
 
         # Stat 3: Manutenzioni this month
@@ -453,6 +494,34 @@ def create_app():
                                chart_verifiche_json=json.dumps(chart_verifiche))
 
     # ---------------------------------------------------------------------------
+    # HTTP error handlers
+    # ---------------------------------------------------------------------------
+    @app.errorhandler(404)
+    def not_found(e):
+        return render_template('errors/error.html', code=404,
+                               title='Pagina non trovata',
+                               message='La risorsa richiesta non esiste.'), 404
+
+    @app.errorhandler(403)
+    def forbidden(e):
+        return render_template('errors/error.html', code=403,
+                               title='Accesso negato',
+                               message='Non hai i permessi per accedere a questa risorsa.'), 403
+
+    @app.errorhandler(413)
+    def too_large(e):
+        return render_template('errors/error.html', code=413,
+                               title='File troppo grande',
+                               message='La dimensione massima consentita è 32 MB.'), 413
+
+    @app.errorhandler(500)
+    def server_error(e):
+        logging.getLogger('medinventory').error(f'Errore 500: {e}')
+        return render_template('errors/error.html', code=500,
+                               title='Errore interno del server',
+                               message='Si è verificato un errore imprevisto. Contatta l\'amministratore.'), 500
+
+    # ---------------------------------------------------------------------------
     # Health check endpoint
     # ---------------------------------------------------------------------------
     @app.route('/api/health')
@@ -463,6 +532,7 @@ def create_app():
     # Serve uploaded files
     # ---------------------------------------------------------------------------
     @app.route('/uploads/<path:filename>')
+    @auth_login_required
     def uploaded_file(filename):
         from flask import send_from_directory
         return send_from_directory(app.config['UPLOADS_PATH'], filename)

@@ -96,7 +96,7 @@ def main():
             app,
             host=host,
             port=port,
-            threads=4,
+            threads=8,
             channel_timeout=120,
             url_scheme='http',
         )

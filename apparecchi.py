@@ -3,6 +3,7 @@ MedInventory - Apparecchi (Medical Devices) Blueprint
 Full CRUD: list with filters, create, edit, detail, soft-delete, photo/document upload.
 """
 
+import ipaddress
 import os
 import re
 import time
@@ -52,13 +53,14 @@ def _validate_apparecchio(form_data, edit_id=None):
     if not data['matricola']:
         errors['matricola'] = 'La matricola è obbligatoria.'
     else:
-        # Check unique
+        # Check unique on (modello, matricola): stessa matricola è ammessa su modelli diversi
+        modello_check = form_data.get('modello', '').strip()
         existing = query_one(
-            "SELECT id FROM apparecchi WHERE matricola = ? AND id != ?",
-            (data['matricola'], edit_id or 0)
+            "SELECT id FROM apparecchi WHERE matricola = ? AND modello = ? AND id != ?",
+            (data['matricola'], modello_check, edit_id or 0)
         )
         if existing:
-            errors['matricola'] = 'Questa matricola è già presente nel sistema.'
+            errors['matricola'] = 'Questa combinazione modello + matricola è già presente nel sistema.'
 
     data['marca'] = form_data.get('marca', '').strip()
     if not data['marca']:
@@ -110,6 +112,8 @@ def _validate_apparecchio(form_data, edit_id=None):
     if porta:
         try:
             data['porta'] = int(porta)
+            if not (1 <= data['porta'] <= 65535):
+                errors['porta'] = 'Porta non valida (1-65535).'
         except ValueError:
             errors['porta'] = 'Porta non valida.'
     else:
@@ -120,8 +124,9 @@ def _validate_apparecchio(form_data, edit_id=None):
 
     # IP validation if connected
     if data['connesso_rete'] and data['ip_address']:
-        ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
-        if not re.match(ip_pattern, data['ip_address']):
+        try:
+            ipaddress.ip_address(data['ip_address'])
+        except ValueError:
             errors['ip_address'] = 'Formato IP non valido (es. 192.168.1.100).'
 
     # Supplier fields
@@ -498,6 +503,12 @@ def modifica(id):
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
+    if g.user['ruolo'] != 'admin':
+        accessible_ids = [d['id'] for d in g.divisioni]
+        if apparecchio['divisione_id'] not in accessible_ids:
+            flash('Accesso non autorizzato a questo apparecchio.', 'danger')
+            return redirect(url_for('apparecchi.lista'))
+
     if request.method == 'GET':
         accessori = query_all(
             "SELECT * FROM accessori WHERE apparecchio_id = ? ORDER BY id", (id,)
@@ -660,6 +671,11 @@ def scarica_documento(id, doc_id):
         return redirect(url_for('apparecchi.dettaglio', id=id))
 
     uploads_dir = current_app.config['UPLOADS_PATH']
+    # Validate path stays within uploads directory (defense-in-depth)
+    resolved = os.path.realpath(os.path.join(uploads_dir, doc['filepath']))
+    if not resolved.startswith(os.path.realpath(uploads_dir) + os.sep):
+        flash('Accesso al file non consentito.', 'danger')
+        return redirect(url_for('apparecchi.dettaglio', id=id))
     return send_from_directory(uploads_dir, doc['filepath'],
                                as_attachment=True,
                                download_name=doc['filename'])
