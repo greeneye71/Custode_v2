@@ -89,11 +89,13 @@ def superadmin_required(f):
 
 
 def admin_struttura_required(f):
-    """Decorator: richiede ruolo admin (della struttura) o superadmin."""
+    """Decorator: richiede ruolo admin (della struttura) o superadmin che stia impersonando."""
     @wraps(f)
     @login_required
     def decorated_function(*args, **kwargs):
-        if g.user['ruolo'] not in ('admin', 'superadmin'):
+        is_admin = g.user['ruolo'] in ('admin',)
+        is_superadmin_impersonating = getattr(g, 'is_superadmin_impersonating', False)
+        if not (is_admin or is_superadmin_impersonating):
             flash('Accesso non autorizzato.', 'danger')
             return redirect(url_for('index'))
         return f(*args, **kwargs)
@@ -347,7 +349,7 @@ def login():
         (ip, email)
     )
     execute(
-        "DELETE FROM login_attempts WHERE ip_address = ? OR email = ?",
+        "DELETE FROM login_attempts WHERE (ip_address = ? OR email = ?) AND esito = 'fallito'",
         (ip, email)
     )
 
@@ -377,24 +379,17 @@ def logout():
 
 
 @auth_bp.route('/logout-ovunque', methods=['POST'])
-@login_required
+@admin_required
 def logout_ovunque():
-    """Revoca tutte le sessioni dell'utente corrente (o di un utente specifico per admin)."""
-    target_id = request.form.get('utente_id', type=int) or g.user['id']
-    if target_id != g.user['id'] and g.user['ruolo'] not in ('admin', 'superadmin'):
-        flash('Non autorizzato.', 'danger')
-        return redirect(url_for('index'))
-    token_corrente = session.get('token')
-    if target_id == g.user['id']:
-        execute(
-            "DELETE FROM sessioni WHERE utente_id = ? AND token != ?",
-            (target_id, token_corrente)
-        )
-        flash('Tutte le altre sessioni sono state revocate.', 'success')
-    else:
-        execute("DELETE FROM sessioni WHERE utente_id = ?", (target_id,))
-        flash('Sessioni revocate.', 'success')
-    return redirect(request.referrer or url_for('index'))
+    """Revoca tutte le sessioni di tutti gli utenti della struttura corrente (struttura-wide)."""
+    execute(
+        "DELETE FROM sessioni WHERE utente_id IN (SELECT id FROM utenti WHERE struttura_id = ?)",
+        (g.struttura_id,)
+    )
+    log_attivita(g.user['id'], 'logout_ovunque', 'struttura', g.struttura_id,
+                 None, request.remote_addr, struttura_id=g.struttura_id)
+    flash('Tutte le sessioni della struttura sono state revocate.', 'success')
+    return redirect(url_for('index'))
 
 
 @auth_bp.route('/cambio-password', methods=['GET', 'POST'])
@@ -483,6 +478,12 @@ def impersona_struttura(struttura_id):
         flash('Struttura non trovata.', 'danger')
         return redirect(url_for('strutture.index'))
     session['struttura_impersonata_id'] = struttura_id
+    log_attivita(
+        g.user['id'], 'impersonazione', 'struttura', struttura_id,
+        dettagli=f"Superadmin impersona struttura {struttura_id}",
+        ip_address=request.remote_addr,
+        struttura_id=struttura_id
+    )
     flash(f'Stai operando come: {struttura["nome"]}', 'info')
     return redirect(url_for('index'))
 
