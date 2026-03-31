@@ -65,12 +65,51 @@ def login_required(f):
 
 
 def admin_required(f):
-    """Decorator: require admin role. Must be used after @login_required."""
+    """Decorator: require admin or superadmin role. Must be used after @login_required."""
     @wraps(f)
     @login_required
     def decorated_function(*args, **kwargs):
-        if g.user['ruolo'] != 'admin':
+        if g.user['ruolo'] not in ('admin', 'superadmin'):
             flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def superadmin_required(f):
+    """Decorator: richiede ruolo superadmin."""
+    @wraps(f)
+    @login_required
+    def decorated_function(*args, **kwargs):
+        if g.user['ruolo'] != 'superadmin':
+            flash('Accesso riservato al superamministratore.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def admin_struttura_required(f):
+    """Decorator: richiede ruolo admin (della struttura) o superadmin."""
+    @wraps(f)
+    @login_required
+    def decorated_function(*args, **kwargs):
+        if g.user['ruolo'] not in ('admin', 'superadmin'):
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def modalita_avanzata_required(f):
+    """Decorator: richiede modalita='ingegneria_clinica' per la struttura corrente."""
+    @wraps(f)
+    @login_required
+    def decorated_function(*args, **kwargs):
+        if g.user['ruolo'] == 'superadmin':
+            return f(*args, **kwargs)  # superadmin bypassa sempre
+        struttura_modalita = getattr(g, 'struttura_modalita', 'ingegneria_clinica')
+        if struttura_modalita != 'ingegneria_clinica':
+            flash('Funzione disponibile solo in modalità Ingegneria Clinica.', 'warning')
             return redirect(url_for('index'))
         return f(*args, **kwargs)
     return decorated_function
@@ -89,7 +128,7 @@ def _load_user_from_session():
     # Find valid session
     sess = query_one(
         """SELECT s.*, u.id as user_id, u.email, u.nome, u.cognome, u.ruolo,
-                  u.attivo, u.primo_accesso, u.divisione_default_id
+                  u.attivo, u.primo_accesso, u.divisione_default_id, u.struttura_id
            FROM sessioni s
            JOIN utenti u ON s.utente_id = u.id
            WHERE s.token = ? AND s.expires_at > datetime('now') AND u.attivo = 1""",
@@ -108,13 +147,56 @@ def _load_user_from_session():
         'ruolo': sess['ruolo'],
         'primo_accesso': sess['primo_accesso'],
         'divisione_default_id': sess['divisione_default_id'],
+        'struttura_id': sess['struttura_id'],
     }
 
+    # Popola dati struttura nella sessione
+    struttura = None
+    if g.user['ruolo'] == 'superadmin':
+        # Il superadmin può impersonare una struttura tramite sessione
+        struttura_impersonata_id = session.get('struttura_impersonata_id')
+        if struttura_impersonata_id:
+            struttura = query_one(
+                "SELECT * FROM strutture WHERE id = ? AND attiva = 1",
+                (struttura_impersonata_id,)
+            )
+    else:
+        struttura_id = g.user.get('struttura_id')
+        if struttura_id:
+            struttura = query_one(
+                "SELECT * FROM strutture WHERE id = ? AND attiva = 1",
+                (struttura_id,)
+            )
+
+    g.struttura = struttura
+    g.struttura_id = struttura['id'] if struttura else None
+    g.struttura_nome = struttura['nome'] if struttura else None
+    g.struttura_modalita = struttura['modalita'] if struttura else 'ingegneria_clinica'
+    g.is_superadmin_impersonating = (
+        g.user['ruolo'] == 'superadmin' and struttura is not None
+    )
+
     # Load accessible divisions
-    if g.user['ruolo'] == 'admin':
-        g.divisioni = query_all(
-            "SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome"
-        )
+    if g.user['ruolo'] == 'superadmin':
+        # Superadmin: vede le divisioni della struttura impersonata, o nessuna
+        if g.struttura_id:
+            g.divisioni = query_all(
+                "SELECT * FROM divisioni WHERE attiva = 1 AND struttura_id = ? ORDER BY nome",
+                (g.struttura_id,)
+            )
+        else:
+            g.divisioni = []
+    elif g.user['ruolo'] == 'admin':
+        struttura_id = g.struttura_id
+        if struttura_id:
+            g.divisioni = query_all(
+                "SELECT * FROM divisioni WHERE attiva = 1 AND struttura_id = ? ORDER BY nome",
+                (struttura_id,)
+            )
+        else:
+            g.divisioni = query_all(
+                "SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome"
+            )
     else:
         g.divisioni = query_all(
             """SELECT d.* FROM divisioni d
@@ -130,7 +212,7 @@ def _load_user_from_session():
 
     if div_attiva_id and div_attiva_id in accessible_ids:
         g.divisione_attiva = next(d for d in g.divisioni if d['id'] == div_attiva_id)
-    elif div_attiva_id == 'tutte' and g.user['ruolo'] == 'admin':
+    elif div_attiva_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin'):
         g.divisione_attiva = {'id': 'tutte', 'nome': 'Tutte le divisioni', 'colore': '#6b7280'}
     elif g.divisioni:
         # Default to first accessible division
@@ -146,7 +228,14 @@ def _load_user_from_session():
                WHERE divisione_id = ? AND priorita IN ('scaduto', 'urgente', 'attenzione')""",
             (g.divisione_attiva['id'],)
         )
-    elif g.user['ruolo'] == 'admin':
+    elif g.user['ruolo'] in ('admin', 'superadmin') and g.struttura_id:
+        result = query_one(
+            """SELECT COUNT(*) as cnt FROM prossime_scadenze ps
+               JOIN apparecchi a ON a.id = ps.apparecchio_id
+               WHERE a.struttura_id = ? AND ps.priorita IN ('scaduto', 'urgente', 'attenzione')""",
+            (g.struttura_id,)
+        )
+    elif g.user['ruolo'] in ('admin', 'superadmin'):
         result = query_one(
             """SELECT COUNT(*) as cnt FROM prossime_scadenze
                WHERE priorita IN ('scaduto', 'urgente', 'attenzione')"""
@@ -191,6 +280,23 @@ def login():
         flash('Inserisci email e password.', 'danger')
         return render_template('login.html', email=email)
 
+    # Rate limiting
+    ip = request.remote_addr
+    blocco_limite = (datetime.now() - timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')
+    tentativi = query_one(
+        """SELECT COUNT(*) as cnt FROM login_attempts
+           WHERE ip_address = ? AND esito = 'fallito'
+             AND created_at > ?""",
+        (ip, blocco_limite)
+    )
+    if tentativi and tentativi['cnt'] >= 5:
+        execute(
+            "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'bloccato')",
+            (ip, email)
+        )
+        flash('Troppi tentativi falliti. Riprova tra 15 minuti.', 'danger')
+        return render_template('login.html', email=email), 429
+
     # Find user
     user = query_one(
         "SELECT * FROM utenti WHERE email = ? AND attivo = 1",
@@ -198,6 +304,10 @@ def login():
     )
 
     if not user or not check_password_hash(user['password_hash'], password):
+        execute(
+            "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'fallito')",
+            (ip, email)
+        )
         flash('Credenziali non valide.', 'danger')
         return render_template('login.html', email=email)
 
@@ -228,8 +338,18 @@ def login():
                  f"Login da {request.remote_addr}", request.remote_addr)
 
     # Notifica aggiornamento versione al primo admin che logga
-    if user['ruolo'] == 'admin':
+    if user['ruolo'] in ('admin', 'superadmin'):
         _check_version_notice()
+
+    # Clear rate limit records on successful login
+    execute(
+        "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'riuscito')",
+        (ip, email)
+    )
+    execute(
+        "DELETE FROM login_attempts WHERE ip_address = ? OR email = ?",
+        (ip, email)
+    )
 
     # Redirect based on primo_accesso
     if user['primo_accesso']:
@@ -254,6 +374,27 @@ def logout():
     session.clear()
     flash('Logout effettuato.', 'info')
     return redirect(url_for('auth.login'))
+
+
+@auth_bp.route('/logout-ovunque', methods=['POST'])
+@login_required
+def logout_ovunque():
+    """Revoca tutte le sessioni dell'utente corrente (o di un utente specifico per admin)."""
+    target_id = request.form.get('utente_id', type=int) or g.user['id']
+    if target_id != g.user['id'] and g.user['ruolo'] not in ('admin', 'superadmin'):
+        flash('Non autorizzato.', 'danger')
+        return redirect(url_for('index'))
+    token_corrente = session.get('token')
+    if target_id == g.user['id']:
+        execute(
+            "DELETE FROM sessioni WHERE utente_id = ? AND token != ?",
+            (target_id, token_corrente)
+        )
+        flash('Tutte le altre sessioni sono state revocate.', 'success')
+    else:
+        execute("DELETE FROM sessioni WHERE utente_id = ?", (target_id,))
+        flash('Sessioni revocate.', 'success')
+    return redirect(request.referrer or url_for('index'))
 
 
 @auth_bp.route('/cambio-password', methods=['GET', 'POST'])
@@ -316,7 +457,7 @@ def cambio_password():
 @login_required
 def cambia_divisione(divisione_id):
     """Switch the active division."""
-    if divisione_id == 'tutte' and g.user['ruolo'] == 'admin':
+    if divisione_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin'):
         session['divisione_attiva_id'] = 'tutte'
     else:
         try:
@@ -329,3 +470,26 @@ def cambia_divisione(divisione_id):
 
     # Redirect back to referrer or dashboard
     return redirect(request.referrer or url_for('index'))
+
+
+@auth_bp.route('/impersona/<int:struttura_id>')
+@superadmin_required
+def impersona_struttura(struttura_id):
+    """Superadmin entra nel contesto di una struttura specifica."""
+    struttura = query_one(
+        "SELECT id, nome FROM strutture WHERE id = ? AND attiva = 1", (struttura_id,)
+    )
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+    session['struttura_impersonata_id'] = struttura_id
+    flash(f'Stai operando come: {struttura["nome"]}', 'info')
+    return redirect(url_for('index'))
+
+
+@auth_bp.route('/esci-impersonazione')
+@login_required
+def esci_impersonazione():
+    """Superadmin torna alla vista globale."""
+    session.pop('struttura_impersonata_id', None)
+    return redirect(url_for('strutture.index'))
