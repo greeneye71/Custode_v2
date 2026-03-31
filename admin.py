@@ -6,6 +6,7 @@ All routes require admin role.
 
 import json
 import os
+from datetime import datetime, timedelta
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
@@ -13,7 +14,7 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash
 
-from auth import admin_required
+from auth import admin_required, superadmin_required
 from models import query_one, query_all, execute, log_attivita
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -896,3 +897,67 @@ def log_attivita_view():
     return render_template('admin/log_attivita.html',
                            logs=logs, filtri=filtri, pagination=pagination,
                            entita_list=entita_list)
+
+
+# ============================================================================
+# SUPERADMIN DASHBOARD
+# ============================================================================
+
+@admin_bp.route('/superadmin/dashboard')
+@superadmin_required
+def superadmin_dashboard():
+    """Dashboard aggregata cross-struttura per il superadmin."""
+    strutture = query_all("""
+        SELECT s.*,
+               COUNT(DISTINCT a.id) as tot_apparecchi,
+               SUM(CASE WHEN ps.priorita IN ('scaduto','urgente') THEN 1 ELSE 0 END) as scadenze_critiche
+        FROM strutture s
+        LEFT JOIN apparecchi a ON a.struttura_id = s.id AND a.stato != 'dismesso'
+        LEFT JOIN prossime_scadenze ps ON ps.apparecchio_id = a.id
+        WHERE s.attiva = 1
+        GROUP BY s.id
+        ORDER BY scadenze_critiche DESC, s.nome
+    """)
+    totali = query_one("""
+        SELECT COUNT(DISTINCT a.id) as tot_apparecchi,
+               SUM(CASE WHEN a.stato='funzionante' THEN 1 ELSE 0 END) as funzionanti,
+               SUM(CASE WHEN a.stato='in_manutenzione' THEN 1 ELSE 0 END) as in_manutenzione,
+               SUM(CASE WHEN a.stato='da_sostituire' THEN 1 ELSE 0 END) as da_sostituire
+        FROM apparecchi a WHERE a.stato != 'dismesso'
+    """)
+    return render_template('admin/superadmin_dashboard.html',
+                           strutture=strutture, totali=totali)
+
+
+# ============================================================================
+# SICUREZZA — Rate limiting / IP bloccati
+# ============================================================================
+
+@admin_bp.route('/sicurezza')
+@admin_required
+def sicurezza():
+    """Visualizza e sblocca IP/utenti bloccati dal rate limiting."""
+    limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+    ip_bloccati = query_all("""
+        SELECT ip_address, email, COUNT(*) as tentativi, MAX(created_at) as ultimo
+        FROM login_attempts
+        WHERE esito = 'fallito' AND created_at > ?
+        GROUP BY ip_address
+        HAVING COUNT(*) > 5
+        ORDER BY ultimo DESC
+    """, (limite,))
+    return render_template('admin/sicurezza.html', ip_bloccati=ip_bloccati)
+
+
+@admin_bp.route('/sicurezza/sblocca', methods=['POST'])
+@admin_required
+def sblocca_ip():
+    """Rimuove i tentativi falliti per un IP specifico."""
+    ip = request.form.get('ip_address', '').strip()
+    if ip:
+        execute("DELETE FROM login_attempts WHERE ip_address = ?", (ip,))
+        log_attivita(g.user['id'], 'sblocca_ip', 'login_attempts', None,
+                     f'IP {ip} sbloccato', ip_address=request.remote_addr,
+                     struttura_id=getattr(g, 'struttura_id', None))
+        flash(f'IP {ip} sbloccato.', 'success')
+    return redirect(url_for('admin.sicurezza'))

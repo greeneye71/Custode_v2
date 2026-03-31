@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Dashboard Superadmin{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-globe2 me-2"></i>Dashboard Superadmin</h2>
+</div>
+
+{# ── Riepilogo globale ── #}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-primary">{{ totali.tot_apparecchi or 0 }}</div>
+        <div class="text-muted small">Totale apparecchi</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-success">{{ totali.funzionanti or 0 }}</div>
+        <div class="text-muted small">Funzionanti</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-warning">{{ totali.in_manutenzione or 0 }}</div>
+        <div class="text-muted small">In manutenzione</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body">
+        <div class="fs-1 fw-bold text-danger">{{ totali.da_sostituire or 0 }}</div>
+        <div class="text-muted small">Da sostituire</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Tabella strutture ── #}
+<div class="card shadow-sm">
+  <div class="card-header">
+    <h5 class="mb-0"><i class="bi bi-building me-2"></i>Strutture attive</h5>
+  </div>
+  {% if strutture %}
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Nome</th>
+          <th class="text-center">Apparecchi</th>
+          <th class="text-center">Scadenze critiche</th>
+          <th class="text-end">Azioni</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for s in strutture %}
+      <tr>
+        <td>
+          <span class="fw-semibold">{{ s.nome }}</span>
+          {% if s.codice %}<span class="text-muted small ms-2">{{ s.codice }}</span>{% endif %}
+        </td>
+        <td class="text-center">{{ s.tot_apparecchi or 0 }}</td>
+        <td class="text-center">
+          {% if s.scadenze_critiche and s.scadenze_critiche > 0 %}
+            <span class="badge bg-danger">{{ s.scadenze_critiche }}</span>
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td class="text-end">
+          <a href="{{ url_for('auth.impersona_struttura', struttura_id=s.id) }}"
+             class="btn btn-sm btn-outline-primary me-1">
+            <i class="bi bi-box-arrow-in-right me-1"></i>Entra
+          </a>
+          <a href="{{ url_for('strutture.modifica', id=s.id) }}"
+             class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-pencil me-1"></i>Gestisci
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <div class="alert alert-info mb-0">
+      <i class="bi bi-info-circle me-2"></i>Nessuna struttura attiva trovata.
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

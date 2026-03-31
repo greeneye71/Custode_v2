@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Sicurezza{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-shield-lock me-2"></i>Sicurezza — IP bloccati</h2>
+</div>
+{% if ip_bloccati %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>IP</th>
+          <th>Email</th>
+          <th class="text-center">Tentativi</th>
+          <th>Ultimo tentativo</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for ip in ip_bloccati %}
+      <tr>
+        <td><code>{{ ip.ip_address }}</code></td>
+        <td>{{ ip.email or '—' }}</td>
+        <td class="text-center"><span class="badge bg-danger">{{ ip.tentativi }}</span></td>
+        <td>{{ ip.ultimo }}</td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('admin.sblocca_ip') }}">
+            <input type="hidden" name="ip_address" value="{{ ip.ip_address }}">
+            <button type="submit" class="btn btn-sm btn-warning">
+              <i class="bi bi-unlock me-1"></i>Sblocca
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-success">
+  <i class="bi bi-check-circle me-2"></i>Nessun IP bloccato al momento.
+</div>
+{% endif %}
+{% endblock %}
