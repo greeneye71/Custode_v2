@@ -333,10 +333,53 @@ ORDER BY prossima_scadenza ASC""",
         logger.debug(f"Schema DB versione {schema_ver}")
 
 
-def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None, ip_address=None):
+def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None,
+                 ip_address=None, struttura_id=None):
     """Log an activity to the log_attivita table."""
     execute(
-        """INSERT INTO log_attivita (utente_id, azione, entita, entita_id, dettagli, ip_address)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (utente_id, azione, entita, entita_id, dettagli, ip_address)
+        """INSERT INTO log_attivita
+               (utente_id, azione, entita, entita_id, dettagli, ip_address, struttura_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (utente_id, azione, entita, entita_id, dettagli, ip_address, struttura_id)
     )
+
+
+# ---------------------------------------------------------------------------
+# Strutture config helpers
+# ---------------------------------------------------------------------------
+
+def get_struttura_config(struttura_id, chiave, default=None):
+    """Legge un valore di configurazione per-struttura.
+    Se non presente, restituisce il valore globale da APP_CONFIG o il default.
+    """
+    row = query_one(
+        "SELECT valore FROM strutture_config WHERE struttura_id = ? AND chiave = ?",
+        (struttura_id, chiave)
+    )
+    if row and row['valore'] is not None:
+        return row['valore']
+    # Fallback al config globale
+    try:
+        from flask import current_app
+        return current_app.config['APP_CONFIG'].get(chiave, default)
+    except RuntimeError:
+        return default
+
+
+def set_struttura_config(struttura_id, chiave, valore):
+    """Inserisce o aggiorna un valore di configurazione per-struttura."""
+    execute(
+        """INSERT INTO strutture_config (struttura_id, chiave, valore)
+           VALUES (?, ?, ?)
+           ON CONFLICT(struttura_id, chiave) DO UPDATE SET valore = excluded.valore""",
+        (struttura_id, chiave, valore)
+    )
+
+
+def get_struttura_config_all(struttura_id):
+    """Restituisce tutti i valori di configurazione per-struttura come dict."""
+    rows = query_all(
+        "SELECT chiave, valore FROM strutture_config WHERE struttura_id = ?",
+        (struttura_id,)
+    )
+    return {r['chiave']: r['valore'] for r in rows}
