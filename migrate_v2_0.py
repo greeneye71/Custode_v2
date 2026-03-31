@@ -7,6 +7,7 @@ Eseguire PRIMA di avviare l'app v2.0:
     python migrate_v2_0.py
 """
 
+import re
 import sqlite3
 import json
 import os
@@ -197,7 +198,9 @@ def migrate(db, config):
     app_sql = db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='apparecchi'"
     ).fetchone()[0]
-    if 'struttura_id, modello, matricola' not in app_sql:
+    app_sql_normalized = re.sub(r'\s+', ' ', app_sql)
+    if ('struttura_id, modello, matricola' not in app_sql_normalized
+            and 'struttura_id,modello,matricola' not in app_sql_normalized):
         logger.info("  Ricreazione tabella apparecchi per aggiornare UNIQUE...")
         _recreate_apparecchi(db, struttura_id)
     else:
@@ -375,8 +378,12 @@ def _recreate_apparecchi(db, struttura_id):
     for col_new, col_old_expr, fallback in col_mapping:
         if col_old_expr in cols_old:
             select_exprs.append(col_old_expr)
-        else:
+        elif fallback is not None:
             select_exprs.append(f"{fallback} AS {col_new}")
+        else:
+            # Colonna marcata come "sempre presente" ma assente — usa NULL e logga warning
+            logger.warning(f"  Colonna attesa '{col_new}' non trovata in _apparecchi_old, uso NULL")
+            select_exprs.append(f"NULL AS {col_new}")
 
     select_clause = ", ".join(select_exprs)
     db.execute(f"INSERT INTO apparecchi SELECT {select_clause} FROM _apparecchi_old")
