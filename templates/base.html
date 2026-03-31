@@ -22,7 +22,7 @@
 </head>
 <body class="d-flex flex-column min-vh-100">
 
-    {% if g_is_superadmin_impersonating %}
+    {% if g_is_superadmin_impersonating and g_struttura %}
     <div class="alert alert-info alert-sm py-1 px-3 mb-0 rounded-0 border-0 d-flex align-items-center">
       <i class="bi bi-shield-lock me-2"></i>
       <small>Superadmin › <strong>{{ g_struttura.nome }}</strong></small>

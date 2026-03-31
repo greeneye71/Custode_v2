@@ -22,7 +22,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 from flask import Flask, g, session, redirect, url_for, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from models import close_db, init_db, get_db
+from models import close_db, init_db, get_db, query_all
 from auth import login_required as auth_login_required
 
 # ---------------------------------------------------------------------------
@@ -245,8 +245,11 @@ def create_app():
         # Lista strutture per il switcher (solo superadmin)
         strutture_list = []
         if getattr(g, 'user', None) and g.user.get('ruolo') == 'superadmin':
-            from models import query_all as _qall
-            strutture_list = _qall("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
+            if not hasattr(g, '_strutture_list_cache'):
+                g._strutture_list_cache = query_all(
+                    "SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome"
+                )
+            strutture_list = g._strutture_list_cache
 
         ctx = {
             'app_config': config,
