@@ -29,7 +29,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "1.4.3"
+APP_VERSION = "2.0.0"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -81,6 +81,7 @@ LOCAL_CONFIG_KEYS = frozenset({
     'imap_enabled', 'imap_account', 'imap_password', 'imap_server', 'imap_port', 'imap_ssl',
     'alert_email_enabled', 'alert_email_to',
     'smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_use_tls',
+    'single_struttura',
 })
 
 
@@ -231,12 +232,33 @@ def create_app():
     @app.context_processor
     def inject_globals():
         """Make config, user, and division data available in all templates."""
+        single_struttura = config.get('single_struttura', False)
+
+        struttura = getattr(g, 'struttura', None)
+        struttura_modalita = getattr(g, 'struttura_modalita', 'standard')
+        is_superadmin_impersonating = getattr(g, 'is_superadmin_impersonating', False)
+
+        # In modalità single_struttura la modalità è sempre ingegneria_clinica
+        if single_struttura:
+            struttura_modalita = 'ingegneria_clinica'
+
+        # Lista strutture per il switcher (solo superadmin)
+        strutture_list = []
+        if getattr(g, 'user', None) and g.user.get('ruolo') == 'superadmin':
+            from models import query_all as _qall
+            strutture_list = _qall("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
+
         ctx = {
             'app_config': config,
             'app_name': config.get('app_name', 'MedInventory'),
             'organization': config.get('organization', 'Studio Bergamaschi'),
             'structure_name': config.get('structure_name', ''),
             'app_version': APP_VERSION,
+            'single_struttura': single_struttura,
+            'g_struttura': struttura,
+            'g_struttura_modalita': struttura_modalita,
+            'g_is_superadmin_impersonating': is_superadmin_impersonating,
+            'strutture_list': strutture_list,
         }
 
         # Add user-related context if authenticated
@@ -271,6 +293,9 @@ def create_app():
 
     from verifiche import verifiche_bp
     app.register_blueprint(verifiche_bp)
+
+    from strutture_bp import strutture_bp
+    app.register_blueprint(strutture_bp)
 
     # ---------------------------------------------------------------------------
     # Root route -> Dashboard

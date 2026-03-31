@@ -22,6 +22,16 @@
 </head>
 <body class="d-flex flex-column min-vh-100">
 
+    {% if g_is_superadmin_impersonating %}
+    <div class="alert alert-info alert-sm py-1 px-3 mb-0 rounded-0 border-0 d-flex align-items-center">
+      <i class="bi bi-shield-lock me-2"></i>
+      <small>Superadmin › <strong>{{ g_struttura.nome }}</strong></small>
+      <a href="{{ url_for('auth.esci_impersonazione') }}" class="btn btn-sm btn-outline-dark ms-3 py-0">
+        Esci
+      </a>
+    </div>
+    {% endif %}
+
     {# ================================================================== #}
     {# NAVBAR                                                              #}
     {# ================================================================== #}
@@ -81,6 +91,11 @@
 
                 {# Right side: Division selector + User menu #}
                 <ul class="navbar-nav">
+                    {# Struttura switcher (solo superadmin, modalità multi-struttura) #}
+                    {% if current_user and current_user.ruolo == 'superadmin' and not single_struttura %}
+                      {% include 'partials/struttura_switcher.html' %}
+                    {% endif %}
+
                     {# Division selector #}
                     {% if divisioni_accessibili is defined and divisioni_accessibili|length > 0 %}
                     <li class="nav-item dropdown me-2">
@@ -227,10 +242,18 @@
                     </li>
 
                     {# Admin section #}
-                    {% if current_user is defined and current_user.ruolo == 'admin' %}
+                    {% if current_user is defined and current_user.ruolo in ('admin', 'superadmin') %}
                     <li class="nav-item mt-3">
                         <small class="nav-section-title">AMMINISTRAZIONE</small>
                     </li>
+                    {% if current_user.ruolo == 'superadmin' and not single_struttura %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path.startswith('/strutture') %}active{% endif %}"
+                           href="{{ url_for('strutture.index') }}">
+                            <i class="bi bi-building me-1"></i>Strutture
+                        </a>
+                    </li>
+                    {% endif %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.utent' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.utenti') }}">

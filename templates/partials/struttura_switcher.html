@@ -1,0 +1,23 @@
+<li class="nav-item dropdown">
+  <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+    <i class="bi bi-building me-1"></i>
+    {% if g_struttura %}{{ g_struttura.nome }}{% else %}Vista globale{% endif %}
+  </a>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li>
+      <a class="dropdown-item {% if not g_struttura %}active{% endif %}"
+         href="{{ url_for('auth.esci_impersonazione') }}">
+        <i class="bi bi-globe me-2"></i>Vista globale
+      </a>
+    </li>
+    <li><hr class="dropdown-divider"></li>
+    {% for s in strutture_list %}
+    <li>
+      <a class="dropdown-item {% if g_struttura and g_struttura.id == s.id %}active{% endif %}"
+         href="{{ url_for('auth.impersona_struttura', struttura_id=s.id) }}">
+        {{ s.nome }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</li>
