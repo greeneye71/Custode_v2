@@ -68,6 +68,12 @@ def run_safe(db, sql, desc=""):
 
 
 def migrate(db, config):
+    # Fast-path: se il DB è già alla v2.0, non fare nulla
+    current_version = db.execute("PRAGMA user_version").fetchone()[0]
+    if current_version >= 200:
+        logger.info("Database già alla versione 200 — nessuna migrazione necessaria.")
+        return
+
     db.execute("PRAGMA foreign_keys = OFF")
     db.execute("PRAGMA legacy_alter_table = ON")
 
@@ -231,7 +237,11 @@ def migrate(db, config):
     logger.info("7. File sentinella versione...")
     data_dir = os.path.join(BASE_DIR, 'data')
     notice_path = os.path.join(data_dir, '.version_notice')
-    if os.path.exists(data_dir) and not os.path.exists(notice_path):
+    if not os.path.exists(data_dir):
+        logger.warning("  Directory data/ non trovata — file sentinella non creato. Creala prima di avviare l'app.")
+    elif os.path.exists(notice_path):
+        logger.info("  File sentinella già presente.")
+    else:
         with open(notice_path, 'w', encoding='utf-8') as f:
             json.dump({
                 'old_version': '1.x',
@@ -239,8 +249,6 @@ def migrate(db, config):
                 'upgraded_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
             }, f)
         logger.info("  File sentinella creato.")
-    else:
-        logger.info("  File sentinella già presente o directory data/ assente.")
 
     # ----------------------------------------------------------------
     # 8. PRAGMA user_version → 200
@@ -424,13 +432,12 @@ def main():
         logger.error(f"Ripristino dal backup: {backup_path}")
         shutil.copy2(backup_path, db_path)
         raise
-    finally:
+    else:
         db.close()
-
-    logger.info("=" * 50)
-    logger.info("Migrazione v2.0 completata con successo.")
-    logger.info(f"Backup pre-migrazione: {backup_path}")
-    logger.info("Avviare l'applicazione con: python app.py")
+        logger.info("=" * 50)
+        logger.info("Migrazione v2.0 completata con successo.")
+        logger.info(f"Backup pre-migrazione: {backup_path}")
+        logger.info("Avviare l'applicazione con: python app.py")
 
 
 if __name__ == '__main__':
