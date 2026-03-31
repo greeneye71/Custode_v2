@@ -953,11 +953,18 @@ def sicurezza():
 @admin_required
 def sblocca_ip():
     """Rimuove i tentativi falliti per un IP specifico."""
+    import ipaddress
     ip = request.form.get('ip_address', '').strip()
-    if ip:
-        execute("DELETE FROM login_attempts WHERE ip_address = ?", (ip,))
-        log_attivita(g.user['id'], 'sblocca_ip', 'login_attempts', None,
-                     f'IP {ip} sbloccato', ip_address=request.remote_addr,
-                     struttura_id=getattr(g, 'struttura_id', None))
-        flash(f'IP {ip} sbloccato.', 'success')
+    if not ip:
+        return redirect(url_for('admin.sicurezza'))
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        flash('Indirizzo IP non valido.', 'danger')
+        return redirect(url_for('admin.sicurezza'))
+    execute("DELETE FROM login_attempts WHERE ip_address = ?", (ip,))
+    log_attivita(g.user['id'], 'sblocca_ip', 'login_attempts', None,
+                 f'IP {ip} sbloccato', ip_address=request.remote_addr,
+                 struttura_id=getattr(g, 'struttura_id', None))
+    flash(f'IP {ip} sbloccato.', 'success')
     return redirect(url_for('admin.sicurezza'))
