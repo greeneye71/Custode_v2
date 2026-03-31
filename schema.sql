@@ -3,6 +3,75 @@ PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 
 -- ============================================
+-- STRUTTURE
+-- ============================================
+CREATE TABLE IF NOT EXISTS strutture (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome            TEXT NOT NULL,
+  codice          TEXT UNIQUE NOT NULL,
+  descrizione     TEXT,
+  indirizzo       TEXT,
+  email_notifiche TEXT,
+  modalita        TEXT NOT NULL DEFAULT 'standard'
+                  CHECK(modalita IN ('standard', 'ingegneria_clinica')),
+  attiva          INTEGER DEFAULT 1,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_strutture_codice ON strutture(codice);
+CREATE INDEX IF NOT EXISTS idx_strutture_attiva ON strutture(attiva);
+
+-- ============================================
+-- STRUTTURE_CONFIG (configurazione per-struttura)
+-- ============================================
+CREATE TABLE IF NOT EXISTS strutture_config (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  struttura_id INTEGER NOT NULL,
+  chiave       TEXT NOT NULL,
+  valore       TEXT,
+  UNIQUE(struttura_id, chiave),
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_strutture_config_struttura ON strutture_config(struttura_id);
+
+-- ============================================
+-- API_TOKENS
+-- ============================================
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  struttura_id    INTEGER NOT NULL,
+  nome            TEXT NOT NULL,
+  token_hash      TEXT UNIQUE NOT NULL,
+  scopes          TEXT DEFAULT 'read',
+  ultimo_utilizzo DATETIME,
+  scadenza        DATE,
+  attivo          INTEGER DEFAULT 1,
+  created_by      INTEGER,
+  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES utenti(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_struttura ON api_tokens(struttura_id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+
+-- ============================================
+-- LOGIN_ATTEMPTS (rate limiting)
+-- ============================================
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ip_address TEXT NOT NULL,
+  email      TEXT,
+  esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    ON login_attempts(ip_address, created_at);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email, created_at);
+
+-- ============================================
 -- DIVISIONI
 -- ============================================
 CREATE TABLE IF NOT EXISTS divisioni (
@@ -13,7 +82,9 @@ CREATE TABLE IF NOT EXISTS divisioni (
   descrizione TEXT,
   attiva INTEGER DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  struttura_id INTEGER NOT NULL DEFAULT 1,
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_divisioni_codice ON divisioni(codice);
@@ -28,13 +99,15 @@ CREATE TABLE IF NOT EXISTS utenti (
   password_hash TEXT NOT NULL,
   nome TEXT NOT NULL,
   cognome TEXT NOT NULL,
-  ruolo TEXT NOT NULL CHECK(ruolo IN ('admin', 'utente')),
+  ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin', 'admin', 'utente')),
   divisione_default_id INTEGER,
   attivo INTEGER DEFAULT 1,
   primo_accesso INTEGER DEFAULT 1,
   ultimo_accesso DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  struttura_id INTEGER,   -- NULL per superadmin
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id),
   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id)
 );
 
@@ -107,7 +180,9 @@ CREATE TABLE IF NOT EXISTS apparecchi (
   updated_by INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(modello, matricola),
+  struttura_id INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(struttura_id, modello, matricola),
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id),
   FOREIGN KEY (divisione_id) REFERENCES divisioni(id),
   FOREIGN KEY (created_by) REFERENCES utenti(id),
   FOREIGN KEY (updated_by) REFERENCES utenti(id)
@@ -286,7 +361,9 @@ CREATE TABLE IF NOT EXISTS log_attivita (
   entita_id INTEGER,
   dettagli TEXT,
   ip_address TEXT,
+  struttura_id INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id),
   FOREIGN KEY (utente_id) REFERENCES utenti(id)
 );
 
