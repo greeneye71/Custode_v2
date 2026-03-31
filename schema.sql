@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS strutture_config (
 
 CREATE INDEX IF NOT EXISTS idx_strutture_config_struttura ON strutture_config(struttura_id);
 
+-- Chiavi valide: ai_provider, anthropic_api_key, ai_import_model,
+-- ai_email_model, ai_local_base_url, ai_local_model,
+-- smtp_host, smtp_port, smtp_user, smtp_password_encrypted, smtp_from,
+-- smtp_use_tls, report_frequenza, report_schedulato_attivo
+
 -- ============================================
 -- API_TOKENS
 -- ============================================
@@ -48,6 +53,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   ultimo_utilizzo DATETIME,
   scadenza        DATE,
   attivo          INTEGER DEFAULT 1,
+  -- FK verso utenti (definita più avanti nel file - SQLite valida FK solo a runtime DML)
   created_by      INTEGER,
   created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE,
@@ -76,14 +82,16 @@ CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email, cre
 -- ============================================
 CREATE TABLE IF NOT EXISTS divisioni (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  nome TEXT UNIQUE NOT NULL,
-  codice TEXT UNIQUE NOT NULL,
+  nome TEXT NOT NULL,
+  codice TEXT NOT NULL,
   colore TEXT DEFAULT '#0ea5e9',
   descrizione TEXT,
   attiva INTEGER DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   struttura_id INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(struttura_id, nome),
+  UNIQUE(struttura_id, codice),
   FOREIGN KEY (struttura_id) REFERENCES strutture(id)
 );
 
@@ -370,6 +378,8 @@ CREATE TABLE IF NOT EXISTS log_attivita (
 CREATE INDEX IF NOT EXISTS idx_log_utente ON log_attivita(utente_id);
 CREATE INDEX IF NOT EXISTS idx_log_entita ON log_attivita(entita, entita_id);
 CREATE INDEX IF NOT EXISTS idx_log_data ON log_attivita(created_at);
+CREATE INDEX IF NOT EXISTS idx_log_struttura ON log_attivita(struttura_id);
+CREATE INDEX IF NOT EXISTS idx_apparecchi_struttura ON apparecchi(struttura_id);
 
 -- ============================================
 -- VISTA: prossime_scadenze (manutenzioni + verifiche)
