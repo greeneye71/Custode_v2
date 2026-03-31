@@ -96,8 +96,8 @@ def admin_struttura_required(f):
         is_admin = g.user['ruolo'] in ('admin',)
         is_superadmin_impersonating = getattr(g, 'is_superadmin_impersonating', False)
         if not (is_admin or is_superadmin_impersonating):
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('index'))
+            flash('Per accedere a questa funzione, entra prima nel contesto di una struttura.', 'warning')
+            return redirect(url_for('strutture.index') if 'strutture' in current_app.blueprints else url_for('index'))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -173,7 +173,7 @@ def _load_user_from_session():
     g.struttura = struttura
     g.struttura_id = struttura['id'] if struttura else None
     g.struttura_nome = struttura['nome'] if struttura else None
-    g.struttura_modalita = struttura['modalita'] if struttura else 'ingegneria_clinica'
+    g.struttura_modalita = struttura['modalita'] if struttura else 'standard'
     g.is_superadmin_impersonating = (
         g.user['ruolo'] == 'superadmin' and struttura is not None
     )
@@ -246,11 +246,9 @@ def _load_user_from_session():
         ids = [d['id'] for d in g.divisioni]
         if ids:
             ph = ','.join('?' * len(ids))
-            result = query_one(
-                f"""SELECT COUNT(*) as cnt FROM prossime_scadenze
-                   WHERE divisione_id IN ({ph}) AND priorita IN ('scaduto', 'urgente', 'attenzione')""",
-                ids
-            )
+            sql = ("SELECT COUNT(*) as cnt FROM prossime_scadenze"
+                   " WHERE divisione_id IN (" + ph + ") AND priorita IN ('scaduto','urgente','attenzione')")
+            result = query_one(sql, tuple(ids))
         else:
             result = None
     g.scadenze_alert_count = result['cnt'] if result else 0
@@ -284,14 +282,14 @@ def login():
 
     # Rate limiting
     ip = request.remote_addr
-    blocco_limite = (datetime.now() - timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S')
+    blocco_limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
     tentativi = query_one(
         """SELECT COUNT(*) as cnt FROM login_attempts
            WHERE ip_address = ? AND esito = 'fallito'
              AND created_at > ?""",
         (ip, blocco_limite)
     )
-    if tentativi and tentativi['cnt'] >= 5:
+    if tentativi and tentativi['cnt'] > 5:
         execute(
             "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'bloccato')",
             (ip, email)
@@ -388,8 +386,9 @@ def logout_ovunque():
     )
     log_attivita(g.user['id'], 'logout_ovunque', 'struttura', g.struttura_id,
                  None, request.remote_addr, struttura_id=g.struttura_id)
-    flash('Tutte le sessioni della struttura sono state revocate.', 'success')
-    return redirect(url_for('index'))
+    session.clear()
+    flash('Tutte le sessioni della struttura sono state revocate, inclusa la tua.', 'info')
+    return redirect(url_for('auth.login'))
 
 
 @auth_bp.route('/cambio-password', methods=['GET', 'POST'])
@@ -463,8 +462,15 @@ def cambia_divisione(divisione_id):
         except (ValueError, TypeError):
             pass
 
-    # Redirect back to referrer or dashboard
-    return redirect(request.referrer or url_for('index'))
+    # Redirect back to referrer or dashboard (safe: validate same host)
+    ref = request.referrer
+    if ref:
+        from urllib.parse import urlparse
+        ref_host = urlparse(ref).netloc
+        own_host = urlparse(request.host_url).netloc
+        if ref_host != own_host:
+            ref = None
+    return redirect(ref or url_for('index'))
 
 
 @auth_bp.route('/impersona/<int:struttura_id>')
@@ -489,7 +495,7 @@ def impersona_struttura(struttura_id):
 
 
 @auth_bp.route('/esci-impersonazione')
-@login_required
+@superadmin_required
 def esci_impersonazione():
     """Superadmin torna alla vista globale."""
     session.pop('struttura_impersonata_id', None)
