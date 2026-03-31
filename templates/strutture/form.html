@@ -11,7 +11,7 @@
 
 <div class="row">
   <div class="col-lg-8">
-    <form method="POST">
+    <form method="POST" action="{{ url_for('strutture.modifica', struttura_id=struttura.get('id')) if struttura and struttura.get('id') else url_for('strutture.nuova') }}">
       <div class="card mb-4">
         <div class="card-header"><i class="bi bi-building me-1"></i> Dati struttura</div>
         <div class="card-body">

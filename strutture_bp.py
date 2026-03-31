@@ -2,11 +2,15 @@
 MedInventory - Gestione Strutture (superadmin)
 """
 
+import base64
+import hashlib
+
+from cryptography.fernet import Fernet
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, g
+    flash, g, current_app
 )
-from auth import superadmin_required, login_required
+from auth import superadmin_required
 from models import query_all, query_one, execute, log_attivita, \
     get_struttura_config_all, set_struttura_config
 
@@ -41,6 +45,8 @@ def nuova():
         indirizzo = request.form.get('indirizzo', '').strip()
         email_notifiche = request.form.get('email_notifiche', '').strip()
         modalita = request.form.get('modalita', 'standard')
+        if modalita not in ('standard', 'ingegneria_clinica'):
+            modalita = 'standard'
 
         if not nome or not codice:
             flash('Nome e codice sono obbligatori.', 'danger')
@@ -82,7 +88,13 @@ def modifica(struttura_id):
         indirizzo = request.form.get('indirizzo', '').strip()
         email_notifiche = request.form.get('email_notifiche', '').strip()
         modalita = request.form.get('modalita', 'standard')
+        if modalita not in ('standard', 'ingegneria_clinica'):
+            modalita = 'standard'
         attiva = 1 if request.form.get('attiva') else 0
+
+        if not nome or not codice:
+            flash('Nome e codice sono obbligatori.', 'danger')
+            return render_template('strutture/form.html', struttura=dict(struttura) | dict(request.form))
 
         try:
             execute(
@@ -119,8 +131,12 @@ def config(struttura_id):
     ]
 
     if request.method == 'POST':
+        CHECKBOX_KEYS = {'smtp_use_tls', 'report_schedulato_attivo'}
         for chiave in chiavi_visibili:
-            valore = request.form.get(chiave, '').strip()
+            if chiave in CHECKBOX_KEYS:
+                valore = '1' if request.form.get(chiave) else ''
+            else:
+                valore = request.form.get(chiave, '').strip()
             if valore:
                 set_struttura_config(struttura_id, chiave, valore)
             else:
@@ -130,9 +146,6 @@ def config(struttura_id):
                 )
         smtp_password = request.form.get('smtp_password', '').strip()
         if smtp_password:
-            from cryptography.fernet import Fernet
-            from flask import current_app
-            import base64, hashlib
             key = current_app.config['APP_CONFIG'].get('encryption_key', '')
             if key:
                 fernet_key = base64.urlsafe_b64encode(
