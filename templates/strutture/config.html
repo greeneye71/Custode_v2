@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Configurazione — {{ struttura.nome }} - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center">
+  <h2>
+    <i class="bi bi-gear me-2"></i>Configurazione — {{ struttura.nome }}
+  </h2>
+  <a href="{{ url_for('strutture.index') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i>Torna alle strutture
+  </a>
+</div>
+
+<form method="POST">
+  <div class="row g-4">
+
+    {# ------------------------------------------------------------------ #}
+    {# Sezione: Intelligenza Artificiale                                   #}
+    {# ------------------------------------------------------------------ #}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-robot me-1"></i> Intelligenza Artificiale
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-md-4">
+              <label class="form-label">Provider AI</label>
+              <select class="form-select" name="ai_provider">
+                <option value="" {% if not cfg.get('ai_provider') %}selected{% endif %}>— usa default globale —</option>
+                <option value="anthropic"        {% if cfg.get('ai_provider') == 'anthropic' %}selected{% endif %}>Anthropic Claude</option>
+                <option value="ollama"           {% if cfg.get('ai_provider') == 'ollama' %}selected{% endif %}>Ollama (locale)</option>
+                <option value="lmstudio"         {% if cfg.get('ai_provider') == 'lmstudio' %}selected{% endif %}>LM Studio (locale)</option>
+                <option value="openai_compatible" {% if cfg.get('ai_provider') == 'openai_compatible' %}selected{% endif %}>OpenAI-compatible</option>
+              </select>
+            </div>
+
+            <div class="col-md-8">
+              <label class="form-label">Anthropic API Key</label>
+              <input type="password" class="form-control" name="anthropic_api_key"
+                     value="{{ cfg.get('anthropic_api_key', '') }}"
+                     placeholder="sk-ant-… (lascia vuoto per usare il default globale)">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Modello import AI</label>
+              <input type="text" class="form-control" name="ai_import_model"
+                     value="{{ cfg.get('ai_import_model', '') }}"
+                     placeholder="Es. claude-sonnet-4-20250514">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Modello email AI</label>
+              <input type="text" class="form-control" name="ai_email_model"
+                     value="{{ cfg.get('ai_email_model', '') }}"
+                     placeholder="Es. claude-haiku-4-5-20251001">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">URL server AI locale</label>
+              <input type="text" class="form-control" name="ai_local_base_url"
+                     value="{{ cfg.get('ai_local_base_url', '') }}"
+                     placeholder="http://localhost:11434">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Modello AI locale</label>
+              <input type="text" class="form-control" name="ai_local_model"
+                     value="{{ cfg.get('ai_local_model', '') }}"
+                     placeholder="Es. llama3.2">
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ------------------------------------------------------------------ #}
+    {# Sezione: SMTP / Notifiche                                           #}
+    {# ------------------------------------------------------------------ #}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-envelope me-1"></i> SMTP / Notifiche
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-md-6">
+              <label class="form-label">Host SMTP</label>
+              <input type="text" class="form-control" name="smtp_host"
+                     value="{{ cfg.get('smtp_host', '') }}"
+                     placeholder="smtp.esempio.it">
+            </div>
+
+            <div class="col-md-2">
+              <label class="form-label">Porta SMTP</label>
+              <input type="number" class="form-control" name="smtp_port"
+                     value="{{ cfg.get('smtp_port', '') }}"
+                     placeholder="587">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Utente SMTP</label>
+              <input type="text" class="form-control" name="smtp_user"
+                     value="{{ cfg.get('smtp_user', '') }}"
+                     placeholder="utente@esempio.it">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Indirizzo mittente (From)</label>
+              <input type="email" class="form-control" name="smtp_from"
+                     value="{{ cfg.get('smtp_from', '') }}"
+                     placeholder="noreply@struttura.it">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Password SMTP</label>
+              <input type="password" class="form-control" name="smtp_password"
+                     placeholder="Lascia vuoto per non modificare">
+              <div class="form-text">La password viene salvata cifrata.</div>
+            </div>
+
+            <div class="col-12">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="smtp_use_tls"
+                       id="smtp_use_tls" value="1"
+                       {% if cfg.get('smtp_use_tls') in ('1', 'true', 'True') %}checked{% endif %}>
+                <label class="form-check-label" for="smtp_use_tls">Usa TLS</label>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ------------------------------------------------------------------ #}
+    {# Sezione: Report schedulati                                          #}
+    {# ------------------------------------------------------------------ #}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-calendar-check me-1"></i> Report schedulati
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-md-4">
+              <label class="form-label">Frequenza report</label>
+              <select class="form-select" name="report_frequenza">
+                <option value="" {% if not cfg.get('report_frequenza') %}selected{% endif %}>— usa default globale —</option>
+                <option value="giornaliero" {% if cfg.get('report_frequenza') == 'giornaliero' %}selected{% endif %}>Giornaliero</option>
+                <option value="settimanale" {% if cfg.get('report_frequenza') == 'settimanale' %}selected{% endif %}>Settimanale</option>
+                <option value="mensile"     {% if cfg.get('report_frequenza') == 'mensile' %}selected{% endif %}>Mensile</option>
+              </select>
+            </div>
+
+            <div class="col-md-8 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="report_schedulato_attivo"
+                       id="report_schedulato_attivo" value="1"
+                       {% if cfg.get('report_schedulato_attivo') in ('1', 'true', 'True') %}checked{% endif %}>
+                <label class="form-check-label" for="report_schedulato_attivo">
+                  Report schedulato attivo
+                </label>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ------------------------------------------------------------------ #}
+    {# Azioni                                                              #}
+    {# ------------------------------------------------------------------ #}
+    <div class="col-12">
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check-lg me-1"></i>Salva configurazione
+        </button>
+        <a href="{{ url_for('strutture.index') }}" class="btn btn-outline-secondary">Annulla</a>
+      </div>
+    </div>
+
+  </div>
+</form>
+{% endblock %}
