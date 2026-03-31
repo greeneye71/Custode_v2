@@ -194,7 +194,9 @@ def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
             text = extract_text_from_file(filepath, ext)
             is_scanned = not text or len(text.strip()) < 10
 
-            classify_model = config.get('ai_email_model', 'claude-haiku-4-5-20251001')
+            from ai_service import get_ai_config
+            ai_cfg = get_ai_config(struttura_id=getattr(g, 'struttura_id', None), config=config)
+            classify_model = ai_cfg['model_email']
             if is_scanned and ext == 'pdf':
                 if not is_anthropic_provider(config):
                     execute(
@@ -245,9 +247,10 @@ def _run_inventario(import_id, filepath, ext, text, is_scanned,
     """Analyze inventory document and populate import_preview. Runs in background thread."""
     from ai_service import (
         analyze_inventory_with_ai, analyze_inventory_from_pdf_document,
-        find_duplicates,
+        find_duplicates, get_ai_config,
     )
-    model = config.get('ai_import_model', 'claude-sonnet-4-20250514')
+    ai_cfg = get_ai_config(config=config)
+    model = ai_cfg['model_import']
 
     if is_scanned and ext == 'pdf':
         items, ai_response = analyze_inventory_from_pdf_document(
@@ -293,8 +296,10 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
     from ai_service import (
         parse_verbale_with_ai, parse_verbale_from_pdf_document,
         get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages,
+        get_ai_config,
     )
-    model = config.get('ai_import_model', 'claude-sonnet-4-20250514')
+    ai_cfg = get_ai_config(config=config)
+    model = ai_cfg['model_import']
     all_items = []
 
     if ext == 'pdf':
@@ -379,8 +384,10 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
     from ai_service import (
         analyze_verifiche_with_ai, analyze_verifiche_from_pdf_document,
         get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages,
+        get_ai_config,
     )
-    model = config.get('ai_import_model', 'claude-sonnet-4-20250514')
+    ai_cfg = get_ai_config(config=config)
+    model = ai_cfg['model_import']
     all_items = []
 
     if ext == 'pdf':

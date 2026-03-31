@@ -117,17 +117,34 @@ REGOLE:
 # Provider abstraction
 # ---------------------------------------------------------------------------
 
-def _get_ai_config(config=None):
-    """Get AI provider configuration. Returns dict with provider settings."""
+def _get_ai_config(config=None, struttura_id=None):
+    """Get AI provider configuration. Reads from struttura_config with fallback to global."""
     if config is None:
         from flask import current_app
         config = current_app.config.get('APP_CONFIG', {})
+
+    if struttura_id:
+        from models import get_struttura_config as _gsc
+        def _sc(key, default=''):
+            val = _gsc(struttura_id, key)
+            return val if val else config.get(key, default)
+    else:
+        def _sc(key, default=''):
+            return config.get(key, default)
+
     return {
-        'provider': config.get('ai_provider', 'anthropic'),
-        'api_key': config.get('anthropic_api_key', ''),
-        'local_base_url': config.get('ai_local_base_url', 'http://localhost:11434'),
-        'local_model': config.get('ai_local_model', ''),
+        'provider':       _sc('ai_provider', 'anthropic'),
+        'api_key':        _sc('anthropic_api_key', ''),
+        'model_import':   _sc('ai_import_model', 'claude-sonnet-4-20250514'),
+        'model_email':    _sc('ai_email_model', 'claude-haiku-4-5-20251001'),
+        'local_base_url': _sc('ai_local_base_url', 'http://localhost:11434'),
+        'local_model':    _sc('ai_local_model', ''),
     }
+
+
+def get_ai_config(struttura_id=None, config=None):
+    """Public alias for _get_ai_config — reads per-struttura config with global fallback."""
+    return _get_ai_config(config=config, struttura_id=struttura_id)
 
 
 def _call_anthropic(system_prompt, user_message, api_key, model, max_tokens=4096):
@@ -200,9 +217,9 @@ def _call_openai_compatible(system_prompt, user_message, base_url, model, max_to
     return data["choices"][0]["message"]["content"].strip()
 
 
-def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, config=None):
+def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, config=None, struttura_id=None):
     """Unified AI call that routes to the correct provider."""
-    ai_cfg = _get_ai_config(config)
+    ai_cfg = _get_ai_config(config, struttura_id)
     provider = ai_cfg['provider']
 
     if provider == 'anthropic':
@@ -214,9 +231,9 @@ def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, confi
         return _call_openai_compatible(system_prompt, user_message, base_url, local_model, max_tokens)
 
 
-def _call_ai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096, config=None):
+def _call_ai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096, config=None, struttura_id=None):
     """Call AI with a PDF document. Falls back to text extraction for non-Anthropic providers."""
-    ai_cfg = _get_ai_config(config)
+    ai_cfg = _get_ai_config(config, struttura_id)
     provider = ai_cfg['provider']
 
     if provider == 'anthropic':
@@ -230,18 +247,18 @@ def _call_ai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_to
                 "l'analisi diretta di PDF. Utilizzare Anthropic Claude per i PDF scansionati."
             )
         combined = f"{user_text}\n\n{pdf_text[:15000]}"
-        return _call_ai(system_prompt, combined, api_key, model, max_tokens, config)
+        return _call_ai(system_prompt, combined, api_key, model, max_tokens, config, struttura_id)
 
 
-def is_anthropic_provider(config=None):
+def is_anthropic_provider(config=None, struttura_id=None):
     """Check if the current AI provider is Anthropic."""
-    ai_cfg = _get_ai_config(config)
+    ai_cfg = _get_ai_config(config, struttura_id)
     return ai_cfg['provider'] == 'anthropic'
 
 
-def check_ai_configured(config=None):
+def check_ai_configured(config=None, struttura_id=None):
     """Check if AI is properly configured. Returns (ok, error_message)."""
-    ai_cfg = _get_ai_config(config)
+    ai_cfg = _get_ai_config(config, struttura_id)
     provider = ai_cfg['provider']
 
     if provider == 'anthropic':

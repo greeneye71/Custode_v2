@@ -60,8 +60,11 @@ def check_emails_for_division(email_cfg, app_config, db_path):
             logger.error(f"Errore decrittazione password per {account}: {e}")
             return
 
-    api_key = app_config.get('anthropic_api_key', '')
-    ai_model = app_config.get('ai_email_model', 'claude-haiku-4-5-20251001')
+    from ai_service import get_ai_config
+    struttura_id = email_cfg.get('struttura_id')
+    ai_cfg = get_ai_config(struttura_id=struttura_id, config=app_config)
+    api_key = ai_cfg['api_key']
+    ai_model = ai_cfg['model_email']
 
     if not api_key:
         logger.warning("Chiave API Anthropic non configurata, skip analisi email.")
