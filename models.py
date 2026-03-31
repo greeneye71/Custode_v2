@@ -360,8 +360,7 @@ def get_struttura_config(struttura_id, chiave, default=None):
         return row['valore']
     # Fallback al config globale
     try:
-        from flask import current_app
-        return current_app.config['APP_CONFIG'].get(chiave, default)
+        return (current_app.config.get('APP_CONFIG') or {}).get(chiave, default)
     except RuntimeError:
         return default
 
