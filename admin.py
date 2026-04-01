@@ -836,67 +836,89 @@ def reset_parziale():
 @admin_bp.route('/log-attivita')
 @admin_required
 def log_attivita_view():
-    """View activity logs."""
+    """Visualizza il registro delle attività degli utenti."""
     page = request.args.get('page', 1, type=int)
     per_page = 50
+    offset = (page - 1) * per_page
 
-    search = request.args.get('search', '').strip()
-    entita = request.args.get('entita', '').strip()
-    data_da = request.args.get('data_da', '').strip()
-    data_a = request.args.get('data_a', '').strip()
+    # Filtri
+    utente_id = request.args.get('utente_id', type=int)
+    entita = request.args.get('entita', '')
+    data_da = request.args.get('data_da', '')
+    data_a = request.args.get('data_a', '')
 
-    filtri = {'search': search, 'entita': entita, 'data_da': data_da, 'data_a': data_a}
-
-    # Build WHERE clauses
-    where = ["1=1"]
+    where = []
     params = []
 
-    if search:
-        where.append("(la.azione LIKE ? OR la.dettagli LIKE ?)")
-        params.extend([f'%{search}%', f'%{search}%'])
+    # Scope struttura (superadmin vede tutto, admin vede solo la propria)
+    if g.user['ruolo'] != 'superadmin':
+        struttura_id = g.user.get('struttura_id') or getattr(g, 'struttura_id', None)
+        where.append("l.struttura_id = ?")
+        params.append(struttura_id)
+
+    if utente_id:
+        where.append("l.utente_id = ?")
+        params.append(utente_id)
     if entita:
-        where.append("la.entita = ?")
+        where.append("l.entita = ?")
         params.append(entita)
     if data_da:
-        where.append("la.created_at >= ?")
+        where.append("l.created_at >= ?")
         params.append(data_da)
     if data_a:
-        where.append("la.created_at <= ? || ' 23:59:59'")
-        params.append(data_a)
+        where.append("l.created_at <= ?")
+        params.append(data_a + ' 23:59:59')
 
-    where_clause = " AND ".join(where)
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
 
-    # Count total
     total = query_one(
-        f"SELECT COUNT(*) as cnt FROM log_attivita la WHERE {where_clause}",
-        params
-    )['cnt']
+        f"SELECT COUNT(*) as c FROM log_attivita l {where_sql}", params
+    )['c']
 
-    # Get page of logs
-    offset = (page - 1) * per_page
-    logs = query_all(
-        f"""SELECT la.*, u.nome || ' ' || u.cognome as utente_nome
-            FROM log_attivita la
-            LEFT JOIN utenti u ON la.utente_id = u.id
-            WHERE {where_clause}
-            ORDER BY la.created_at DESC
-            LIMIT ? OFFSET ?""",
-        params + [per_page, offset]
-    )
+    # Export CSV
+    if request.args.get('export') == 'csv':
+        import csv, io as _io
+        from flask import Response
+        output = _io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=[
+            'created_at', 'utente_nome', 'azione', 'entita', 'entita_id', 'dettagli', 'ip_address'
+        ])
+        writer.writeheader()
+        all_logs = query_all(f"""
+            SELECT l.created_at, u.nome || ' ' || u.cognome as utente_nome,
+                   l.azione, l.entita, l.entita_id, l.dettagli, l.ip_address
+            FROM log_attivita l LEFT JOIN utenti u ON u.id = l.utente_id
+            {where_sql} ORDER BY l.created_at DESC
+        """, params)
+        writer.writerows([dict(r) for r in all_logs])
+        return Response(
+            output.getvalue(), mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment; filename=log_attivita.csv'}
+        )
 
-    # Distinct entities for filter
-    entita_list_rows = query_all(
-        "SELECT DISTINCT entita FROM log_attivita ORDER BY entita"
-    )
+    logs = query_all(f"""
+        SELECT l.*, u.nome || ' ' || u.cognome as utente_nome
+        FROM log_attivita l
+        LEFT JOIN utenti u ON u.id = l.utente_id
+        {where_sql}
+        ORDER BY l.created_at DESC
+        LIMIT ? OFFSET ?
+    """, list(params) + [per_page, offset])
+
+    utenti = query_all("SELECT id, nome, cognome FROM utenti WHERE attivo=1 ORDER BY cognome")
+    entita_list_rows = query_all("SELECT DISTINCT entita FROM log_attivita ORDER BY entita")
     entita_list = [r['entita'] for r in entita_list_rows]
 
     import math
     pages = max(1, math.ceil(total / per_page))
     pagination = {'page': page, 'pages': pages, 'total': total}
 
+    filtri = {'utente_id': utente_id or '', 'entita': entita,
+              'data_da': data_da, 'data_a': data_a}
+
     return render_template('admin/log_attivita.html',
-                           logs=logs, filtri=filtri, pagination=pagination,
-                           entita_list=entita_list)
+                           logs=logs, utenti=utenti, entita_list=entita_list,
+                           pagination=pagination, total=total, filtri=filtri)
 
 
 # ============================================================================

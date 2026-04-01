@@ -1,26 +1,37 @@
 {% extends "base.html" %}
-{% block title %}Log Attivita - {{ app_name }}{% endblock %}
+{% block title %}Log Attività - {{ app_name }}{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h2 class="mb-1"><i class="bi bi-journal-text me-2"></i>Log Attivit&agrave;</h2>
-        <p class="text-muted mb-0">Registro delle attivit&agrave; degli utenti</p>
+        <h2 class="mb-1"><i class="bi bi-journal-text me-2"></i>Log Attività</h2>
+        <p class="text-muted mb-0">Registro delle attività degli utenti — {{ total }} record</p>
     </div>
+    <a href="{{ url_for('admin.log_attivita_view', **filtri, export='csv') }}"
+       class="btn btn-outline-success btn-sm">
+        <i class="bi bi-filetype-csv me-1"></i> Esporta CSV
+    </a>
 </div>
 
-{# Filter bar #}
+{# Barra filtri #}
 <div class="card mb-4">
     <div class="card-body">
-        <form method="GET" action="{{ url_for('admin.log_attivita') }}">
+        <form method="GET" action="{{ url_for('admin.log_attivita_view') }}">
             <div class="row g-2 align-items-end">
                 <div class="col-md-3">
-                    <label class="form-label small">Cerca</label>
-                    <input type="text" class="form-control" name="search"
-                           value="{{ filtri.search }}" placeholder="Azione, dettagli...">
+                    <label class="form-label small">Utente</label>
+                    <select class="form-select" name="utente_id">
+                        <option value="">Tutti</option>
+                        {% for u in utenti %}
+                        <option value="{{ u.id }}"
+                            {% if filtri.utente_id|string == u.id|string %}selected{% endif %}>
+                            {{ u.cognome }} {{ u.nome }}
+                        </option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div class="col-md-2">
-                    <label class="form-label small">Entit&agrave;</label>
+                    <label class="form-label small">Entità</label>
                     <select class="form-select" name="entita">
                         <option value="">Tutte</option>
                         {% for e in entita_list %}
@@ -40,7 +51,7 @@
                     <button type="submit" class="btn btn-primary flex-grow-1">
                         <i class="bi bi-search me-1"></i> Filtra
                     </button>
-                    <a href="{{ url_for('admin.log_attivita') }}" class="btn btn-outline-secondary">
+                    <a href="{{ url_for('admin.log_attivita_view') }}" class="btn btn-outline-secondary">
                         <i class="bi bi-x-lg"></i>
                     </a>
                 </div>
@@ -49,7 +60,7 @@
     </div>
 </div>
 
-{# Log table #}
+{# Tabella log #}
 <div class="card">
     <div class="card-body p-0">
         {% if logs %}
@@ -60,7 +71,8 @@
                         <th style="width: 150px;">Data/Ora</th>
                         <th>Utente</th>
                         <th>Azione</th>
-                        <th>Entit&agrave;</th>
+                        <th>Entità</th>
+                        <th>ID</th>
                         <th>Dettagli</th>
                         <th>IP</th>
                     </tr>
@@ -83,6 +95,7 @@
                                 'login': 'bg-info',
                                 'logout': 'bg-secondary',
                                 'creazione': 'bg-success',
+                                'crea': 'bg-success',
                                 'modifica': 'bg-warning text-dark',
                                 'eliminazione': 'bg-danger',
                                 'dismesso': 'bg-danger',
@@ -92,16 +105,17 @@
                                 'backup_creazione': 'bg-info',
                                 'backup_ripristino': 'bg-warning text-dark',
                                 'reset_password': 'bg-warning text-dark',
+                                'crea_token': 'bg-primary',
+                                'revoca_token': 'bg-danger',
                             } %}
                             <span class="badge {{ azione_badges.get(log.azione, 'bg-light text-dark') }}">
                                 {{ log.azione }}
                             </span>
                         </td>
+                        <td><small>{{ log.entita or '-' }}</small></td>
+                        <td><small class="text-muted">{{ log.entita_id or '-' }}</small></td>
                         <td>
-                            <small>{{ log.entita }}{% if log.entita_id %} #{{ log.entita_id }}{% endif %}</small>
-                        </td>
-                        <td>
-                            <small class="text-truncate d-inline-block" style="max-width: 400px;"
+                            <small class="text-truncate d-inline-block" style="max-width: 350px;"
                                    title="{{ log.dettagli or '' }}">
                                 {{ log.dettagli or '-' }}
                             </small>
@@ -115,14 +129,15 @@
             </table>
         </div>
 
-        {# Pagination #}
+        {# Paginazione #}
         {% if pagination.pages > 1 %}
         <div class="card-footer">
             <nav>
                 <ul class="pagination pagination-sm justify-content-center mb-0">
                     {% if pagination.page > 1 %}
                     <li class="page-item">
-                        <a class="page-link" href="{{ url_for('admin.log_attivita', page=pagination.page-1, **filtri) }}">
+                        <a class="page-link"
+                           href="{{ url_for('admin.log_attivita_view', page=pagination.page-1, **filtri) }}">
                             &laquo;
                         </a>
                     </li>
@@ -133,7 +148,8 @@
                     <li class="page-item active"><span class="page-link">{{ p }}</span></li>
                     {% elif p <= 3 or p > pagination.pages - 3 or (p >= pagination.page - 2 and p <= pagination.page + 2) %}
                     <li class="page-item">
-                        <a class="page-link" href="{{ url_for('admin.log_attivita', page=p, **filtri) }}">{{ p }}</a>
+                        <a class="page-link"
+                           href="{{ url_for('admin.log_attivita_view', page=p, **filtri) }}">{{ p }}</a>
                     </li>
                     {% elif p == 4 or p == pagination.pages - 3 %}
                     <li class="page-item disabled"><span class="page-link">...</span></li>
@@ -142,7 +158,8 @@
 
                     {% if pagination.page < pagination.pages %}
                     <li class="page-item">
-                        <a class="page-link" href="{{ url_for('admin.log_attivita', page=pagination.page+1, **filtri) }}">
+                        <a class="page-link"
+                           href="{{ url_for('admin.log_attivita_view', page=pagination.page+1, **filtri) }}">
                             &raquo;
                         </a>
                     </li>
@@ -155,7 +172,7 @@
         {% else %}
         <div class="text-center py-5">
             <i class="bi bi-journal display-4 text-muted"></i>
-            <p class="text-muted mt-3 mb-0">Nessuna attivit&agrave; registrata con i filtri selezionati.</p>
+            <p class="text-muted mt-3 mb-0">Nessuna attività registrata con i filtri selezionati.</p>
         </div>
         {% endif %}
     </div>
