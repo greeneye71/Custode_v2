@@ -119,10 +119,6 @@ class BackgroundScheduler:
 
     def _send_deadline_alerts(self):
         """Invia digest email scadenze a ogni struttura attiva con email_notifiche configurata."""
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-
         with self.app.app_context():
             from models import query_all, get_struttura_config
             strutture = query_all(
@@ -132,8 +128,8 @@ class BackgroundScheduler:
 
             for struttura in strutture:
                 sid = struttura['id']
-                frequenza = get_struttura_config(sid, 'report_frequenza') or 'settimanale'
-                attivo = get_struttura_config(sid, 'report_schedulato_attivo') or '1'
+                frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
+                attivo    = get_struttura_config(sid, 'report_schedulato_attivo', '1')
                 if attivo != '1':
                     continue
                 if not self._is_digest_due(frequenza):
