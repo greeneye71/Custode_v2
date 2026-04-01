@@ -11,11 +11,11 @@ from datetime import datetime
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, g, current_app, send_from_directory
+    flash, g, current_app, send_from_directory, send_file, abort
 )
 from werkzeug.utils import secure_filename
 
-from auth import login_required
+from auth import login_required, modalita_avanzata_required
 from models import query_one, query_all, execute, log_attivita
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
@@ -492,6 +492,37 @@ def dettaglio(id):
                            stato_verifica_el=stato_verifica_el,
                            ultima_verifica=ultima_verifica,
                            attivita_recente=attivita_recente)
+
+
+@apparecchi_bp.route('/apparecchi/<int:id>/qr')
+@login_required
+@modalita_avanzata_required
+def qr_code(id):
+    """Genera e restituisce il QR code PNG per l'apparecchio."""
+    import qrcode
+    import io
+
+    apparecchio = query_one(
+        "SELECT * FROM apparecchi WHERE id = ?", (id,)
+    )
+    if not apparecchio:
+        abort(404)
+
+    # URL assoluto alla scheda apparecchio
+    url = request.host_url.rstrip('/') + url_for('apparecchi.dettaglio', id=id)
+
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color='black', back_color='white')
+
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+
+    nome_file = f"qr_{apparecchio['matricola']}.png"
+    return send_file(buf, mimetype='image/png',
+                     as_attachment=True, download_name=nome_file)
 
 
 @apparecchi_bp.route('/apparecchi/<int:id>/modifica', methods=['GET', 'POST'])

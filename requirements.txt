@@ -26,3 +26,6 @@ waitress>=3.0
 # Windows launcher with system tray icon
 pystray>=0.19
 Pillow>=10.0
+
+# QR code generation
+qrcode[pil]>=7.4
