@@ -3,6 +3,7 @@ MedInventory - Apparecchi (Medical Devices) Blueprint
 Full CRUD: list with filters, create, edit, detail, soft-delete, photo/document upload.
 """
 
+import io
 import ipaddress
 import os
 import re
@@ -500,7 +501,6 @@ def dettaglio(id):
 def qr_code(id):
     """Genera e restituisce il QR code PNG per l'apparecchio."""
     import qrcode
-    import io
 
     apparecchio = query_one(
         "SELECT * FROM apparecchi WHERE id = ?", (id,)
@@ -520,7 +520,7 @@ def qr_code(id):
     img.save(buf, format='PNG')
     buf.seek(0)
 
-    nome_file = f"qr_{apparecchio['matricola']}.png"
+    nome_file = secure_filename(f"qr_{apparecchio['matricola']}.png")
     return send_file(buf, mimetype='image/png',
                      as_attachment=True, download_name=nome_file)
 
