@@ -121,7 +121,10 @@ def analizza():
     # Capture request-context values before leaving the request
     app_obj = current_app._get_current_object()
     uploads_path = current_app.config['UPLOADS_PATH']
-    api_key = config.get('anthropic_api_key', '')
+    from ai_service import get_ai_config as _gac
+    _struttura_id = getattr(g, 'struttura_id', None)
+    _ai_cfg = _gac(struttura_id=_struttura_id, config=config)
+    api_key = _ai_cfg['api_key']
     user_id = g.user['id']
     remote_addr = request.remote_addr
 
@@ -129,7 +132,7 @@ def analizza():
         target=_run_import_async,
         args=(app_obj, import_id, filepath, ext, file.filename, filename,
               divisione_id, config, api_key, timestamp,
-              user_id, remote_addr, uploads_path),
+              user_id, remote_addr, uploads_path, _struttura_id),
         daemon=True,
         name=f'import-{import_id}',
     )
@@ -181,7 +184,7 @@ def stato(id):
 
 def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
                       divisione_id, config, api_key, timestamp,
-                      user_id, remote_addr, uploads_path):
+                      user_id, remote_addr, uploads_path, struttura_id=None):
     """Thread target: classify + analyze document, populate import_preview."""
     with app.app_context():
         try:
@@ -195,7 +198,7 @@ def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
             is_scanned = not text or len(text.strip()) < 10
 
             from ai_service import get_ai_config
-            ai_cfg = get_ai_config(struttura_id=getattr(g, 'struttura_id', None), config=config)
+            ai_cfg = get_ai_config(struttura_id=struttura_id, config=config)
             classify_model = ai_cfg['model_email']
             if is_scanned and ext == 'pdf':
                 if not is_anthropic_provider(config):
@@ -221,15 +224,18 @@ def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
             if doc_type == 'inventario':
                 _run_inventario(import_id, filepath, ext, text, is_scanned,
                                 orig_name, safe_name, divisione_id, config, api_key,
-                                user_id, remote_addr, uploads_path)
+                                user_id, remote_addr, uploads_path,
+                                struttura_id=struttura_id)
             elif doc_type == 'verbale_manutenzione':
                 _run_verbali(import_id, filepath, ext, text, is_scanned,
                              orig_name, safe_name, divisione_id, config, api_key,
-                             timestamp, user_id, remote_addr, uploads_path)
+                             timestamp, user_id, remote_addr, uploads_path,
+                             struttura_id=struttura_id)
             else:
                 _run_verifiche(import_id, filepath, ext, text, is_scanned,
                                orig_name, safe_name, divisione_id, config, api_key,
-                               timestamp, user_id, remote_addr, uploads_path)
+                               timestamp, user_id, remote_addr, uploads_path,
+                               struttura_id=struttura_id)
 
         except Exception as e:
             logger.error(f"Import async error (import_id={import_id}): {e}", exc_info=True)
@@ -243,13 +249,13 @@ def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
 
 def _run_inventario(import_id, filepath, ext, text, is_scanned,
                     orig_name, safe_name, divisione_id, config, api_key,
-                    user_id, remote_addr, uploads_path):
+                    user_id, remote_addr, uploads_path, struttura_id=None):
     """Analyze inventory document and populate import_preview. Runs in background thread."""
     from ai_service import (
         analyze_inventory_with_ai, analyze_inventory_from_pdf_document,
         find_duplicates, get_ai_config,
     )
-    ai_cfg = get_ai_config(config=config)
+    ai_cfg = get_ai_config(config=config, struttura_id=struttura_id)
     model = ai_cfg['model_import']
 
     if is_scanned and ext == 'pdf':
@@ -291,14 +297,14 @@ def _run_inventario(import_id, filepath, ext, text, is_scanned,
 
 def _run_verbali(import_id, filepath, ext, text, is_scanned,
                  orig_name, safe_name, divisione_id, config, api_key,
-                 timestamp, user_id, remote_addr, uploads_path):
+                 timestamp, user_id, remote_addr, uploads_path, struttura_id=None):
     """Analyze maintenance report(s). Runs in background thread."""
     from ai_service import (
         parse_verbale_with_ai, parse_verbale_from_pdf_document,
         get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages,
         get_ai_config,
     )
-    ai_cfg = get_ai_config(config=config)
+    ai_cfg = get_ai_config(config=config, struttura_id=struttura_id)
     model = ai_cfg['model_import']
     all_items = []
 
@@ -379,14 +385,14 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
 
 def _run_verifiche(import_id, filepath, ext, text, is_scanned,
                    orig_name, safe_name, divisione_id, config, api_key,
-                   timestamp, user_id, remote_addr, uploads_path):
+                   timestamp, user_id, remote_addr, uploads_path, struttura_id=None):
     """Analyze electrical safety verification(s). Runs in background thread."""
     from ai_service import (
         analyze_verifiche_with_ai, analyze_verifiche_from_pdf_document,
         get_pdf_page_count, extract_text_from_pdf_page, split_pdf_pages,
         get_ai_config,
     )
-    ai_cfg = get_ai_config(config=config)
+    ai_cfg = get_ai_config(config=config, struttura_id=struttura_id)
     model = ai_cfg['model_import']
     all_items = []
 
