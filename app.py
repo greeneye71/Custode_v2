@@ -300,6 +300,9 @@ def create_app():
     from strutture_bp import strutture_bp
     app.register_blueprint(strutture_bp)
 
+    from api_bp import api_bp
+    app.register_blueprint(api_bp)
+
     # ---------------------------------------------------------------------------
     # Root route -> Dashboard
     # ---------------------------------------------------------------------------

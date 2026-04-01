@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Token API — {{ struttura.nome }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+
+  <div class="d-flex align-items-center mb-4">
+    <a href="{{ url_for('strutture.index') }}" class="btn btn-outline-secondary btn-sm me-3">
+      <i class="bi bi-arrow-left"></i> Strutture
+    </a>
+    <h1 class="h3 mb-0">Token API — <strong>{{ struttura.nome }}</strong></h1>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+    {% endfor %}
+  {% endwith %}
+
+  <div class="alert alert-info d-flex align-items-start gap-2" role="alert">
+    <i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>
+    <div>
+      <strong>Nota di sicurezza:</strong> Il valore del token viene mostrato <em>una sola volta</em>
+      al momento della creazione. Copialo subito e conservalo in un luogo sicuro.
+      I token sono autenticati via header <code>Authorization: Bearer &lt;token&gt;</code>.
+    </div>
+  </div>
+
+  <!-- Token esistenti -->
+  <div class="card shadow-sm mb-4">
+    <div class="card-header">
+      <h5 class="mb-0"><i class="bi bi-key me-2"></i>Token esistenti</h5>
+    </div>
+    <div class="card-body p-0">
+      {% if tokens %}
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Nome</th>
+              <th>Scopi</th>
+              <th>Scadenza</th>
+              <th>Ultimo utilizzo</th>
+              <th>Stato</th>
+              <th>Creato il</th>
+              <th class="text-end">Azioni</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for token in tokens %}
+            <tr class="{% if not token.attivo %}table-secondary text-muted{% endif %}">
+              <td>{{ token.nome }}</td>
+              <td>
+                {% if 'write' in (token.scopes or '') %}
+                  <span class="badge bg-warning text-dark">read write</span>
+                {% else %}
+                  <span class="badge bg-secondary">read</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if token.scadenza %}
+                  {{ token.scadenza }}
+                {% else %}
+                  <span class="text-muted">Mai</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if token.ultimo_utilizzo %}
+                  {{ token.ultimo_utilizzo }}
+                {% else %}
+                  <span class="text-muted">Mai utilizzato</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if token.attivo %}
+                  <span class="badge bg-success">Attivo</span>
+                {% else %}
+                  <span class="badge bg-danger">Revocato</span>
+                {% endif %}
+              </td>
+              <td>{{ token.created_at or '—' }}</td>
+              <td class="text-end">
+                {% if token.attivo %}
+                <form method="post"
+                      action="{{ url_for('strutture.revoca_token', struttura_id=struttura.id, token_id=token.id) }}"
+                      onsubmit="return confirm('Revocare questo token? L\'operazione è irreversibile.');">
+                  <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-x-circle me-1"></i>Revoca
+                  </button>
+                </form>
+                {% else %}
+                  <span class="text-muted small">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-center text-muted py-4">
+        <i class="bi bi-key display-6 d-block mb-2"></i>
+        Nessun token API creato per questa struttura.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Form nuovo token -->
+  <div class="card shadow-sm">
+    <div class="card-header">
+      <h5 class="mb-0"><i class="bi bi-plus-circle me-2"></i>Crea nuovo token</h5>
+    </div>
+    <div class="card-body">
+      <form method="post" action="{{ url_for('strutture.nuovo_token', struttura_id=struttura.id) }}">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label for="nome" class="form-label">Nome token <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="nome" name="nome"
+                   placeholder="es. Integrazione HIS, Dashboard reparto…"
+                   required maxlength="100">
+            <div class="form-text">Descrizione identificativa del token.</div>
+          </div>
+          <div class="col-md-3">
+            <label for="scopes" class="form-label">Scopi</label>
+            <select class="form-select" id="scopes" name="scopes">
+              <option value="read" selected>read — solo lettura</option>
+              <option value="read write">read write — lettura e scrittura</option>
+            </select>
+            <div class="form-text">Con "read write" è possibile creare manutenzioni via API.</div>
+          </div>
+          <div class="col-md-3">
+            <label for="scadenza" class="form-label">Scadenza</label>
+            <input type="date" class="form-control" id="scadenza" name="scadenza">
+            <div class="form-text">Lascia vuoto per token senza scadenza.</div>
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">
+              <i class="bi bi-plus-lg me-1"></i>Crea token
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Documentazione API rapida -->
+  <div class="card shadow-sm mt-4">
+    <div class="card-header">
+      <h5 class="mb-0"><i class="bi bi-book me-2"></i>Endpoint disponibili</h5>
+    </div>
+    <div class="card-body">
+      <p class="text-muted mb-3">
+        Tutti gli endpoint restituiscono JSON e sono accessibili tramite
+        <code>Authorization: Bearer &lt;token&gt;</code>. I dati sono automaticamente
+        filtrati per la struttura del token.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Metodo</th>
+              <th>Endpoint</th>
+              <th>Scopo richiesto</th>
+              <th>Descrizione</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge bg-primary">GET</span></td>
+              <td><code>/api/v1/apparecchi</code></td>
+              <td><span class="badge bg-secondary">read</span></td>
+              <td>Lista apparecchi (paginata, ?page=&amp;per_page=)</td>
+            </tr>
+            <tr>
+              <td><span class="badge bg-primary">GET</span></td>
+              <td><code>/api/v1/apparecchi/{id}</code></td>
+              <td><span class="badge bg-secondary">read</span></td>
+              <td>Dettaglio singolo apparecchio</td>
+            </tr>
+            <tr>
+              <td><span class="badge bg-primary">GET</span></td>
+              <td><code>/api/v1/scadenze</code></td>
+              <td><span class="badge bg-secondary">read</span></td>
+              <td>Prossime scadenze manutenzioni (paginata)</td>
+            </tr>
+            <tr>
+              <td><span class="badge bg-primary">GET</span></td>
+              <td><code>/api/v1/manutenzioni</code></td>
+              <td><span class="badge bg-secondary">read</span></td>
+              <td>Lista manutenzioni (paginata)</td>
+            </tr>
+            <tr>
+              <td><span class="badge bg-success">POST</span></td>
+              <td><code>/api/v1/manutenzioni</code></td>
+              <td><span class="badge bg-warning text-dark">write</span></td>
+              <td>Crea nuova manutenzione (JSON body)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

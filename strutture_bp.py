@@ -161,3 +161,65 @@ def config(struttura_id):
     cfg = get_struttura_config_all(struttura_id)
     return render_template('strutture/config.html',
                            struttura=struttura, cfg=cfg, chiavi=chiavi_visibili)
+
+
+# ============================================================================
+# API TOKEN MANAGEMENT
+# ============================================================================
+
+@strutture_bp.route('/<int:struttura_id>/tokens')
+@superadmin_required
+def api_tokens(struttura_id):
+    from flask import abort
+    struttura = query_one("SELECT * FROM strutture WHERE id=?", (struttura_id,))
+    if not struttura:
+        abort(404)
+    tokens = query_all(
+        "SELECT * FROM api_tokens WHERE struttura_id=? ORDER BY created_at DESC",
+        (struttura_id,)
+    )
+    return render_template('strutture/api_tokens.html', struttura=struttura, tokens=tokens)
+
+
+@strutture_bp.route('/<int:struttura_id>/tokens/nuovo', methods=['POST'])
+@superadmin_required
+def nuovo_token(struttura_id):
+    import hashlib
+    import secrets as _secrets
+    nome = request.form.get('nome', '').strip()
+    scopes = request.form.get('scopes', 'read')
+    scadenza = request.form.get('scadenza') or None
+
+    if not nome:
+        flash('Il nome del token è obbligatorio.', 'danger')
+        return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
+
+    if scopes not in ('read', 'read write'):
+        scopes = 'read'
+
+    raw = _secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+
+    execute(
+        """INSERT INTO api_tokens (struttura_id, nome, token_hash, scopes, scadenza, created_by)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (struttura_id, nome, token_hash, scopes, scadenza, g.user['id'])
+    )
+    log_attivita(g.user['id'], 'crea_token', 'api_tokens', None,
+                 f'Token "{nome}" creato per struttura {struttura_id}',
+                 struttura_id=struttura_id)
+    flash(f'Token creato. Copia ora, non sarà più visibile: {raw}', 'warning')
+    return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
+
+
+@strutture_bp.route('/<int:struttura_id>/tokens/<int:token_id>/revoca', methods=['POST'])
+@superadmin_required
+def revoca_token(struttura_id, token_id):
+    execute(
+        "UPDATE api_tokens SET attivo=0 WHERE id=? AND struttura_id=?",
+        (token_id, struttura_id)
+    )
+    log_attivita(g.user['id'], 'revoca_token', 'api_tokens', token_id,
+                 struttura_id=struttura_id)
+    flash('Token revocato.', 'success')
+    return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
