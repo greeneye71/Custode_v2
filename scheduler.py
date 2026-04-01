@@ -118,96 +118,124 @@ class BackgroundScheduler:
             logger.error(f"Errore pulizia sessioni: {e}")
 
     def _send_deadline_alerts(self):
-        """Send daily email alert for expired or urgent deadlines."""
+        """Invia digest email scadenze a ogni struttura attiva con email_notifiche configurata."""
         import smtplib
         from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
 
-        config = self.app.config['APP_CONFIG']
+        with self.app.app_context():
+            from models import query_all, get_struttura_config
+            strutture = query_all(
+                "SELECT * FROM strutture WHERE attiva=1 AND email_notifiche IS NOT NULL"
+            )
+            global_cfg = self.app.config.get('APP_CONFIG', {})
 
-        if not config.get('alert_email_enabled'):
+            for struttura in strutture:
+                sid = struttura['id']
+                frequenza = get_struttura_config(sid, 'report_frequenza') or 'settimanale'
+                attivo = get_struttura_config(sid, 'report_schedulato_attivo') or '1'
+                if attivo != '1':
+                    continue
+                if not self._is_digest_due(frequenza):
+                    continue
+
+                scadenze = query_all("""
+                    SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
+                           d.nome as divisione_nome
+                    FROM prossime_scadenze ps
+                    JOIN apparecchi a ON a.id = ps.apparecchio_id
+                    JOIN divisioni d ON d.id = a.divisione_id
+                    WHERE a.struttura_id = ?
+                    AND ps.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
+                    ORDER BY ps.priorita, ps.prossima_scadenza
+                """, (sid,))
+
+                if not scadenze:
+                    continue
+
+                self._invia_digest(struttura, scadenze, global_cfg)
+
+    def _is_digest_due(self, frequenza):
+        """Controlla se è il momento giusto per inviare il digest."""
+        now = datetime.now()
+        if frequenza == 'giornaliero':
+            return now.hour == 7
+        elif frequenza == 'settimanale':
+            return now.weekday() == 0 and now.hour == 7  # lunedì alle 7:00
+        elif frequenza == 'mensile':
+            return now.day == 1 and now.hour == 7  # primo del mese alle 7:00
+        return False
+
+    def _invia_digest(self, struttura, scadenze, global_cfg):
+        """Costruisce e invia l'email digest delle scadenze per una struttura."""
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        from models import get_struttura_config
+
+        sid = struttura['id']
+
+        smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
+        smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
+        smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
+        smtp_pass_enc = get_struttura_config(sid, 'smtp_password_encrypted')
+        smtp_pass = ''
+        if smtp_pass_enc:
+            try:
+                import base64, hashlib
+                from cryptography.fernet import Fernet
+                key = global_cfg.get('encryption_key', '')
+                if key:
+                    fernet_key = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
+                    smtp_pass = Fernet(fernet_key).decrypt(smtp_pass_enc.encode()).decode()
+            except Exception as e:
+                logger.warning(f"Impossibile decifrare smtp_password per struttura {struttura['nome']}: {e}")
+        if not smtp_pass:
+            smtp_pass = global_cfg.get('smtp_password', '')
+
+        smtp_from = get_struttura_config(sid, 'smtp_from') or smtp_user
+        use_tls = (get_struttura_config(sid, 'smtp_use_tls') or '1') == '1'
+
+        if not smtp_host or not smtp_user:
+            logger.warning(f"SMTP non configurato per struttura {struttura['nome']}, digest non inviato.")
             return
 
-        alert_to = config.get('alert_email_to', '').strip()
-        smtp_host = config.get('smtp_host', '').strip()
-        if not alert_to or not smtp_host:
-            logger.warning("Alert email abilitata ma SMTP non configurato.")
-            return
+        priorita_labels = {
+            'scaduto':    'SCADUTO',
+            'urgente':    'URGENTE (<=7gg)',
+            'attenzione': 'ATTENZIONE (<=15gg)',
+            'avviso':     'AVVISO (<=30gg)',
+        }
+        righe = [f"Scadenzario — {struttura['nome']}", "=" * 40, ""]
+        for priorita, label in priorita_labels.items():
+            gruppo = [s for s in scadenze if s['priorita'] == priorita]
+            if gruppo:
+                righe.append(f"\n{label}")
+                righe.append("-" * 30)
+                for s in gruppo:
+                    nome_app = s['descrizione'] or f"{s['marca']} {s['modello']}"
+                    righe.append(
+                        f"  {nome_app} (mat. {s['matricola']}) — {s['divisione_nome']} — "
+                        f"scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg)"
+                    )
+        corpo = "\n".join(righe)
 
-        db_path = self.app.config['DATABASE_PATH']
         try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                """SELECT ps.*, d.nome as divisione_nome
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   WHERE ps.priorita IN ('scaduto', 'urgente')
-                   ORDER BY ps.prossima_scadenza ASC"""
-            )
-            scadenze = cursor.fetchall()
-            conn.close()
+            msg = MIMEMultipart()
+            msg['From'] = smtp_from
+            msg['To'] = struttura['email_notifiche']
+            msg['Subject'] = f"Scadenzario {struttura['nome']} — {datetime.now().strftime('%d/%m/%Y')}"
+            msg.attach(MIMEText(corpo, 'plain', 'utf-8'))
+
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                if use_tls:
+                    server.starttls()
+                if smtp_user and smtp_pass:
+                    server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_from, struttura['email_notifiche'], msg.as_string())
+            logger.info(f"Digest inviato a {struttura['email_notifiche']} ({struttura['nome']})")
         except Exception as e:
-            logger.error(f"Errore query scadenze per alert: {e}")
-            return
-
-        if not scadenze:
-            logger.debug("Nessuna scadenza urgente, alert non inviata.")
-            return
-
-        app_name = config.get('app_name', 'MedInventory')
-        structure = config.get('structure_name', '')
-        header = f"{app_name}{' - ' + structure if structure else ''}"
-        now_str = datetime.now().strftime('%d/%m/%Y %H:%M')
-
-        lines = [
-            f"{header}",
-            f"Riepilogo scadenze urgenti del {now_str}",
-            "=" * 50,
-            "",
-            f"Trovate {len(scadenze)} scadenze critiche:",
-            "",
-        ]
-        for s in scadenze:
-            tipo_label = "Manutenzione" if s['tipo_record'] == 'manutenzione' else "Verifica el."
-            div_label = s['divisione_nome'] or 'N.D.'
-            lines.append(
-                f"  [{s['priorita'].upper()}] {s['marca']} {s['modello']} ({s['matricola']})"
-            )
-            lines.append(
-                f"         {tipo_label} - Scadenza: {s['prossima_scadenza']} "
-                f"({s['giorni_rimasti']}gg) - Div.: {div_label}"
-            )
-            lines.append("")
-
-        body = "\n".join(lines)
-        subject = f"[{app_name}] {len(scadenze)} scadenze urgenti"
-
-        smtp_port = config.get('smtp_port', 587)
-        smtp_user = config.get('smtp_user', '').strip()
-        smtp_password = config.get('smtp_password', '').strip()
-        smtp_use_tls = config.get('smtp_use_tls', True)
-        from_addr = smtp_user if smtp_user else f"noreply@{smtp_host}"
-
-        msg = MIMEText(body, 'plain', 'utf-8')
-        msg['Subject'] = subject
-        msg['From'] = from_addr
-        msg['To'] = alert_to
-
-        try:
-            if smtp_use_tls:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15)
-
-            if smtp_user and smtp_password:
-                server.login(smtp_user, smtp_password)
-
-            server.sendmail(from_addr, [alert_to], msg.as_string())
-            server.quit()
-            logger.info(f"Alert email inviata a {alert_to}: {len(scadenze)} scadenze.")
-        except Exception as e:
-            logger.error(f"Errore invio alert email: {e}")
+            logger.error(f"Errore invio digest {struttura['nome']}: {e}")
 
     def _check_backup(self):
         """Check if a weekly backup is needed (Sunday 03:00)."""
