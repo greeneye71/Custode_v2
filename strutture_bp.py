@@ -220,6 +220,7 @@ def revoca_token(struttura_id, token_id):
         (token_id, struttura_id)
     )
     log_attivita(g.user['id'], 'revoca_token', 'api_tokens', token_id,
+                 dettagli=f'Token {token_id} revocato per struttura {struttura_id}',
                  struttura_id=struttura_id)
     flash('Token revocato.', 'success')
     return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))

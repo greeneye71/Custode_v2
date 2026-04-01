@@ -159,7 +159,7 @@ def lista_manutenzioni():
 def crea_manutenzione():
     data = request.get_json(silent=True) or {}
     required = ('apparecchio_id', 'tipo', 'data_intervento')
-    mancanti = [k for k in required if not data.get(k)]
+    mancanti = [k for k in required if data.get(k) is None or data.get(k) == '']
     if mancanti:
         return jsonify({'errore': f'Campi mancanti: {", ".join(mancanti)}'}), 400
 
