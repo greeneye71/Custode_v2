@@ -14,7 +14,7 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash
 
-from auth import admin_required, superadmin_required
+from auth import admin_required, superadmin_required, modalita_avanzata_required
 from models import query_one, query_all, execute, log_attivita
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -835,6 +835,7 @@ def reset_parziale():
 
 @admin_bp.route('/log-attivita')
 @admin_required
+@modalita_avanzata_required
 def log_attivita_view():
     """Visualizza il registro delle attività degli utenti."""
     page = request.args.get('page', 1, type=int)
@@ -905,8 +906,19 @@ def log_attivita_view():
         LIMIT ? OFFSET ?
     """, list(params) + [per_page, offset])
 
-    utenti = query_all("SELECT id, nome, cognome FROM utenti WHERE attivo=1 ORDER BY cognome")
-    entita_list_rows = query_all("SELECT DISTINCT entita FROM log_attivita ORDER BY entita")
+    if g.user['ruolo'] != 'superadmin':
+        _struttura_id = g.user.get('struttura_id') or getattr(g, 'struttura_id', None)
+        utenti = query_all(
+            "SELECT id, nome, cognome FROM utenti WHERE attivo=1 AND struttura_id=? ORDER BY cognome",
+            (_struttura_id,)
+        )
+        entita_list_rows = query_all(
+            "SELECT DISTINCT entita FROM log_attivita WHERE struttura_id=? ORDER BY entita",
+            (_struttura_id,)
+        )
+    else:
+        utenti = query_all("SELECT id, nome, cognome FROM utenti WHERE attivo=1 ORDER BY cognome")
+        entita_list_rows = query_all("SELECT DISTINCT entita FROM log_attivita ORDER BY entita")
     entita_list = [r['entita'] for r in entita_list_rows]
 
     import math
