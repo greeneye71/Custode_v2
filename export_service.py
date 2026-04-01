@@ -403,6 +403,60 @@ def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_na
     return buffer
 
 
+def genera_report_scadenze_pdf(struttura_id, output_path):
+    """Genera un PDF con lo scadenzario per struttura e lo salva in output_path."""
+    from models import query_all, query_one
+    from fpdf import FPDF
+    from datetime import datetime
+
+    struttura = query_one("SELECT * FROM strutture WHERE id=?", (struttura_id,))
+    scadenze = query_all("""
+        SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
+               d.nome as divisione_nome
+        FROM prossime_scadenze ps
+        JOIN apparecchi a ON a.id = ps.apparecchio_id
+        JOIN divisioni d ON d.id = a.divisione_id
+        WHERE a.struttura_id = ?
+          AND ps.priorita IN ('scaduto','urgente','attenzione','avviso')
+        ORDER BY ps.priorita, ps.prossima_scadenza
+    """, (struttura_id,))
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font('Helvetica', 'B', 16)
+    pdf.cell(0, 10, f"Scadenzario — {struttura['nome']}", ln=True)
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True)
+    pdf.ln(4)
+
+    colori = {
+        'scaduto':    (220, 53, 69),
+        'urgente':    (255, 140,  0),
+        'attenzione': (255, 193,  7),
+        'avviso':     ( 13, 110, 253),
+    }
+
+    if not scadenze:
+        pdf.set_font('Helvetica', 'I', 10)
+        pdf.cell(0, 8, "Nessuna scadenza critica.", ln=True)
+    else:
+        for s in scadenze:
+            r, g_, b = colori.get(s['priorita'], (0, 0, 0))
+            pdf.set_text_color(r, g_, b)
+            pdf.set_font('Helvetica', 'B', 9)
+            nome_app = s['descrizione'] or f"{s['marca']} {s['modello']}"
+            pdf.cell(0, 5,
+                f"[{s['priorita'].upper()}] {nome_app} — {s['divisione_nome']}",
+                ln=True)
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font('Helvetica', '', 9)
+            pdf.cell(0, 5,
+                f"  Mat: {s['matricola']} | Scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg) | Tipo: {s['tipo_manutenzione']}",
+                ln=True)
+
+    pdf.output(output_path)
+
+
 def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export apparecchi list to PDF using fpdf2."""
     from fpdf import FPDF

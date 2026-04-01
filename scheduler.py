@@ -59,6 +59,12 @@ class BackgroundScheduler:
                 'interval': 86400,  # once a day
                 'last_run': 0,
             },
+            {
+                'name': 'report_schedulati',
+                'func': self._send_scheduled_reports,
+                'interval': 3600,   # controlla ogni ora
+                'last_run': 0,
+            },
         ]
 
         self._stop_event.clear()
@@ -150,6 +156,103 @@ class BackgroundScheduler:
                     continue
 
                 self._invia_digest(struttura, scadenze, global_cfg)
+
+    def _send_scheduled_reports(self):
+        """Invia report periodici PDF alle strutture con report_schedulato_attivo=1."""
+        with self.app.app_context():
+            from models import query_all, get_struttura_config
+            strutture = query_all("SELECT * FROM strutture WHERE attiva=1")
+            global_cfg = self.app.config.get('APP_CONFIG', {})
+
+            for struttura in strutture:
+                sid = struttura['id']
+                if get_struttura_config(sid, 'report_schedulato_attivo', '0') != '1':
+                    continue
+                frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
+                if not self._is_digest_due(frequenza):
+                    continue
+                if not struttura.get('email_notifiche'):
+                    continue
+
+                try:
+                    self._genera_e_invia_report(struttura, global_cfg)
+                except Exception as e:
+                    logger.error(f"Errore report struttura {struttura['nome']}: {e}")
+
+    def _genera_e_invia_report(self, struttura, global_cfg):
+        """Genera PDF scadenzario e lo invia via email alla struttura."""
+        from export_service import genera_report_scadenze_pdf
+        import tempfile, os
+
+        sid = struttura['id']
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            genera_report_scadenze_pdf(struttura_id=sid, output_path=tmp_path)
+            self._invia_pdf_allegato(struttura, tmp_path, global_cfg)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def _invia_pdf_allegato(self, struttura, pdf_path, global_cfg):
+        """Invia il PDF come allegato email alla struttura."""
+        import smtplib, os
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+        from models import get_struttura_config
+
+        sid = struttura['id']
+        smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
+        smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
+        smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
+
+        # Decripta la password SMTP (stessa logica di _invia_digest)
+        smtp_pass_enc = get_struttura_config(sid, 'smtp_password_encrypted')
+        smtp_pass = ''
+        if smtp_pass_enc:
+            try:
+                import base64, hashlib
+                from cryptography.fernet import Fernet
+                key = global_cfg.get('encryption_key', '')
+                if key:
+                    fernet_key = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
+                    smtp_pass = Fernet(fernet_key).decrypt(smtp_pass_enc.encode()).decode()
+            except Exception as e:
+                logger.warning(f"Impossibile decifrare smtp_password per struttura {struttura['nome']}: {e}")
+        if not smtp_pass:
+            smtp_pass = global_cfg.get('smtp_password', '')
+
+        smtp_from = get_struttura_config(sid, 'smtp_from') or smtp_user
+        use_tls = (get_struttura_config(sid, 'smtp_use_tls') or '1') == '1'
+
+        if not smtp_host or not smtp_user:
+            logger.warning(f"SMTP non configurato per struttura {struttura['nome']}, report non inviato.")
+            return
+
+        msg = MIMEMultipart()
+        msg['From'] = smtp_from
+        msg['To'] = struttura['email_notifiche']
+        msg['Subject'] = f"Report scadenze {struttura['nome']} — {datetime.now().strftime('%d/%m/%Y')}"
+        msg.attach(MIMEText("In allegato il report periodico delle scadenze.", 'plain', 'utf-8'))
+
+        with open(pdf_path, 'rb') as f:
+            attach = MIMEApplication(f.read(), _subtype='pdf')
+            attach.add_header('Content-Disposition', 'attachment',
+                              filename=f"scadenze_{struttura['codice']}.pdf")
+            msg.attach(attach)
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                if use_tls:
+                    server.starttls()
+                if smtp_user and smtp_pass:
+                    server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_from, struttura['email_notifiche'], msg.as_string())
+            logger.info(f"Report PDF inviato a {struttura['email_notifiche']} ({struttura['nome']})")
+        except Exception as e:
+            logger.error(f"Errore invio PDF {struttura['nome']}: {e}")
 
     def _is_digest_due(self, frequenza):
         """Controlla se è il momento giusto per inviare il digest."""
