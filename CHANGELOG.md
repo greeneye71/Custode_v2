@@ -6,6 +6,56 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.0.0] - 2026-04-03
+
+### Aggiunto — Architettura multi-struttura (multi-tenant)
+
+- **Tabella `strutture`** — gestione di strutture/clienti indipendenti con codice univoco, modalità operativa (`standard` / `ingegneria_clinica`), email notifiche e flag attiva.
+- **Tabella `strutture_config`** — configurazione per-struttura (AI provider, SMTP, report) con fallback al config globale.
+- **Ruolo `superadmin`** — accesso globale a tutte le strutture; può impersonare qualsiasi struttura tramite banner di impersonazione.
+- **Impersonazione struttura** — il superadmin può operare nel contesto di una struttura specifica senza cambiare account.
+- **Divisioni e utenti scoped** — ogni divisione e utente appartiene a una struttura; i dati sono completamente isolati tra strutture.
+- **Flag `single_struttura`** in `config.json` — compatibilità backward con installazioni v1.x: disabilita UI multi-struttura e forza modalità `ingegneria_clinica`.
+
+### Aggiunto — REST API
+
+- **Blueprint `api_bp`** su `/api/v1` — 5 endpoint autenticati con Bearer token.
+- **Tabella `api_tokens`** — token SHA-256 con scope `read` / `read write`, scadenza opzionale, log ultimo utilizzo.
+- **Endpoint**: `GET /apparecchi`, `GET /apparecchi/<id>`, `GET /scadenze`, `GET /manutenzioni`, `POST /manutenzioni`.
+- **UI gestione token** in Strutture → Config → Token API (solo superadmin).
+
+### Aggiunto — Sicurezza
+
+- **Rate limiting login** — blocco per IP dopo 5 tentativi falliti in 15 minuti; sbloccabile da admin in Amministrazione → Sicurezza.
+- **Tabella `login_attempts`** — registrazione di ogni tentativo con IP, email ed esito.
+- **`logout_ovunque`** — invalida tutte le sessioni attive della struttura corrente.
+- **`@superadmin_required`**, **`@admin_struttura_required`**, **`@modalita_avanzata_required`** — tre nuovi decoratori di autorizzazione.
+
+### Aggiunto — Modalità ingegneria clinica
+
+- **QR code apparecchi** — generazione e download QR code con URL assoluto alla scheda apparecchio (`/apparecchi/<id>`).
+- **Audit log avanzato** — filtri per utente, entità, intervallo date; export CSV; paginazione 50 voci.
+- **Report PDF schedulati** — generazione automatica PDF scadenzario per struttura, inviato via email con frequenza configurabile (giornaliera/settimanale/mensile).
+
+### Aggiunto — Scheduler
+
+- **Task `report_schedulati`** — ogni ora verifica se inviare report PDF per-struttura.
+- **`_invia_digest`** aggiornato per supporto per-struttura con SMTP e frequenza configurabili.
+- **`_decrypt_smtp_password`** — helper centralizzato per decifratura password SMTP con Fernet/SHA-256.
+
+### Modificato
+
+- **`auth.py`**: `admin_required` accetta ora `('admin', 'superadmin')`; sessione arricchita con dati struttura.
+- **`ai_service.py`**: `get_ai_config(struttura_id=None)` per config AI per-struttura con fallback globale.
+- **`app.py`**: `APP_VERSION = "2.0.0"`; registra `strutture_bp` e `api_bp`; `inject_globals()` espone `g_struttura`, `g_struttura_modalita`, `single_struttura`, `strutture_list`.
+- **`admin.py`**: aggiunta dashboard superadmin, pagina sicurezza IP, audit log con filtri struttura.
+
+### Migrazione
+
+- **`migrate_v2_0.py`** — aggiunge tabelle `strutture`, `strutture_config`, `api_tokens`, `login_attempts`; aggiunge colonna `struttura_id` a `divisioni`, `utenti`, `log_attivita`; crea struttura default per installazioni v1.x.
+
+---
+
 ## [1.4.3] - 2026-03-29
 
 ### Modificato — Schema database
