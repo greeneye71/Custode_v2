@@ -180,12 +180,17 @@
                     <dt class="col-sm-3 text-muted">Porta</dt>
                     <dd class="col-sm-3">{{ apparecchio.porta or '-' }}</dd>
 
-                    {% if apparecchio.url_interfaccia %}
+                    {% if apparecchio.url_interfaccia and (apparecchio.url_interfaccia.startswith('http://') or apparecchio.url_interfaccia.startswith('https://')) %}
                     <dt class="col-sm-3 text-muted">Interfaccia Web</dt>
                     <dd class="col-sm-9">
-                        <a href="{{ apparecchio.url_interfaccia }}" target="_blank" rel="noopener">
+                        <a href="{{ apparecchio.url_interfaccia }}" target="_blank" rel="noopener noreferrer">
                             {{ apparecchio.url_interfaccia }} <i class="bi bi-box-arrow-up-right ms-1"></i>
                         </a>
+                    </dd>
+                    {% elif apparecchio.url_interfaccia %}
+                    <dt class="col-sm-3 text-muted">Interfaccia Web</dt>
+                    <dd class="col-sm-9">
+                        <span class="text-muted">{{ apparecchio.url_interfaccia }}</span>
                     </dd>
                     {% endif %}
                 </dl>

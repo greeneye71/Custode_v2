@@ -11,7 +11,7 @@
   </a>
 </div>
 
-<form method="POST">
+<form method="POST" action="{{ url_for('strutture.config', struttura_id=struttura.id) }}">
   <div class="row g-4">
 
     {# ------------------------------------------------------------------ #}
@@ -126,7 +126,7 @@
               <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="smtp_use_tls"
                        id="smtp_use_tls" value="1"
-                       {% if cfg.get('smtp_use_tls') in ('1', 'true', 'True') %}checked{% endif %}>
+                       {% if cfg.get('smtp_use_tls') in ('1', 'true', 'True', 1, True) %}checked{% endif %}>
                 <label class="form-check-label" for="smtp_use_tls">Usa TLS</label>
               </div>
             </div>
@@ -161,7 +161,7 @@
               <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="report_schedulato_attivo"
                        id="report_schedulato_attivo" value="1"
-                       {% if cfg.get('report_schedulato_attivo') in ('1', 'true', 'True') %}checked{% endif %}>
+                       {% if cfg.get('report_schedulato_attivo') in ('1', 'true', 'True', 1, True) %}checked{% endif %}>
                 <label class="form-check-label" for="report_schedulato_attivo">
                   Report schedulato attivo
                 </label>

@@ -113,7 +113,7 @@
                         <ul class="dropdown-menu dropdown-menu-end">
                             {% if current_user is defined and current_user.ruolo == 'admin' %}
                             <li>
-                                <a class="dropdown-item {% if divisione_attiva is defined and divisione_attiva.id == 'tutte' %}active{% endif %}"
+                                <a class="dropdown-item {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == 'tutte' %}active{% endif %}"
                                    href="{{ url_for('auth.cambia_divisione', divisione_id='tutte') }}">
                                     <i class="bi bi-collection me-2"></i> Tutte le divisioni
                                 </a>
@@ -123,7 +123,7 @@
                             {% for div in divisioni_accessibili %}
                             <li>
                                 <a class="dropdown-item d-flex align-items-center
-                                          {% if divisione_attiva is defined and divisione_attiva.id == div.id %}active{% endif %}"
+                                          {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == div.id %}active{% endif %}"
                                    href="{{ url_for('auth.cambia_divisione', divisione_id=div.id) }}">
                                     <span class="divisione-dot me-2" style="background-color: {{ div.colore }}"></span>
                                     {{ div.nome }}

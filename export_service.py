@@ -77,9 +77,10 @@ def export_apparecchi_excel(apparecchi, divisione_nome=''):
             cell.font = Font(name='Inter', size=10)
 
     # Column widths
+    from openpyxl.utils import get_column_letter
     widths = [18, 14, 14, 16, 20, 8, 14, 18, 14, 18, 16, 16]
     for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i) if i <= 26 else 'A'].width = w
+        ws.column_dimensions[get_column_letter(i)].width = w
 
     # Auto-filter
     ws.auto_filter.ref = f"A4:L{len(apparecchi) + 4}"
@@ -150,9 +151,10 @@ def export_manutenzioni_excel(manutenzioni, title_extra=''):
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
 
+    from openpyxl.utils import get_column_letter
     widths = [12, 22, 16, 14, 20, 30, 12, 10, 14, 16]
     for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i)].width = w
+        ws.column_dimensions[get_column_letter(i)].width = w
 
     ws.auto_filter.ref = f"A4:J{len(manutenzioni) + 4}"
 
@@ -230,9 +232,10 @@ def export_scadenzario_excel(scadenze, title_extra=''):
             cell.font = Font(name='Inter', size=10)
             cell.fill = fill
 
+    from openpyxl.utils import get_column_letter
     widths = [24, 16, 18, 16, 16, 14, 12, 16]
     for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i)].width = w
+        ws.column_dimensions[get_column_letter(i)].width = w
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -309,9 +312,10 @@ def export_verifiche_excel(verifiche, title_extra=''):
             if col == 4:
                 cell.fill = fill
 
+    from openpyxl.utils import get_column_letter
     widths = [14, 24, 16, 14, 22, 14, 16, 30, 10, 18]
     for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i)].width = w
+        ws.column_dimensions[get_column_letter(i)].width = w
 
     ws.auto_filter.ref = f"A4:J{len(verifiche) + 4}"
 
@@ -428,7 +432,7 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font('Helvetica', 'B', 16)
-    pdf.cell(0, 10, f"Scadenzario — {struttura['nome']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, f"Scadenzario - {struttura['nome']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font('Helvetica', '', 10)
     pdf.cell(0, 6, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(4)
@@ -450,7 +454,7 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
             pdf.set_font('Helvetica', 'B', 9)
             nome_app = s['descrizione'] or f"{s['marca']} {s['modello']}"
             pdf.cell(0, 5,
-                f"[{s['priorita'].upper()}] {nome_app} — {s['divisione_nome']}",
+                f"[{s['priorita'].upper()}] {nome_app} - {s['divisione_nome']}",
                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(0, 0, 0)
             pdf.set_font('Helvetica', '', 9)
