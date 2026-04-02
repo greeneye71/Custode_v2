@@ -27,17 +27,22 @@ ALLOWED_IMPORT_EXT = {'xlsx', 'xls', 'pdf', 'csv'}
 
 
 def _parse_email_ai_response(raw):
-    """Parse AI response JSON, handling string-wrapped JSON."""
+    """Parse AI response JSON, handling string-wrapped JSON and array responses."""
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
+        # FIX 9: se l'AI restituisce un array JSON, usa il primo elemento
+        if isinstance(parsed, list) and parsed:
+            return parsed[0] if isinstance(parsed[0], dict) else {}
+        if isinstance(parsed, dict):
+            return parsed
         if isinstance(parsed, str):
             start = parsed.find('{')
             end = parsed.rfind('}') + 1
             if start >= 0 and end > start:
                 return json.loads(parsed[start:end])
-        return parsed if isinstance(parsed, dict) else {}
+        return {}
     except (json.JSONDecodeError, TypeError):
         return {}
 
@@ -272,7 +277,7 @@ def _run_inventario(import_id, filepath, ext, text, is_scanned,
             ('Nessun apparecchio trovato nel documento.', import_id))
         return
 
-    enriched_items = find_duplicates(items, divisione_id)
+    enriched_items = find_duplicates(items, divisione_id, struttura_id=struttura_id)
 
     execute(
         """UPDATE import_history SET
@@ -357,7 +362,7 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
             ('Nessun intervento di manutenzione trovato nel documento.', import_id))
         return
 
-    _match_apparecchi(all_items)
+    _match_apparecchi(all_items, struttura_id=struttura_id)
 
     execute(
         """UPDATE import_history SET
@@ -445,7 +450,7 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
             ('Nessuna verifica di sicurezza trovata nel documento.', import_id))
         return
 
-    _match_apparecchi(all_items)
+    _match_apparecchi(all_items, struttura_id=struttura_id)
 
     execute(
         """UPDATE import_history SET
@@ -471,15 +476,22 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
                  f"Verifiche: {orig_name} ({len(all_items)} verifiche trovate)", remote_addr)
 
 
-def _match_apparecchi(items):
-    """Match matricole in items to existing apparecchi. Sets _match_id on each item."""
+def _match_apparecchi(items, struttura_id=None):
+    """Match matricole in items to existing apparecchi. Sets _match_id on each item.
+    Filtra per struttura_id quando disponibile per garantire isolamento multi-tenant.
+    """
     matricole = list({(item.get('matricola') or '').strip() for item in items} - {''})
     lookup = {}
     if matricole:
         placeholders = ','.join('?' * len(matricole))
-        rows = query_all(
-            f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso'",
-            [m.lower() for m in matricole])
+        if struttura_id:
+            rows = query_all(
+                f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso' AND struttura_id = ?",
+                [m.lower() for m in matricole] + [struttura_id])
+        else:
+            rows = query_all(
+                f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso'",
+                [m.lower() for m in matricole])
         lookup = {r['matricola'].lower(): r['id'] for r in rows}
     for item in items:
         matricola = (item.get('matricola') or '').strip().lower()
@@ -899,15 +911,28 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
 @import_bp.route('/import/storico')
 @login_required
 def storico():
-    """Import history."""
-    imports = query_all(
-        """SELECT ih.*, d.nome as divisione_nome, u.nome || ' ' || u.cognome as utente_nome
-           FROM import_history ih
-           LEFT JOIN divisioni d ON ih.divisione_id = d.id
-           LEFT JOIN utenti u ON ih.imported_by = u.id
-           ORDER BY ih.created_at DESC
-           LIMIT 50"""
-    )
+    """Import history. Filtrato per struttura dell'utente."""
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        imports = query_all(
+            """SELECT ih.*, d.nome as divisione_nome, u.nome || ' ' || u.cognome as utente_nome
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               LEFT JOIN utenti u ON ih.imported_by = u.id
+               WHERE d.struttura_id = ?
+               ORDER BY ih.created_at DESC
+               LIMIT 50""",
+            (struttura_id,)
+        )
+    else:
+        imports = query_all(
+            """SELECT ih.*, d.nome as divisione_nome, u.nome || ' ' || u.cognome as utente_nome
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               LEFT JOIN utenti u ON ih.imported_by = u.id
+               ORDER BY ih.created_at DESC
+               LIMIT 50"""
+        )
     return render_template('import/storico.html', imports=imports)
 
 
@@ -918,37 +943,71 @@ def storico():
 @import_bp.route('/import/email')
 @login_required
 def email_queue():
-    """Email verbale queue: pending items for manual review."""
-    pending = query_all(
-        """SELECT ih.*, d.nome as divisione_nome
-           FROM import_history ih
-           LEFT JOIN divisioni d ON ih.divisione_id = d.id
-           WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
-           ORDER BY ih.created_at DESC"""
-    )
+    """Email verbale queue: pending items for manual review. Filtrato per struttura."""
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        pending = query_all(
+            """SELECT ih.*, d.nome as divisione_nome
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
+                     AND d.struttura_id = ?
+               ORDER BY ih.created_at DESC""",
+            (struttura_id,)
+        )
+    else:
+        pending = query_all(
+            """SELECT ih.*, d.nome as divisione_nome
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
+               ORDER BY ih.created_at DESC"""
+        )
 
     for item in pending:
         parsed = _parse_email_ai_response(item.get('ai_response'))
         item['matricola_estratta'] = parsed.get('matricola', '')
         item['tipo_estratto'] = parsed.get('tipo', '')
 
-    counts = query_one(
-        """SELECT COUNT(*) as total,
-                  SUM(CASE WHEN stato = 'completed' THEN 1 ELSE 0 END) as completed,
-                  SUM(CASE WHEN stato = 'failed' THEN 1 ELSE 0 END) as failed
-           FROM import_history WHERE tipo_import = 'verbale_email'"""
-    )
+    if struttura_id:
+        counts = query_one(
+            """SELECT COUNT(*) as total,
+                      SUM(CASE WHEN ih.stato = 'completed' THEN 1 ELSE 0 END) as completed,
+                      SUM(CASE WHEN ih.stato = 'failed' THEN 1 ELSE 0 END) as failed
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               WHERE ih.tipo_import = 'verbale_email' AND d.struttura_id = ?""",
+            (struttura_id,)
+        )
+    else:
+        counts = query_one(
+            """SELECT COUNT(*) as total,
+                      SUM(CASE WHEN stato = 'completed' THEN 1 ELSE 0 END) as completed,
+                      SUM(CASE WHEN stato = 'failed' THEN 1 ELSE 0 END) as failed
+               FROM import_history WHERE tipo_import = 'verbale_email'"""
+        )
     completed_count = counts['completed'] or 0
     failed_count = counts['failed'] or 0
     total_count = counts['total'] or 0
 
-    recent_completed = query_all(
-        """SELECT ih.*, d.nome as divisione_nome
-           FROM import_history ih
-           LEFT JOIN divisioni d ON ih.divisione_id = d.id
-           WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
-           ORDER BY ih.created_at DESC LIMIT 10"""
-    )
+    if struttura_id:
+        recent_completed = query_all(
+            """SELECT ih.*, d.nome as divisione_nome
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
+                     AND d.struttura_id = ?
+               ORDER BY ih.created_at DESC LIMIT 10""",
+            (struttura_id,)
+        )
+    else:
+        recent_completed = query_all(
+            """SELECT ih.*, d.nome as divisione_nome
+               FROM import_history ih
+               LEFT JOIN divisioni d ON ih.divisione_id = d.id
+               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
+               ORDER BY ih.created_at DESC LIMIT 10"""
+        )
 
     return render_template('import/email_queue.html',
                            pending=pending,
@@ -961,7 +1020,7 @@ def email_queue():
 @import_bp.route('/import/email/<int:id>')
 @login_required
 def email_dettaglio(id):
-    """Detail view for a pending email verbale."""
+    """Detail view for a pending email verbale. Filtrato per struttura."""
     record = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
     if not record:
         flash('Record non trovato.', 'danger')
@@ -969,24 +1028,45 @@ def email_dettaglio(id):
 
     parsed = _parse_email_ai_response(record.get('ai_response'))
 
+    struttura_id = getattr(g, 'struttura_id', None)
+
     apparecchio = None
     matricola = parsed.get('matricola', '').strip()
     if matricola:
-        apparecchio = query_one(
-            """SELECT a.*, d.nome as divisione_nome
+        if struttura_id:
+            apparecchio = query_one(
+                """SELECT a.*, d.nome as divisione_nome
+                   FROM apparecchi a
+                   LEFT JOIN divisioni d ON a.divisione_id = d.id
+                   WHERE a.matricola = ? AND a.stato != 'dismesso' AND a.struttura_id = ?""",
+                (matricola, struttura_id)
+            )
+        else:
+            apparecchio = query_one(
+                """SELECT a.*, d.nome as divisione_nome
+                   FROM apparecchi a
+                   LEFT JOIN divisioni d ON a.divisione_id = d.id
+                   WHERE a.matricola = ? AND a.stato != 'dismesso'""",
+                (matricola,)
+            )
+
+    if struttura_id:
+        apparecchi_list = query_all(
+            """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
                FROM apparecchi a
                LEFT JOIN divisioni d ON a.divisione_id = d.id
-               WHERE a.matricola = ? AND a.stato != 'dismesso'""",
-            (matricola,)
+               WHERE a.stato != 'dismesso' AND a.struttura_id = ?
+               ORDER BY a.matricola""",
+            (struttura_id,)
         )
-
-    apparecchi_list = query_all(
-        """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
-           FROM apparecchi a
-           LEFT JOIN divisioni d ON a.divisione_id = d.id
-           WHERE a.stato != 'dismesso'
-           ORDER BY a.matricola"""
-    )
+    else:
+        apparecchi_list = query_all(
+            """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
+               FROM apparecchi a
+               LEFT JOIN divisioni d ON a.divisione_id = d.id
+               WHERE a.stato != 'dismesso'
+               ORDER BY a.matricola"""
+        )
 
     return render_template('import/email_dettaglio.html',
                            record=record, parsed=parsed,
@@ -1008,6 +1088,37 @@ def email_conferma(id):
         flash('Seleziona un apparecchio.', 'warning')
         return redirect(url_for('import.email_dettaglio', id=id))
 
+    # FIX 5: verifica che l'apparecchio appartenga alla struttura dell'utente
+    if apparecchio_id:
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            appar = query_one(
+                "SELECT id FROM apparecchi WHERE id = ? AND struttura_id = ?",
+                (apparecchio_id, struttura_id)
+            )
+            if not appar:
+                flash('Apparecchio non trovato o non accessibile.', 'danger')
+                return redirect(url_for('import.email_queue'))
+
+    # FIX 7: validazione tipo manutenzione
+    TIPI_VALIDI = ('preventiva', 'correttiva', 'straordinaria', 'verifica_elettrica', 'collaudo')
+    tipo = request.form.get('tipo', 'preventiva')
+    if tipo not in TIPI_VALIDI:
+        tipo = 'preventiva'
+
+    # FIX 8: gestione sicura periodicita_giorni e costo
+    periodicita_raw = request.form.get('periodicita_giorni')
+    try:
+        periodicita = int(float(periodicita_raw)) if periodicita_raw else None
+    except (ValueError, TypeError):
+        periodicita = None
+
+    costo_raw = request.form.get('costo')
+    try:
+        costo = float(costo_raw) if costo_raw else None
+    except (ValueError, TypeError):
+        costo = None
+
     try:
         execute(
             """INSERT INTO manutenzioni
@@ -1016,14 +1127,14 @@ def email_conferma(id):
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 int(apparecchio_id),
-                request.form.get('tipo', 'preventiva'),
+                tipo,
                 request.form.get('data_intervento'),
                 request.form.get('prossima_scadenza') or None,
-                int(request.form.get('periodicita_giorni')) if request.form.get('periodicita_giorni') else None,
+                periodicita,
                 request.form.get('tecnico_ditta') or None,
                 request.form.get('descrizione') or None,
                 request.form.get('esito') or None,
-                float(request.form.get('costo')) if request.form.get('costo') else None,
+                costo,
                 g.user['id']
             )
         )
@@ -1045,7 +1156,7 @@ def email_conferma(id):
         return redirect(url_for('import.email_dettaglio', id=id))
 
 
-@import_bp.route('/import/email/<int:id>/scarta')
+@import_bp.route('/import/email/<int:id>/scarta', methods=['POST'])
 @login_required
 def email_scarta(id):
     """Discard a pending email verbale."""

@@ -657,8 +657,10 @@ def classify_document_type_from_pdf(filepath, api_key, model='claude-haiku-4-5-2
 # Duplicate detection
 # ---------------------------------------------------------------------------
 
-def find_duplicates(items, divisione_id):
-    """Match extracted items against existing apparecchi in the database."""
+def find_duplicates(items, divisione_id, struttura_id=None):
+    """Match extracted items against existing apparecchi in the database.
+    Filtra per struttura_id quando disponibile per garantire isolamento multi-tenant.
+    """
     from models import query_one, query_all
 
     results = []
@@ -675,9 +677,16 @@ def find_duplicates(items, divisione_id):
         descrizione = item.get('descrizione', '').strip() if item.get('descrizione') else ''
 
         if matricola:
-            existing = query_one(
-                "SELECT * FROM apparecchi WHERE matricola = ?", (matricola,)
-            )
+            if struttura_id:
+                existing = query_one(
+                    "SELECT * FROM apparecchi WHERE matricola = ? AND struttura_id = ? AND stato != 'dismesso'",
+                    (matricola, struttura_id)
+                )
+            else:
+                existing = query_one(
+                    "SELECT * FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
+                    (matricola,)
+                )
             if existing:
                 result['match_type'] = 'esatto'
                 result['match_id'] = existing['id']
@@ -687,9 +696,16 @@ def find_duplicates(items, divisione_id):
                 continue
 
         if descrizione:
-            existing = query_one(
-                "SELECT * FROM apparecchi WHERE descrizione = ?", (descrizione,)
-            )
+            if struttura_id:
+                existing = query_one(
+                    "SELECT * FROM apparecchi WHERE descrizione = ? AND struttura_id = ? AND stato != 'dismesso'",
+                    (descrizione, struttura_id)
+                )
+            else:
+                existing = query_one(
+                    "SELECT * FROM apparecchi WHERE descrizione = ? AND stato != 'dismesso'",
+                    (descrizione,)
+                )
             if existing:
                 result['match_type'] = 'fuzzy'
                 result['match_id'] = existing['id']
@@ -701,12 +717,20 @@ def find_duplicates(items, divisione_id):
         marca = item.get('marca', '').strip()
         modello = item.get('modello', '').strip()
         if marca and modello:
-            existing = query_one(
-                """SELECT * FROM apparecchi
-                   WHERE LOWER(marca) = LOWER(?) AND LOWER(modello) = LOWER(?)
-                   AND divisione_id = ?""",
-                (marca, modello, divisione_id)
-            )
+            if struttura_id:
+                existing = query_one(
+                    """SELECT * FROM apparecchi
+                       WHERE LOWER(marca) = LOWER(?) AND LOWER(modello) = LOWER(?)
+                       AND divisione_id = ? AND struttura_id = ?""",
+                    (marca, modello, divisione_id, struttura_id)
+                )
+            else:
+                existing = query_one(
+                    """SELECT * FROM apparecchi
+                       WHERE LOWER(marca) = LOWER(?) AND LOWER(modello) = LOWER(?)
+                       AND divisione_id = ?""",
+                    (marca, modello, divisione_id)
+                )
             if existing:
                 result['match_type'] = 'fuzzy'
                 result['match_id'] = existing['id']

@@ -140,11 +140,12 @@
                         <button type="submit" class="btn btn-success">
                             <i class="bi bi-check-lg me-1"></i> Conferma e Importa
                         </button>
-                        <a href="{{ url_for('import.email_scarta', id=record.id) }}"
-                           class="btn btn-outline-danger"
-                           onclick="return confirm('Sei sicuro di voler scartare questo verbale?')">
-                            <i class="bi bi-x-lg me-1"></i> Scarta
-                        </a>
+                        <form method="post" action="{{ url_for('import.email_scarta', id=record.id) }}" style="display:inline">
+                            <button type="submit" class="btn btn-outline-danger"
+                                    onclick="return confirm('Scartare questo verbale?')">
+                                <i class="bi bi-x-lg me-1"></i> Scarta
+                            </button>
+                        </form>
                     </div>
                 </form>
             </div>
