@@ -162,6 +162,8 @@ def _load_user_from_session():
                 "SELECT * FROM strutture WHERE id = ? AND attiva = 1",
                 (struttura_impersonata_id,)
             )
+            if struttura is None:
+                session.pop('struttura_impersonata_id', None)
     else:
         struttura_id = g.user.get('struttura_id')
         if struttura_id:
@@ -347,8 +349,8 @@ def login():
         (ip, email)
     )
     execute(
-        "DELETE FROM login_attempts WHERE (ip_address = ? OR email = ?) AND esito = 'fallito'",
-        (ip, email)
+        "DELETE FROM login_attempts WHERE ip_address = ? AND esito = 'fallito'",
+        (ip,)
     )
 
     # Redirect based on primo_accesso
@@ -380,6 +382,9 @@ def logout():
 @admin_required
 def logout_ovunque():
     """Revoca tutte le sessioni di tutti gli utenti della struttura corrente (struttura-wide)."""
+    if not g.struttura_id:
+        flash('Nessuna struttura attiva.', 'warning')
+        return redirect(url_for('auth.index'))
     execute(
         "DELETE FROM sessioni WHERE utente_id IN (SELECT id FROM utenti WHERE struttura_id = ?)",
         (g.struttura_id,)

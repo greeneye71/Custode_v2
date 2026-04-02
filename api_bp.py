@@ -36,7 +36,8 @@ def _token_auth(scope='read'):
             if not token:
                 return jsonify({'errore': 'Token non valido o scaduto'}), 401
 
-            if scope == 'write' and 'write' not in (token['scopes'] or ''):
+            scopes_list = (token['scopes'] or '').split()
+            if scope == 'write' and 'write' not in scopes_list:
                 return jsonify({'errore': 'Permessi insufficienti'}), 403
 
             try:
@@ -167,6 +168,15 @@ def crea_manutenzione():
     if data['tipo'] not in tipi_validi:
         return jsonify({'errore': f'tipo deve essere uno di: {tipi_validi}'}), 400
 
+    from datetime import datetime as _dt
+    for campo_data in ['data_intervento', 'prossima_scadenza']:
+        val = data.get(campo_data)
+        if val:
+            try:
+                _dt.strptime(val, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({'errore': f'{campo_data} deve essere nel formato YYYY-MM-DD'}), 400
+
     app_ = query_one(
         "SELECT id FROM apparecchi WHERE id=? AND struttura_id=?",
         (data['apparecchio_id'], g.api_struttura_id)
@@ -177,8 +187,8 @@ def crea_manutenzione():
     cur = execute("""
         INSERT INTO manutenzioni
             (apparecchio_id, tipo, data_intervento, prossima_scadenza,
-             periodicita_giorni, tecnico_ditta, descrizione, esito, costo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             periodicita_giorni, tecnico_ditta, descrizione, esito, costo, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     """, (
         data['apparecchio_id'], data['tipo'], data['data_intervento'],
         data.get('prossima_scadenza'), data.get('periodicita_giorni'),

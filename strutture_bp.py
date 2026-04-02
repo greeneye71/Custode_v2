@@ -67,7 +67,8 @@ def nuova():
             if 'UNIQUE' in str(e):
                 flash(f'Il codice "{codice}" è già in uso.', 'danger')
             else:
-                flash(f'Errore: {e}', 'danger')
+                current_app.logger.error(f'Errore creazione struttura: {e}')
+                flash('Errore durante il salvataggio. Riprovare.', 'danger')
         return render_template('strutture/form.html', struttura=request.form)
 
     return render_template('strutture/form.html', struttura=None)
@@ -109,7 +110,8 @@ def modifica(struttura_id):
             flash('Struttura aggiornata.', 'success')
             return redirect(url_for('strutture.index'))
         except Exception as e:
-            flash(f'Errore: {e}', 'danger')
+            current_app.logger.error(f'Errore modifica struttura {struttura_id}: {e}')
+            flash('Errore durante il salvataggio. Riprovare.', 'danger')
         struttura = dict(struttura) | dict(request.form)
 
     return render_template('strutture/form.html', struttura=struttura)
@@ -184,6 +186,11 @@ def api_tokens(struttura_id):
 @strutture_bp.route('/<int:struttura_id>/tokens/nuovo', methods=['POST'])
 @superadmin_required
 def nuovo_token(struttura_id):
+    struttura = query_one("SELECT id, nome FROM strutture WHERE id=? AND attiva=1", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
     import hashlib
     import secrets as _secrets
     nome = request.form.get('nome', '').strip()
@@ -215,12 +222,15 @@ def nuovo_token(struttura_id):
 @strutture_bp.route('/<int:struttura_id>/tokens/<int:token_id>/revoca', methods=['POST'])
 @superadmin_required
 def revoca_token(struttura_id, token_id):
-    execute(
+    cur = execute(
         "UPDATE api_tokens SET attivo=0 WHERE id=? AND struttura_id=?",
         (token_id, struttura_id)
     )
-    log_attivita(g.user['id'], 'revoca_token', 'api_tokens', token_id,
-                 dettagli=f'Token {token_id} revocato per struttura {struttura_id}',
-                 struttura_id=struttura_id)
-    flash('Token revocato.', 'success')
+    if cur.rowcount == 0:
+        flash('Token non trovato.', 'warning')
+    else:
+        log_attivita(g.user['id'], 'revoca_token', 'api_tokens', token_id,
+                     dettagli=f'Token {token_id} revocato per struttura {struttura_id}',
+                     struttura_id=struttura_id)
+        flash('Token revocato.', 'success')
     return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
