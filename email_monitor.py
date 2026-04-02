@@ -9,21 +9,28 @@ import os
 import email
 import imaplib
 import base64
+import hashlib
 import json
 import tempfile
 import logging
 import traceback
 from datetime import datetime, timedelta
+from werkzeug.utils import secure_filename
 
 logger = logging.getLogger('medinventory.email')
 
 
+def _get_fernet(encryption_key):
+    """Deriva la chiave Fernet da encryption_key usando SHA-256 (compatibile con scheduler.py)."""
+    from cryptography.fernet import Fernet
+    fernet_key = base64.urlsafe_b64encode(hashlib.sha256(encryption_key.encode()).digest())
+    return Fernet(fernet_key)
+
+
 def get_fernet(config):
     """Get Fernet cipher from app config."""
-    from cryptography.fernet import Fernet
     key = config.get('encryption_key', config['secret_key'])
-    fernet_key = base64.urlsafe_b64encode(key[:32].encode().ljust(32, b'\0'))
-    return Fernet(fernet_key)
+    return _get_fernet(key)
 
 
 def decrypt_password(encrypted_password, config):
@@ -100,7 +107,8 @@ def check_emails_for_division(email_cfg, app_config, db_path):
             try:
                 _process_email(
                     mail, msg_id, divisione_id, api_key, ai_model,
-                    uploads_dir, db_path, account, app_config=app_config
+                    uploads_dir, db_path, account, app_config=app_config,
+                    struttura_id=struttura_id
                 )
             except Exception as e:
                 logger.error(f"Errore processando email {msg_id} per {account}: {e}")
@@ -121,7 +129,7 @@ def check_emails_for_division(email_cfg, app_config, db_path):
                 pass
 
 
-def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, db_path, account, app_config=None):
+def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, db_path, account, app_config=None, struttura_id=None):
     """Process a single email message: extract PDF attachments and analyze."""
     import sqlite3
     from ai_service import parse_verbale_with_ai, classify_email_document_type, analyze_verifiche_with_ai
@@ -161,11 +169,14 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
         return
 
     # Process each PDF
-    for att in pdf_attachments:
+    for idx, att in enumerate(pdf_attachments):
         safe_name = None
         try:
-            # Save PDF to disk
-            safe_name = f"{int(datetime.now().timestamp())}_{att['filename'].replace(' ', '_')}"
+            # Save PDF to disk con nome sicuro (previene path traversal)
+            safe_base = secure_filename(att.get('filename', '') or 'allegato.pdf')
+            if not safe_base or safe_base == '.pdf':
+                safe_base = 'allegato.pdf'
+            safe_name = f"{int(datetime.now().timestamp())}_{idx}_{safe_base}"
             pdf_path = os.path.join(uploads_dir, safe_name)
             with open(pdf_path, 'wb') as f:
                 f.write(att['data'])
@@ -208,7 +219,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 try:
                     for item in items:
                         matricola = item.get('matricola', '').strip()
-                        item_app_id = _find_apparecchio(conn, matricola, divisione_id)
+                        item_app_id = _find_apparecchio(conn, matricola, divisione_id, struttura_id=struttura_id)
 
                         if item_app_id and item.get('data_verifica'):
                             try:
@@ -267,7 +278,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 # Copy PDF to verbali folder for attachment to manutenzioni
                 verbali_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), '..', 'uploads', 'verbali')
                 os.makedirs(verbali_dir, exist_ok=True)
-                verbale_name = f"{int(datetime.now().timestamp())}_{att['filename'].replace(' ', '_')}"
+                verbale_name = f"{int(datetime.now().timestamp())}_{idx}_{safe_base}"
                 verbale_dest = os.path.join(verbali_dir, verbale_name)
                 import shutil
                 shutil.copy2(pdf_path, verbale_dest)
@@ -279,7 +290,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 try:
                     for parsed_data in parsed_items:
                         matricola = (parsed_data.get('matricola') or '').strip()
-                        apparecchio_id = _find_apparecchio(conn, matricola, divisione_id)
+                        apparecchio_id = _find_apparecchio(conn, matricola, divisione_id, struttura_id=struttura_id)
 
                         if apparecchio_id:
                             last_apparecchio_id = apparecchio_id
@@ -353,10 +364,19 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
             )
 
 
-def _find_apparecchio(conn, matricola, divisione_id):
-    """Find apparecchio ID by matricola using an existing connection."""
+def _find_apparecchio(conn, matricola, divisione_id=None, struttura_id=None):
+    """Trova apparecchio per matricola, filtrando per struttura_id e/o divisione_id."""
     if not matricola:
         return None
+    # Priorità: filtra per struttura_id se disponibile
+    if struttura_id:
+        row = conn.execute(
+            "SELECT id FROM apparecchi WHERE matricola = ? AND struttura_id = ? AND stato != 'dismesso'",
+            (matricola, struttura_id)
+        ).fetchone()
+        if row:
+            return row['id']
+    # Fallback: filtra per divisione_id
     if divisione_id:
         row = conn.execute(
             "SELECT id FROM apparecchi WHERE matricola = ? AND divisione_id = ? AND stato != 'dismesso'",

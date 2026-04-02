@@ -108,18 +108,20 @@ class BackgroundScheduler:
             logger.error(f"Errore controllo email: {e}")
 
     def _cleanup_sessions(self):
-        """Remove expired sessions from the database."""
+        """Rimuove le sessioni scadute dal database."""
         db_path = self.app.config['DATABASE_PATH']
         try:
             conn = sqlite3.connect(db_path)
-            cursor = conn.execute(
-                "DELETE FROM sessioni WHERE expires_at < datetime('now')"
-            )
-            conn.commit()
-            deleted = cursor.rowcount
-            conn.close()
-            if deleted > 0:
-                logger.info(f"Eliminate {deleted} sessioni scadute.")
+            try:
+                cursor = conn.execute(
+                    "DELETE FROM sessioni WHERE expires_at < datetime('now')"
+                )
+                conn.commit()
+                deleted = cursor.rowcount
+                if deleted > 0:
+                    logger.info(f"Eliminate {deleted} sessioni scadute.")
+            finally:
+                conn.close()
         except Exception as e:
             logger.error(f"Errore pulizia sessioni: {e}")
 
