@@ -22,22 +22,41 @@ def seed_database():
 
     with app.app_context():
         # ------------------------------------------------------------------
+        # Struttura di default (v2: necessaria prima di divisioni e utenti)
+        # ------------------------------------------------------------------
+        struttura = query_one("SELECT id FROM strutture LIMIT 1")
+        if not struttura:
+            print("Creazione struttura di default...")
+            cur = execute(
+                """INSERT INTO strutture (nome, codice, descrizione, modalita, attiva)
+                   VALUES (?, ?, ?, ?, ?)""",
+                ('Struttura Principale', 'DEFAULT',
+                 'Struttura predefinita (rinominare da Amministrazione → Strutture)',
+                 'ingegneria_clinica', 1)
+            )
+            struttura_id = cur.lastrowid
+            print(f"  -> Struttura creata (id={struttura_id})")
+        else:
+            struttura_id = struttura['id']
+            print(f"Struttura esistente (id={struttura_id}), skip.")
+
+        # ------------------------------------------------------------------
         # Divisioni (only if none exist)
         # ------------------------------------------------------------------
         existing = query_all("SELECT id FROM divisioni")
         if not existing:
             print("Creazione divisioni di esempio...")
             execute(
-                """INSERT INTO divisioni (nome, codice, colore, descrizione)
-                   VALUES (?, ?, ?, ?)""",
+                """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+                   VALUES (?, ?, ?, ?, ?)""",
                 ('Divisione 1', 'DIV1', '#0ea5e9',
-                 'Prima divisione (rinominare da pannello admin)')
+                 'Prima divisione (rinominare da pannello admin)', struttura_id)
             )
             execute(
-                """INSERT INTO divisioni (nome, codice, colore, descrizione)
-                   VALUES (?, ?, ?, ?)""",
+                """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+                   VALUES (?, ?, ?, ?, ?)""",
                 ('Divisione 2', 'DIV2', '#10b981',
-                 'Seconda divisione (rinominare da pannello admin)')
+                 'Seconda divisione (rinominare da pannello admin)', struttura_id)
             )
             print("  -> 2 divisioni create")
         else:
@@ -51,10 +70,10 @@ def seed_database():
             print("Creazione utente admin predefinito...")
             password_hash = generate_password_hash('admin123')
             cursor = execute(
-                """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, primo_accesso)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 ('admin@medinventory.local', password_hash,
-                 'Amministratore', 'Sistema', 'admin', 1)
+                 'Amministratore', 'Sistema', 'admin', struttura_id, 1)
             )
             admin_id = cursor.lastrowid
 
