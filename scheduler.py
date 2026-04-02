@@ -135,7 +135,7 @@ class BackgroundScheduler:
             for struttura in strutture:
                 sid = struttura['id']
                 frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
-                attivo    = get_struttura_config(sid, 'report_schedulato_attivo', '1')
+                attivo    = get_struttura_config(sid, 'report_schedulato_attivo', '0')
                 if attivo != '1':
                     continue
                 if not self._is_digest_due(frequenza):
@@ -195,20 +195,10 @@ class BackgroundScheduler:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    def _invia_pdf_allegato(self, struttura, pdf_path, global_cfg):
-        """Invia il PDF come allegato email alla struttura."""
-        import smtplib, os
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
-        from email.mime.application import MIMEApplication
+    def _decrypt_smtp_password(self, struttura, global_cfg):
+        """Decripta la password SMTP cifrata con Fernet, o legge quella in chiaro dal config globale."""
         from models import get_struttura_config
-
         sid = struttura['id']
-        smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
-        smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
-        smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
-
-        # Decripta la password SMTP (stessa logica di _invia_digest)
         smtp_pass_enc = get_struttura_config(sid, 'smtp_password_encrypted')
         smtp_pass = ''
         if smtp_pass_enc:
@@ -223,6 +213,22 @@ class BackgroundScheduler:
                 logger.warning(f"Impossibile decifrare smtp_password per struttura {struttura['nome']}: {e}")
         if not smtp_pass:
             smtp_pass = global_cfg.get('smtp_password', '')
+        return smtp_pass
+
+    def _invia_pdf_allegato(self, struttura, pdf_path, global_cfg):
+        """Invia il PDF come allegato email alla struttura."""
+        import smtplib, os
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+        from models import get_struttura_config
+
+        sid = struttura['id']
+        smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
+        smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
+        smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
+
+        smtp_pass = self._decrypt_smtp_password(struttura, global_cfg)
 
         smtp_from = get_struttura_config(sid, 'smtp_from') or smtp_user
         use_tls = (get_struttura_config(sid, 'smtp_use_tls') or '1') == '1'
@@ -277,20 +283,7 @@ class BackgroundScheduler:
         smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
         smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
         smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
-        smtp_pass_enc = get_struttura_config(sid, 'smtp_password_encrypted')
-        smtp_pass = ''
-        if smtp_pass_enc:
-            try:
-                import base64, hashlib
-                from cryptography.fernet import Fernet
-                key = global_cfg.get('encryption_key', '')
-                if key:
-                    fernet_key = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
-                    smtp_pass = Fernet(fernet_key).decrypt(smtp_pass_enc.encode()).decode()
-            except Exception as e:
-                logger.warning(f"Impossibile decifrare smtp_password per struttura {struttura['nome']}: {e}")
-        if not smtp_pass:
-            smtp_pass = global_cfg.get('smtp_password', '')
+        smtp_pass = self._decrypt_smtp_password(struttura, global_cfg)
 
         smtp_from = get_struttura_config(sid, 'smtp_from') or smtp_user
         use_tls = (get_struttura_config(sid, 'smtp_use_tls') or '1') == '1'

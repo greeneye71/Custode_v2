@@ -407,9 +407,12 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
     """Genera un PDF con lo scadenzario per struttura e lo salva in output_path."""
     from models import query_all, query_one
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
     from datetime import datetime
 
     struttura = query_one("SELECT * FROM strutture WHERE id=?", (struttura_id,))
+    if struttura is None:
+        raise ValueError(f"Struttura con id={struttura_id} non trovata.")
     scadenze = query_all("""
         SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
                d.nome as divisione_nome
@@ -423,10 +426,11 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
 
     pdf = FPDF()
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font('Helvetica', 'B', 16)
-    pdf.cell(0, 10, f"Scadenzario — {struttura['nome']}", ln=True)
+    pdf.cell(0, 10, f"Scadenzario — {struttura['nome']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font('Helvetica', '', 10)
-    pdf.cell(0, 6, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True)
+    pdf.cell(0, 6, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(4)
 
     colori = {
@@ -438,7 +442,7 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
 
     if not scadenze:
         pdf.set_font('Helvetica', 'I', 10)
-        pdf.cell(0, 8, "Nessuna scadenza critica.", ln=True)
+        pdf.cell(0, 8, "Nessuna scadenza critica.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     else:
         for s in scadenze:
             r, g_, b = colori.get(s['priorita'], (0, 0, 0))
@@ -447,12 +451,12 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
             nome_app = s['descrizione'] or f"{s['marca']} {s['modello']}"
             pdf.cell(0, 5,
                 f"[{s['priorita'].upper()}] {nome_app} — {s['divisione_nome']}",
-                ln=True)
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(0, 0, 0)
             pdf.set_font('Helvetica', '', 9)
             pdf.cell(0, 5,
                 f"  Mat: {s['matricola']} | Scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg) | Tipo: {s['tipo_manutenzione']}",
-                ln=True)
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.output(output_path)
 
