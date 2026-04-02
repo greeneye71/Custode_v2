@@ -301,12 +301,45 @@ La modalità si imposta per singola struttura nell'interfaccia superadmin (`/str
 
 L'API REST v1 è disponibile all'indirizzo `/api/v1`. Tutti gli endpoint richiedono autenticazione Bearer token e restituiscono JSON.
 
-Documentazione completa: `docs/API.md` *(in preparazione)*
+Documentazione completa: [`docs/API.md`](docs/API.md)
 
 Esempio di chiamata:
 
 ```bash
 curl -H "Authorization: Bearer <token>" http://localhost:5000/api/v1/apparecchi
+```
+
+---
+
+## Cambio modalità operativa
+
+Due script semplificano il passaggio tra le due modalità:
+
+### `toggle_modalita.py` — cambia modalità con un comando
+
+```bash
+python toggle_modalita.py            # mostra stato attuale e chiede conferma (toggling)
+python toggle_modalita.py --status   # mostra solo lo stato senza modificare
+python toggle_modalita.py --single   # forza modalità single-struttura (legacy v1.x)
+python toggle_modalita.py --multi    # forza modalità multi-struttura (v2.0)
+```
+
+Modifica automaticamente `single_struttura` in `config.local.json` e avvisa se manca il superadmin.
+
+### `crea_superadmin.py` — crea o reimposta il superadmin
+
+```bash
+python crea_superadmin.py
+```
+
+Richiede email e password interattivamente (con validazione). Se il superadmin esiste già, offre di reimpostare la password.
+
+### Flusso consigliato per attivare multi-struttura
+
+```bash
+python toggle_modalita.py --multi   # imposta single_struttura: false
+python crea_superadmin.py           # crea l'utente superadmin
+python run_production.py            # riavvia l'applicazione
 ```
 
 ---
@@ -399,6 +432,8 @@ MedInventory/
 ├── migrate_v1_3_2.py       # Migrazione v1.3 → v1.3.2
 ├── migrate_v1_4.py         # Migrazione v1.3.x → v1.4
 ├── migrate_v2_0.py         # Migrazione v1.4.x → v2.0
+├── toggle_modalita.py      # Cambia modalità single ↔ multi-struttura
+├── crea_superadmin.py      # Crea o reimposta il superadmin
 │
 ├── install_service.bat     # Installazione servizio Windows
 ├── install_service.sh      # Installazione servizio Linux (systemd)
@@ -415,7 +450,8 @@ MedInventory/
 ├── backups/                # Backup automatici DB (auto-creata)
 ├── logs/                   # Log rotanti (auto-creata)
 └── docs/                   # Documentazione tecnica
-    └── API.md              # Riferimento REST API (in preparazione)
+    ├── API.md              # Riferimento REST API
+    └── MIGRAZIONE_v2.md    # Guida migrazione da v1.x a v2.0
 ```
 
 ---

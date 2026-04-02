@@ -133,10 +133,19 @@ Impostando `"single_struttura": true` in `config.json` (o `config.local.json`):
 
 ## 5. Modalità multi-struttura `single_struttura: false`
 
-Per abilitare la gestione di più strutture/clienti indipendenti:
+Per abilitare la gestione di più strutture/clienti indipendenti è disponibile
+lo script `toggle_modalita.py` che automatizza il cambio di configurazione.
 
 ### 5.1 Impostare la modalità multi-struttura
-In `config.json` (o `config.local.json`):
+
+```bash
+python toggle_modalita.py --multi
+```
+
+Lo script imposta `"single_struttura": false` in `config.local.json` e avvisa
+se non esiste ancora un superadmin. In alternativa, modificare manualmente
+`config.local.json`:
+
 ```json
 {
   "single_struttura": false
@@ -144,41 +153,41 @@ In `config.json` (o `config.local.json`):
 ```
 
 ### 5.2 Creare un utente superadmin
-Il superadmin è l'unico ruolo con accesso globale a tutte le strutture.
-Può essere creato direttamente nel database oppure tramite `seed.py` se si
-parte da zero:
 
 ```bash
-# Opzione A: via shell Python (installazione esistente)
-python - <<'EOF'
-import sqlite3, hashlib, json, os
-
-db_path = json.load(open('config.json')).get('database_path', 'data/database.sqlite')
-db = sqlite3.connect(db_path)
-password_hash = hashlib.sha256(b'ChangeMe123!').hexdigest()
-db.execute(
-    "INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id) "
-    "VALUES (?, ?, 'Super', 'Admin', 'superadmin', NULL)",
-    ('superadmin@medinventory.local', password_hash)
-)
-db.commit()
-db.close()
-print("Superadmin creato.")
-EOF
+python crea_superadmin.py
 ```
 
-> Cambiare immediatamente la password dopo il primo accesso.
+Lo script chiede interattivamente email e password (minimo 8 caratteri, una
+maiuscola, un numero) e crea l'utente superadmin nel database. Se il superadmin
+esiste già, offre di reimpostare la password.
 
-### 5.3 Creare strutture aggiuntive
+> Cambiare la password al primo accesso se si usa la password di default.
+
+### 5.3 Riavviare l'applicazione
+
+```bash
+python run_production.py
+```
+
+### 5.4 Creare strutture aggiuntive
+
 Accedere con il superadmin e navigare in **Strutture → Nuova struttura**.
 Compilare nome, codice univoco e modalità operativa (`standard` o
 `ingegneria_clinica`).
 
-### 5.4 Impersonazione struttura
+### 5.5 Impersonazione struttura
+
 Il superadmin può selezionare una struttura dal menu a tendina in navbar;
 un banner colorato indica la struttura attiva. Tutte le operazioni successive
 (lettura/scrittura apparecchi, manutenzioni, utenti) avvengono nel contesto
 di quella struttura.
+
+### 5.6 Tornare alla modalità single-struttura
+
+```bash
+python toggle_modalita.py --single
+```
 
 ---
 
