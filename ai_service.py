@@ -120,6 +120,10 @@ REGOLE:
 _GEMINI_COMPLETIONS_URL = (
     'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
 )
+_GEMINI_GENERATE_URL = (
+    'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
+)
+_OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions'
 
 
 def _get_ai_config(config=None, struttura_id=None):
@@ -141,6 +145,7 @@ def _get_ai_config(config=None, struttura_id=None):
         'provider':       _sc('ai_provider', 'anthropic'),
         'api_key':        _sc('anthropic_api_key', ''),
         'gemini_api_key': _sc('gemini_api_key', ''),
+        'openai_api_key': _sc('openai_api_key', ''),
         'model_import':   _sc('ai_import_model', 'claude-sonnet-4-20250514'),
         'model_email':    _sc('ai_email_model', 'claude-haiku-4-5-20251001'),
         'local_base_url': _sc('ai_local_base_url', 'http://localhost:11434'),
@@ -224,7 +229,7 @@ def _call_openai_compatible(system_prompt, user_message, base_url, model, max_to
 
 
 def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
-    """Chiama l'API Google Gemini tramite endpoint OpenAI-compatibile."""
+    """Chiama l'API Google Gemini tramite endpoint OpenAI-compatibile (solo testo)."""
     import httpx
 
     payload = {
@@ -248,6 +253,96 @@ def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096):
+    """Chiama l'API nativa Google Gemini con un PDF in-line base64."""
+    import httpx
+
+    pdf_data = _pdf_to_base64(pdf_path)
+    url = _GEMINI_GENERATE_URL.format(model=model)
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": "application/pdf", "data": pdf_data}},
+                {"text": user_text},
+            ]
+        }],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.1,
+        },
+    }
+    with httpx.Client(timeout=300.0) as client:
+        response = client.post(url, json=payload, params={"key": api_key})
+        response.raise_for_status()
+        data = response.json()
+
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def _call_openai(system_prompt, user_message, api_key, model, max_tokens=4096):
+    """Chiama l'API OpenAI (cloud) — solo testo."""
+    import httpx
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+    }
+    with httpx.Client(timeout=300.0) as client:
+        response = client.post(_OPENAI_API_URL, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def _call_openai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096):
+    """Chiama l'API OpenAI con un PDF in-line base64 (supportato da GPT-4o e GPT-4o-mini)."""
+    import httpx
+
+    pdf_data = _pdf_to_base64(pdf_path)
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": os.path.basename(pdf_path),
+                            "file_data": f"data:application/pdf;base64,{pdf_data}",
+                        },
+                    },
+                    {"type": "text", "text": user_text},
+                ],
+            },
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+    }
+    with httpx.Client(timeout=300.0) as client:
+        response = client.post(_OPENAI_API_URL, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+    return data["choices"][0]["message"]["content"].strip()
+
+
 def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, config=None, struttura_id=None):
     """Unified AI call that routes to the correct provider."""
     ai_cfg = _get_ai_config(config, struttura_id)
@@ -257,6 +352,8 @@ def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, confi
         return _call_anthropic(system_prompt, user_message, api_key, model, max_tokens)
     elif provider == 'gemini':
         return _call_gemini(system_prompt, user_message, ai_cfg['gemini_api_key'], model, max_tokens)
+    elif provider == 'openai':
+        return _call_openai(system_prompt, user_message, ai_cfg['openai_api_key'], model, max_tokens)
     else:
         # ollama, lmstudio, openai_compatible
         base_url = ai_cfg['local_base_url']
@@ -265,20 +362,23 @@ def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, confi
 
 
 def _call_ai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096, config=None, struttura_id=None):
-    """Call AI with a PDF document. Falls back to text extraction for non-Anthropic providers."""
+    """Chiama l'AI con un documento PDF. Supporto nativo per Anthropic, Gemini e OpenAI."""
     ai_cfg = _get_ai_config(config, struttura_id)
     provider = ai_cfg['provider']
 
     if provider == 'anthropic':
         return _call_anthropic_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens)
+    elif provider == 'gemini':
+        return _call_gemini_with_pdf(system_prompt, user_text, pdf_path, ai_cfg['gemini_api_key'], model, max_tokens)
+    elif provider == 'openai':
+        return _call_openai_with_pdf(system_prompt, user_text, pdf_path, ai_cfg['openai_api_key'], model, max_tokens)
     else:
-        # Gemini e modelli locali non supportano PDF nativamente — estrae il testo
+        # Modelli locali: non supportano PDF nativamente — estrae il testo
         pdf_text = extract_from_pdf(pdf_path)
         if not pdf_text or len(pdf_text.strip()) < 20:
-            provider_label = 'Google Gemini' if provider == 'gemini' else 'il provider AI locale'
             raise ValueError(
-                f"Il PDF è scansionato (immagine) e {provider_label} non supporta "
-                "l'analisi diretta di PDF. Utilizzare Anthropic Claude per i PDF scansionati."
+                "Il PDF è scansionato (immagine) e il provider AI locale non supporta "
+                "l'analisi diretta di PDF. Utilizzare Anthropic, Gemini o OpenAI."
             )
         combined = f"{user_text}\n\n{pdf_text[:15000]}"
         return _call_ai(system_prompt, combined, api_key, model, max_tokens, config, struttura_id)
@@ -302,6 +402,10 @@ def check_ai_configured(config=None, struttura_id=None):
     elif provider == 'gemini':
         if not ai_cfg['gemini_api_key']:
             return False, 'Chiave API Google Gemini non configurata. Vai in Configurazione.'
+        return True, None
+    elif provider == 'openai':
+        if not ai_cfg['openai_api_key']:
+            return False, 'Chiave API OpenAI non configurata. Vai in Configurazione.'
         return True, None
     else:
         if not ai_cfg['local_base_url']:

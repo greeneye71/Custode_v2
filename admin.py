@@ -29,19 +29,25 @@ ANTHROPIC_MODELS = [
 ]
 
 GEMINI_MODELS = [
-    ('gemini-2.0-flash',          'Gemini 2.0 Flash — Veloce (consigliato)'),
-    ('gemini-2.0-flash-lite',     'Gemini 2.0 Flash-Lite — Più economico'),
-    ('gemini-1.5-pro',            'Gemini 1.5 Pro — Avanzato'),
-    ('gemini-1.5-flash',          'Gemini 1.5 Flash — Bilanciato'),
-    ('gemini-1.5-flash-8b',       'Gemini 1.5 Flash-8B — Leggerissimo'),
+    ('gemini-2.5-flash-preview-04-17', 'Gemini 2.5 Flash Preview — Più recente'),
+    ('gemini-2.0-flash',               'Gemini 2.0 Flash — Veloce ($0.10/1M)'),
+    ('gemini-1.5-flash',               'Gemini 1.5 Flash — Economico ($0.075/1M)'),
+    ('gemini-1.5-flash-8b',            'Gemini 1.5 Flash-8B — Minimo ($0.037/1M)'),
+    ('gemini-1.5-pro',                 'Gemini 1.5 Pro — Qualità superiore'),
+]
+
+OPENAI_MODELS = [
+    ('gpt-4o-mini',  'GPT-4o mini — Bilanciato ($0.15/1M) — supporta PDF'),
+    ('gpt-4o',       'GPT-4o — Massima qualità ($2.50/1M) — supporta PDF'),
 ]
 
 AI_PROVIDERS = [
     ('anthropic',          'Anthropic Claude (Cloud)'),
-    ('gemini',             'Google Gemini (Cloud)'),
+    ('gemini',             'Google Gemini (Cloud) — da $0.037/1M token'),
+    ('openai',             'OpenAI (Cloud) — da $0.15/1M token'),
     ('ollama',             'Ollama (Locale)'),
     ('lmstudio',           'LM Studio (Locale)'),
-    ('openai_compatible',  'Altro OpenAI-compatibile'),
+    ('openai_compatible',  'Altro endpoint OpenAI-compatibile'),
 ]
 
 AI_PROVIDER_DEFAULTS = {
@@ -490,6 +496,10 @@ def configurazione():
         if gemini_key and gemini_key != '••••••••':
             config['gemini_api_key'] = gemini_key
 
+        openai_key = request.form.get('openai_api_key', '').strip()
+        if openai_key and openai_key != '••••••••':
+            config['openai_api_key'] = openai_key
+
         config['ai_import_model'] = request.form.get('ai_import_model', config.get('ai_import_model', '')).strip()
         config['ai_email_model'] = request.form.get('ai_email_model', config.get('ai_email_model', '')).strip()
         config['ai_verifiche_model'] = request.form.get('ai_verifiche_model', config.get('ai_verifiche_model', '')).strip()
@@ -564,9 +574,16 @@ def configurazione():
     else:
         display_config['gemini_api_key_masked'] = ''
 
+    if display_config.get('openai_api_key'):
+        key = display_config['openai_api_key']
+        display_config['openai_api_key_masked'] = key[:8] + '••••••••' + key[-4:] if len(key) > 12 else '••••••••'
+    else:
+        display_config['openai_api_key_masked'] = ''
+
     return render_template('admin/configurazione.html', config=display_config,
                            anthropic_models=ANTHROPIC_MODELS,
                            gemini_models=GEMINI_MODELS,
+                           openai_models=OPENAI_MODELS,
                            ai_providers=AI_PROVIDERS,
                            ai_provider_defaults=AI_PROVIDER_DEFAULTS)
 

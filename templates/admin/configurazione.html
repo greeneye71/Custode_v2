@@ -163,6 +163,40 @@
                             </select>
                         </div>
 
+                        {# OpenAI settings #}
+                        <div class="col-12" id="ai_openai_settings" style="display:none;">
+                            <label class="form-label">Chiave API OpenAI</label>
+                            <input type="password" class="form-control" name="openai_api_key"
+                                   value="{{ config.openai_api_key_masked }}"
+                                   placeholder="sk-...">
+                            <div class="form-text">
+                                Lascia invariato per mantenere la chiave corrente.
+                                Ottieni la chiave su <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>.
+                            </div>
+                        </div>
+                        <div class="col-md-6" id="ai_openai_import_model_group" style="display:none;">
+                            <label class="form-label">Modello Import Inventario</label>
+                            <select class="form-select" name="ai_import_model">
+                                {% for model_id, model_label in openai_models %}
+                                <option value="{{ model_id }}"
+                                        {% if config.ai_import_model == model_id %}selected{% endif %}>
+                                    {{ model_label }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6" id="ai_openai_email_model_group" style="display:none;">
+                            <label class="form-label">Modello Email e Verifiche</label>
+                            <select class="form-select" name="ai_email_model">
+                                {% for model_id, model_label in openai_models %}
+                                <option value="{{ model_id }}"
+                                        {% if config.ai_email_model == model_id %}selected{% endif %}>
+                                    {{ model_label }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
                         {# Local AI settings #}
                         <div class="col-md-6" id="ai_local_url_group" style="display:none;">
                             <label class="form-label">URL Server AI Locale</label>
@@ -459,10 +493,11 @@
 var providerDefaults = {{ ai_provider_defaults | tojson }};
 
 function toggleAIProvider() {
-    var provider = document.getElementById('ai_provider').value;
+    var provider    = document.getElementById('ai_provider').value;
     var isAnthropic = (provider === 'anthropic');
     var isGemini    = (provider === 'gemini');
-    var isLocal     = (!isAnthropic && !isGemini);
+    var isOpenAI    = (provider === 'openai');
+    var isLocal     = (!isAnthropic && !isGemini && !isOpenAI);
 
     // Anthropic-specific fields
     document.getElementById('ai_anthropic_settings').style.display    = isAnthropic ? '' : 'none';
@@ -474,6 +509,11 @@ function toggleAIProvider() {
     document.getElementById('ai_gemini_import_model_group').style.display   = isGemini ? '' : 'none';
     document.getElementById('ai_gemini_email_model_group').style.display    = isGemini ? '' : 'none';
 
+    // OpenAI-specific fields
+    document.getElementById('ai_openai_settings').style.display             = isOpenAI ? '' : 'none';
+    document.getElementById('ai_openai_import_model_group').style.display   = isOpenAI ? '' : 'none';
+    document.getElementById('ai_openai_email_model_group').style.display    = isOpenAI ? '' : 'none';
+
     // Local-specific fields
     document.getElementById('ai_local_url_group').style.display   = isLocal ? '' : 'none';
     document.getElementById('ai_local_model_group').style.display = isLocal ? '' : 'none';
@@ -483,7 +523,9 @@ function toggleAIProvider() {
     if (isAnthropic) {
         hint.textContent = 'Richiede chiave API. Supporta analisi diretta PDF scansionati.';
     } else if (isGemini) {
-        hint.textContent = 'Richiede chiave API Google AI Studio. I PDF scansionati richiedono estrazione testo.';
+        hint.textContent = 'Richiede chiave API Google AI Studio. Supporta PDF nativamente. Da $0.037/1M token.';
+    } else if (isOpenAI) {
+        hint.textContent = 'Richiede chiave API OpenAI. Supporta PDF nativamente (GPT-4o, GPT-4o-mini). Da $0.15/1M token.';
     } else if (provider === 'ollama') {
         hint.textContent = 'Server Ollama locale. Avvia con: ollama serve';
     } else if (provider === 'lmstudio') {

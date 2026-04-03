@@ -23,6 +23,7 @@
   "ai_verifiche_model": "claude-haiku-4-5-20251001",
 
   "gemini_api_key": "",
+  "openai_api_key": "",
 
   "ai_local_base_url": "",
   "ai_local_model": "",
