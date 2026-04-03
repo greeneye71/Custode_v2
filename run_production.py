@@ -85,10 +85,36 @@ def main():
     scheduler = init_scheduler(app)
     logger.info(f"Scheduler avviato (email check ogni {config.get('email_check_interval_minutes', 15)} min)")
 
-    host = config.get('host', '0.0.0.0')
+    cloudflare_mode = config.get('cloudflare_mode', False)
+
+    # In modalità Cloudflare Tunnel il server deve ascoltare solo su localhost:
+    # cloudflared si connette a 127.0.0.1 e nessuna porta va aperta sul router.
+    # Ascoltare su 0.0.0.0 esporrebbe il server HTTP (non cifrato) anche
+    # all'esterno, permettendo di aggirare il tunnel.
+    if cloudflare_mode:
+        host_default = '127.0.0.1'
+    else:
+        host_default = '0.0.0.0'
+
+    host = config.get('host', host_default)
     port = config.get('port', 5000)
 
-    logger.info(f"Server in ascolto su http://{host}:{port}")
+    if cloudflare_mode and host == '0.0.0.0':
+        logger.warning(
+            "ATTENZIONE: cloudflare_mode=true ma host='0.0.0.0'. "
+            "Il server è raggiungibile su tutte le interfacce, incluse quelle "
+            "esterne al tunnel. Impostare host='127.0.0.1' per una configurazione sicura."
+        )
+
+    # url_scheme informa Waitress del protocollo percepito dai client.
+    # Con ProxyFix(x_proto=1) questo valore è già sovrascritto da X-Forwarded-Proto,
+    # ma impostarlo correttamente evita artefatti nei log di Waitress.
+    url_scheme = 'https' if config.get('force_https', False) else 'http'
+
+    proto_label = 'https' if cloudflare_mode else 'http'
+    logger.info(f"Server in ascolto su {proto_label}://{host}:{port}")
+    if cloudflare_mode:
+        logger.info("Modalità Cloudflare Tunnel attiva — accesso esterno via tunnel cifrato")
 
     try:
         from waitress import serve
@@ -98,7 +124,7 @@ def main():
             port=port,
             threads=8,
             channel_timeout=120,
-            url_scheme='http',
+            url_scheme=url_scheme,
         )
     except KeyboardInterrupt:
         logger.info("Arresto richiesto dall'utente.")

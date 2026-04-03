@@ -65,6 +65,12 @@ class BackgroundScheduler:
                 'interval': 3600,   # controlla ogni ora
                 'last_run': 0,
             },
+            {
+                'name': 'cleanup_login_attempts',
+                'func': self._cleanup_login_attempts,
+                'interval': 86400,  # una volta al giorno
+                'last_run': 0,
+            },
         ]
 
         self._stop_event.clear()
@@ -124,6 +130,30 @@ class BackgroundScheduler:
                 conn.close()
         except Exception as e:
             logger.error(f"Errore pulizia sessioni: {e}")
+
+    def _cleanup_login_attempts(self):
+        """Elimina i tentativi di login più vecchi di 24 ore.
+
+        Senza questo cleanup la tabella login_attempts cresce indefinitamente
+        perché l'app inserisce un record per ogni tentativo (riuscito o fallito)
+        ma non li elimina mai in modo sistematico (rimuove solo quelli per IP
+        dopo un login riuscito).
+        """
+        db_path = self.app.config['DATABASE_PATH']
+        try:
+            conn = sqlite3.connect(db_path)
+            try:
+                cursor = conn.execute(
+                    "DELETE FROM login_attempts WHERE created_at < datetime('now', '-1 day')"
+                )
+                conn.commit()
+                deleted = cursor.rowcount
+                if deleted > 0:
+                    logger.info(f"Eliminati {deleted} tentativi di login obsoleti (>24h).")
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"Errore pulizia login_attempts: {e}")
 
     def _send_deadline_alerts(self):
         """Invia digest email scadenze a ogni struttura attiva con email_notifiche configurata."""

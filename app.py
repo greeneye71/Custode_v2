@@ -211,6 +211,20 @@ def create_app():
     # x_for=1 si fida di un solo hop proxy (cloudflared → app).
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
+    # ---------------------------------------------------------------------------
+    # Cookie security
+    # ---------------------------------------------------------------------------
+    # HttpOnly: impedisce l'accesso al cookie via JavaScript (sempre attivo).
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    # SameSite=Lax: blocca l'invio del cookie in richieste cross-site di terze parti
+    # (protezione CSRF di base), compatibile sia con HTTP che HTTPS.
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    # Secure: il cookie viene trasmesso solo su HTTPS.
+    # Abilitare SOLO quando l'app è accessibile esclusivamente via HTTPS
+    # (es. con Cloudflare Tunnel). Disabilitarlo in accesso LAN puro via HTTP.
+    if config.get('force_https', False):
+        app.config['SESSION_COOKIE_SECURE'] = True
+
     # Ensure data directories exist
     os.makedirs(os.path.dirname(app.config['DATABASE_PATH']), exist_ok=True)
     os.makedirs(app.config['UPLOADS_PATH'], exist_ok=True)
@@ -273,6 +287,42 @@ def create_app():
             ctx['scadenze_alert_count'] = getattr(g, 'scadenze_alert_count', 0)
 
         return ctx
+
+    # ---------------------------------------------------------------------------
+    # Security headers (aggiunti a ogni risposta)
+    # ---------------------------------------------------------------------------
+    @app.after_request
+    def add_security_headers(response):
+        # Previene MIME-type sniffing (es. eseguire uno script travestito da immagine)
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        # Blocca embedding in iframe di altri siti (clickjacking)
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        # Limita le informazioni nel Referer header inviato ai siti terzi
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        # Disabilita funzionalità browser non necessarie (geolocation, camera, ecc.)
+        response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+        # HSTS: forza il browser a usare HTTPS per i prossimi 12 mesi.
+        # Inviato solo quando la connessione è (o sembra) HTTPS, per non
+        # bloccare l'accesso LAN su HTTP puro.
+        if (request.scheme == 'https'
+                or request.headers.get('X-Forwarded-Proto') == 'https'):
+            response.headers['Strict-Transport-Security'] = (
+                'max-age=31536000; includeSubDomains'
+            )
+        return response
+
+    # ---------------------------------------------------------------------------
+    # HTTPS redirect (opzionale — attivo solo con force_https=true in config)
+    # ---------------------------------------------------------------------------
+    if config.get('force_https', False):
+        @app.before_request
+        def enforce_https():
+            # Scatta solo quando il proxy ci dice che il client ha usato HTTP
+            # (X-Forwarded-Proto: http). Se l'header non c'è, siamo in accesso
+            # LAN diretto senza proxy e non forziamo il redirect.
+            if request.headers.get('X-Forwarded-Proto') == 'http':
+                url = request.url.replace('http://', 'https://', 1)
+                return redirect(url, 301)
 
     # ---------------------------------------------------------------------------
     # Register blueprints

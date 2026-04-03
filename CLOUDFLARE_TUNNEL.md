@@ -428,6 +428,65 @@ sc query cloudflared
 
 ---
 
+## Parte 10 — Configurazione sicura in MedInventory
+
+Dopo aver configurato il tunnel, attivare le opzioni di sicurezza in `config.local.json`:
+
+```json
+{
+  "cloudflare_mode": true,
+  "force_https":     true,
+  "host":            "127.0.0.1"
+}
+```
+
+### Cosa fa ciascuna opzione
+
+| Opzione | Default | Effetto quando `true` |
+|---|---|---|
+| `cloudflare_mode` | `false` | Waitress ascolta su `127.0.0.1` (non `0.0.0.0`). Impedisce connessioni dirette che bypassano il tunnel. Logga un avviso se `host` è ancora `0.0.0.0`. |
+| `force_https` | `false` | Abilita cookie `Secure` (trasmessi solo su HTTPS). Aggiunge `HSTS` header (browser forza HTTPS per 12 mesi). Reindirizza HTTP → HTTPS quando la richiesta arriva con `X-Forwarded-Proto: http`. |
+
+> **Importante:** impostare `host: "127.0.0.1"` è la misura più efficace.
+> Senza di essa, chiunque sulla stessa LAN può raggiungere il server HTTP
+> direttamente, aggirando il tunnel e i suoi log di accesso.
+
+### Header di sicurezza sempre attivi
+
+Indipendentemente da `cloudflare_mode` e `force_https`, MedInventory invia sempre:
+
+| Header | Valore | Protezione |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | Previene MIME-sniffing |
+| `X-Frame-Options` | `SAMEORIGIN` | Blocca embedding in iframe di altri siti (clickjacking) |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Limita dati nel Referer header |
+| `Permissions-Policy` | geolocation, mic, camera disabilitati | Riduce superficie di attacco browser |
+| `Strict-Transport-Security` | `max-age=31536000` | Inviato solo quando la connessione è HTTPS |
+
+### Cookie di sessione
+
+| Flag | Sempre attivo | Attivo con `force_https` |
+|---|---|---|
+| `HttpOnly` | ✅ | — |
+| `SameSite=Lax` | ✅ | — |
+| `Secure` | — | ✅ |
+
+### Procedura completa di attivazione Cloudflare Tunnel
+
+```bash
+# 1. Configurare il tunnel come descritto nelle parti 1-7
+# 2. Aggiornare config.local.json
+python toggle_modalita.py --status      # verifica modalità
+# Aprire config.local.json e aggiungere:
+#   "cloudflare_mode": true,
+#   "force_https": true,
+#   "host": "127.0.0.1"
+# 3. Riavviare
+python run_production.py
+```
+
+---
+
 ## Note di sicurezza e GDPR
 
 | Aspetto | Note |
@@ -436,11 +495,12 @@ sc query cloudflared
 | **Dati in transito** | I dati passano per i server Cloudflare (USA/EU). Cloudflare è certificata ISO 27001 e GDPR-compliant. |
 | **Dati a riposo** | MedInventory e il database rimangono sul server locale. Cloudflare non memorizza i dati applicativi. |
 | **Autenticazione** | Con Cloudflare Access abilitato, nessun accesso non autorizzato può raggiungere l'applicazione. |
+| **Binding localhost** | Con `host: "127.0.0.1"` il server HTTP non è raggiungibile direttamente dall'esterno della LAN. |
 | **Alternativa totalmente locale** | Per chi non vuole che il traffico passi per terze parti, valutare WireGuard VPN (dati sempre nella rete locale). |
 
 ---
 
-*Documentazione MedInventory v1.1.4 — Studio Bergamaschi*
+*Documentazione MedInventory v2.0.0 — Studio Bergamaschi*
 
 **Riferimenti:**
 - [Cloudflare Tunnel — Documentazione ufficiale](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
