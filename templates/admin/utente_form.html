@@ -12,6 +12,7 @@
 <div class="row">
     <div class="col-lg-8">
         <form method="POST">
+            <!-- Dati anagrafici -->
             <div class="card mb-4">
                 <div class="card-header"><i class="bi bi-person me-1"></i> Dati Utente</div>
                 <div class="card-body">
@@ -37,9 +38,16 @@
                         <div class="col-md-6">
                             <label class="form-label">Ruolo</label>
                             <select class="form-select" name="ruolo">
-                                <option value="utente" {% if form_data.get('ruolo', 'utente') == 'utente' %}selected{% endif %}>Utente</option>
-                                <option value="admin" {% if form_data.get('ruolo') == 'admin' %}selected{% endif %}>Amministratore</option>
+                                <option value="utente" {% if form_data.get('ruolo', 'utente') == 'utente' %}selected{% endif %}>
+                                    Utente (sola lettura)
+                                </option>
+                                <option value="admin" {% if form_data.get('ruolo') == 'admin' %}selected{% endif %}>
+                                    Amministratore
+                                </option>
                             </select>
+                            <div class="form-text">
+                                L'amministratore può creare e gestire utenti della propria struttura.
+                            </div>
                         </div>
                         {% if not utente %}
                         <div class="col-md-6">
@@ -55,30 +63,105 @@
                 </div>
             </div>
 
+            <!-- Struttura (solo superadmin) -->
+            {% if is_superadmin %}
             <div class="card mb-4">
-                <div class="card-header"><i class="bi bi-building me-1"></i> Divisioni Assegnate</div>
+                <div class="card-header"><i class="bi bi-building me-1"></i> Struttura</div>
                 <div class="card-body">
-                    {% for d in divisioni %}
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="checkbox" name="divisioni"
-                               value="{{ d.id }}" id="div{{ d.id }}"
-                               {% if d.id|string in (form_data.get('divisioni') or []) %}checked{% endif %}>
-                        <label class="form-check-label d-flex align-items-center" for="div{{ d.id }}">
-                            <span class="divisione-dot me-2" style="background-color: {{ d.colore }}"></span>
-                            {{ d.nome }}
-                        </label>
+                    <label class="form-label">Struttura assegnata <span class="text-danger">*</span></label>
+                    <select class="form-select {% if errors.get('struttura_id') %}is-invalid{% endif %}"
+                            name="struttura_id" id="struttura_id">
+                        <option value="">— Seleziona struttura —</option>
+                        {% for s in strutture %}
+                        <option value="{{ s.id }}"
+                            {% if form_data.get('struttura_id')|string == s.id|string %}selected{% endif %}>
+                            {{ s.nome }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    {% if errors.get('struttura_id') %}
+                    <div class="invalid-feedback">{{ errors.struttura_id }}</div>
+                    {% endif %}
+                    <div class="form-text">
+                        L'utente potrà accedere soltanto ai dati di questa struttura.
+                        {% if not utente %}Seleziona la struttura per vedere le divisioni disponibili.{% endif %}
                     </div>
-                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Divisioni -->
+            <div class="card mb-4">
+                <div class="card-header"><i class="bi bi-diagram-3 me-1"></i> Divisioni Assegnate</div>
+                <div class="card-body">
+                    {% if divisioni %}
+                    <div class="row g-2">
+                        {% for d in divisioni %}
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="divisioni"
+                                       value="{{ d.id }}" id="div{{ d.id }}"
+                                       {% if d.id|string in (form_data.get('divisioni') or []) %}checked{% endif %}>
+                                <label class="form-check-label d-flex align-items-center" for="div{{ d.id }}">
+                                    <span class="divisione-dot me-2" style="background-color: {{ d.colore }}; width:12px; height:12px; border-radius:50%; display:inline-block;"></span>
+                                    {{ d.nome }}
+                                </label>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">
+                        {% if is_superadmin %}
+                        Seleziona prima una struttura per vedere le divisioni disponibili.
+                        {% else %}
+                        Nessuna divisione attiva per questa struttura.
+                        {% endif %}
+                    </p>
+                    {% endif %}
                 </div>
             </div>
 
             <div class="d-flex gap-2">
                 <button type="submit" class="btn btn-primary">
-                    <i class="bi bi-check-lg me-1"></i> {% if utente %}Salva{% else %}Crea{% endif %}
+                    <i class="bi bi-check-lg me-1"></i> {% if utente %}Salva modifiche{% else %}Crea utente{% endif %}
                 </button>
                 <a href="{{ url_for('admin.utenti') }}" class="btn btn-outline-secondary">Annulla</a>
             </div>
         </form>
     </div>
+
+    {% if utente %}
+    <div class="col-lg-4">
+        <div class="card border-warning">
+            <div class="card-header bg-warning bg-opacity-10">
+                <i class="bi bi-shield-lock me-1"></i> Sicurezza
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">Genera una password temporanea e invalida tutte le sessioni attive.</p>
+                <form method="POST" action="{{ url_for('admin.utente_reset_password', id=utente.id) }}"
+                      onsubmit="return confirm('Resettare la password di {{ utente.nome }} {{ utente.cognome }}? Tutte le sessioni attive verranno chiuse.')">
+                    <button type="submit" class="btn btn-warning w-100">
+                        <i class="bi bi-key me-1"></i> Reset password
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 </div>
+
+{% block scripts_extra %}
+{% if is_superadmin %}
+<script>
+document.getElementById('struttura_id').addEventListener('change', function() {
+    const sid = this.value;
+    if (!sid) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('struttura_id', sid);
+    window.location.href = url.toString();
+});
+</script>
+{% endif %}
+{% endblock %}
 {% endblock %}

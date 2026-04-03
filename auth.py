@@ -103,15 +103,15 @@ def admin_struttura_required(f):
 
 
 def modalita_avanzata_required(f):
-    """Decorator: richiede modalita='ingegneria_clinica' per la struttura corrente."""
+    """Decorator: richiede modalita='avanzata' per la struttura corrente."""
     @wraps(f)
     @login_required
     def decorated_function(*args, **kwargs):
         if g.user['ruolo'] == 'superadmin':
             return f(*args, **kwargs)  # superadmin bypassa sempre
-        struttura_modalita = getattr(g, 'struttura_modalita', 'ingegneria_clinica')
-        if struttura_modalita != 'ingegneria_clinica':
-            flash('Funzione disponibile solo in modalità Ingegneria Clinica.', 'warning')
+        struttura_modalita = getattr(g, 'struttura_modalita', 'avanzata')
+        if struttura_modalita != 'avanzata':
+            flash('Funzione disponibile solo in modalità Avanzata.', 'warning')
             return redirect(url_for('index'))
         return f(*args, **kwargs)
     return decorated_function

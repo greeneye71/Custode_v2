@@ -6,17 +6,29 @@ PRAGMA busy_timeout = 5000;
 -- STRUTTURE
 -- ============================================
 CREATE TABLE IF NOT EXISTS strutture (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  nome            TEXT NOT NULL,
-  codice          TEXT UNIQUE NOT NULL,
-  descrizione     TEXT,
-  indirizzo       TEXT,
-  email_notifiche TEXT,
-  modalita        TEXT NOT NULL DEFAULT 'standard'
-                  CHECK(modalita IN ('standard', 'ingegneria_clinica')),
-  attiva          INTEGER DEFAULT 1,
-  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  nome                TEXT NOT NULL,
+  codice              TEXT UNIQUE NOT NULL,
+  descrizione         TEXT,
+  tipo                TEXT DEFAULT 'altro'
+                      CHECK(tipo IN ('ospedale','clinica_privata','rsa','ambulatorio',
+                                     'poliambulatorio','laboratorio','altro')),
+  indirizzo           TEXT,
+  telefono            TEXT,
+  email_notifiche     TEXT,
+  pec                 TEXT,
+  responsabile        TEXT,
+  email_responsabile  TEXT,
+  codice_fiscale      TEXT,
+  partita_iva         TEXT,
+  data_attivazione    DATE,
+  scadenza_contratto  DATE,
+  note                TEXT,
+  modalita            TEXT NOT NULL DEFAULT 'standard'
+                      CHECK(modalita IN ('standard', 'avanzata')),
+  attiva              INTEGER DEFAULT 1,
+  created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_strutture_codice ON strutture(codice);
@@ -453,3 +465,8 @@ WHERE a.stato != 'dismesso'
   )
 
 ORDER BY prossima_scadenza ASC;
+
+-- ============================================
+-- VERSIONE SCHEMA
+-- ============================================
+PRAGMA user_version = 200;

@@ -46,42 +46,127 @@ AI_PROVIDER_DEFAULTS = {
 # USER MANAGEMENT
 # ============================================================================
 
+def _get_mia_struttura_id():
+    """Restituisce lo struttura_id dell'utente corrente (None per superadmin)."""
+    if g.user['ruolo'] == 'superadmin':
+        return None
+    return g.user.get('struttura_id') or getattr(g, 'struttura_id', None)
+
+
+def _check_utente_scope(utente):
+    """
+    Verifica che l'admin corrente possa gestire l'utente dato.
+    Superadmin può sempre. Admin non può toccare utenti superadmin
+    né utenti di altre strutture.
+    """
+    if g.user['ruolo'] == 'superadmin':
+        return True
+    if utente['ruolo'] == 'superadmin':
+        return False
+    struttura_id = _get_mia_struttura_id()
+    return utente.get('struttura_id') == struttura_id
+
+
+def _divisioni_per_struttura(struttura_id=None):
+    """Restituisce le divisioni attive. Se struttura_id fornito, filtra per struttura."""
+    if struttura_id:
+        return query_all(
+            "SELECT * FROM divisioni WHERE attiva=1 AND struttura_id=? ORDER BY nome",
+            (struttura_id,)
+        )
+    return query_all("SELECT * FROM divisioni WHERE attiva=1 ORDER BY struttura_id, nome")
+
+
+def _assegna_divisioni(utente_id, divisioni_sel, struttura_id, ruolo):
+    """Cancella e reinserisce le divisioni utente, verificando l'appartenenza alla struttura."""
+    execute("DELETE FROM utenti_divisioni WHERE utente_id = ?", (utente_id,))
+    for div_id in divisioni_sel:
+        try:
+            div_id_int = int(div_id)
+            if struttura_id:
+                div = query_one(
+                    "SELECT id FROM divisioni WHERE id=? AND struttura_id=?",
+                    (div_id_int, struttura_id)
+                )
+            else:
+                div = query_one("SELECT id FROM divisioni WHERE id=?", (div_id_int,))
+            if div:
+                execute(
+                    """INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione)
+                       VALUES (?, ?, ?)""",
+                    (utente_id, div_id_int, ruolo)
+                )
+        except Exception:
+            pass
+
+
 @admin_bp.route('/utenti')
 @admin_required
 def utenti():
-    """List all users."""
-    users = query_all(
-        """SELECT u.*, GROUP_CONCAT(d.nome, ', ') as divisioni_nomi
-           FROM utenti u
-           LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
-           LEFT JOIN divisioni d ON ud.divisione_id = d.id
-           GROUP BY u.id
-           ORDER BY u.cognome, u.nome"""
-    )
-    return render_template('admin/utenti.html', utenti=users)
+    """Lista utenti: superadmin vede tutti, admin vede solo la propria struttura."""
+    is_superadmin = g.user['ruolo'] == 'superadmin'
+    if is_superadmin:
+        users = query_all("""
+            SELECT u.*, s.nome as struttura_nome,
+                   GROUP_CONCAT(d.nome, ', ') as divisioni_nomi
+            FROM utenti u
+            LEFT JOIN strutture s ON s.id = u.struttura_id
+            LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
+            LEFT JOIN divisioni d ON ud.divisione_id = d.id
+            GROUP BY u.id ORDER BY u.ruolo, u.cognome, u.nome
+        """)
+    else:
+        struttura_id = _get_mia_struttura_id()
+        users = query_all("""
+            SELECT u.*, GROUP_CONCAT(d.nome, ', ') as divisioni_nomi
+            FROM utenti u
+            LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
+            LEFT JOIN divisioni d ON ud.divisione_id = d.id
+            WHERE u.struttura_id = ? AND u.ruolo != 'superadmin'
+            GROUP BY u.id ORDER BY u.cognome, u.nome
+        """, (struttura_id,))
+    return render_template('admin/utenti.html', utenti=users, is_superadmin=is_superadmin)
 
 
 @admin_bp.route('/utenti/nuovo', methods=['GET', 'POST'])
 @admin_required
 def utente_nuovo():
-    """Create a new user."""
-    divisioni = query_all("SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome")
+    """Crea un nuovo utente. Superadmin sceglie la struttura, admin usa la propria."""
+    is_superadmin = g.user['ruolo'] == 'superadmin'
+    mia_struttura_id = _get_mia_struttura_id()
+
+    strutture = (query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
+                 if is_superadmin else [])
+
+    # Superadmin: usa il filtro GET per precaricare le divisioni prima del POST
+    if is_superadmin:
+        preview_struttura_id = request.args.get('struttura_id', type=int)
+        divisioni = _divisioni_per_struttura(preview_struttura_id)
+    else:
+        preview_struttura_id = None
+        divisioni = _divisioni_per_struttura(mia_struttura_id)
 
     if request.method == 'GET':
+        form_data = {'struttura_id': preview_struttura_id} if preview_struttura_id else {}
         return render_template('admin/utente_form.html',
-                               utente=None, errors={}, form_data={},
-                               divisioni=divisioni)
+                               utente=None, errors={}, form_data=form_data,
+                               divisioni=divisioni, strutture=strutture,
+                               is_superadmin=is_superadmin)
 
-    # POST: validate and create
+    # POST
     errors = {}
     form = request.form
-
     nome = form.get('nome', '').strip()
     cognome = form.get('cognome', '').strip()
     email = form.get('email', '').strip().lower()
     ruolo = form.get('ruolo', 'utente')
     password = form.get('password', '').strip()
     divisioni_sel = form.getlist('divisioni')
+
+    struttura_id = (form.get('struttura_id', type=int) if is_superadmin else mia_struttura_id)
+
+    if ruolo not in ('admin', 'utente'):
+        ruolo = 'utente'
 
     if not nome:
         errors['nome'] = 'Il nome è obbligatorio.'
@@ -93,71 +178,88 @@ def utente_nuovo():
         errors['email'] = 'Questo indirizzo email è già registrato.'
     if not password or len(password) < 8:
         errors['password'] = 'La password deve essere di almeno 8 caratteri.'
-    if ruolo not in ('admin', 'utente'):
-        ruolo = 'utente'
+    if is_superadmin and not struttura_id:
+        errors['struttura_id'] = 'Selezionare una struttura.'
 
     if errors:
         return render_template('admin/utente_form.html',
                                utente=None, errors=errors, form_data=form,
-                               divisioni=divisioni)
+                               divisioni=divisioni, strutture=strutture,
+                               is_superadmin=is_superadmin)
 
     password_hash = generate_password_hash(password)
     cursor = execute(
-        """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, primo_accesso)
-           VALUES (?, ?, ?, ?, ?, 1)""",
-        (email, password_hash, nome, cognome, ruolo)
+        """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
+           VALUES (?, ?, ?, ?, ?, ?, 1)""",
+        (email, password_hash, nome, cognome, ruolo, struttura_id)
     )
     user_id = cursor.lastrowid
-
-    # Assign divisions
-    for div_id in divisioni_sel:
-        try:
-            execute(
-                """INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione)
-                   VALUES (?, ?, ?)""",
-                (user_id, int(div_id), ruolo)
-            )
-        except Exception:
-            pass
+    _assegna_divisioni(user_id, divisioni_sel, struttura_id, ruolo)
 
     log_attivita(g.user['id'], 'creazione', 'utenti', user_id,
-                 f"Creato utente: {nome} {cognome} ({email})", request.remote_addr)
-
-    flash(f'Utente {nome} {cognome} creato con successo. Password temporanea: {password}', 'success')
+                 f"Creato utente: {nome} {cognome} ({email})", request.remote_addr,
+                 struttura_id=struttura_id)
+    flash(f'Utente {nome} {cognome} creato. Password temporanea: {password}', 'success')
     return redirect(url_for('admin.utenti'))
 
 
 @admin_bp.route('/utenti/<int:id>/modifica', methods=['GET', 'POST'])
 @admin_required
 def utente_modifica(id):
-    """Edit a user."""
+    """Modifica utente. Admin può modificare solo utenti della propria struttura."""
     utente = query_one("SELECT * FROM utenti WHERE id = ?", (id,))
     if not utente:
         flash('Utente non trovato.', 'danger')
         return redirect(url_for('admin.utenti'))
 
-    divisioni = query_all("SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome")
-    utente_divisioni = query_all(
-        "SELECT divisione_id FROM utenti_divisioni WHERE utente_id = ?", (id,)
-    )
-    utente_div_ids = [str(ud['divisione_id']) for ud in utente_divisioni]
+    if not _check_utente_scope(utente):
+        flash('Non hai i permessi per modificare questo utente.', 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    is_superadmin = g.user['ruolo'] == 'superadmin'
+    mia_struttura_id = _get_mia_struttura_id()
+    struttura_id_utente = utente.get('struttura_id') or mia_struttura_id
+
+    strutture = (query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
+                 if is_superadmin else [])
+
+    # Superadmin: il GET param struttura_id permette di filtrare le divisioni
+    # senza perdere i dati già inseriti
+    if is_superadmin:
+        preview_struttura_id = request.args.get('struttura_id', type=int) or struttura_id_utente
+        divisioni = _divisioni_per_struttura(preview_struttura_id)
+    else:
+        preview_struttura_id = mia_struttura_id
+        divisioni = _divisioni_per_struttura(mia_struttura_id)
+
+    utente_div_ids = [str(r['divisione_id']) for r in
+                      query_all("SELECT divisione_id FROM utenti_divisioni WHERE utente_id=?", (id,))]
 
     if request.method == 'GET':
         form_data = dict(utente)
         form_data['divisioni'] = utente_div_ids
+        # Sovrascrive struttura_id con quello del filtro GET (se il superadmin ha cambiato)
+        if is_superadmin and request.args.get('struttura_id'):
+            form_data['struttura_id'] = preview_struttura_id
         return render_template('admin/utente_form.html',
                                utente=utente, errors={}, form_data=form_data,
-                               divisioni=divisioni)
+                               divisioni=divisioni, strutture=strutture,
+                               is_superadmin=is_superadmin)
 
     # POST
     errors = {}
     form = request.form
-
     nome = form.get('nome', '').strip()
     cognome = form.get('cognome', '').strip()
     email = form.get('email', '').strip().lower()
     ruolo = form.get('ruolo', 'utente')
     divisioni_sel = form.getlist('divisioni')
+
+    struttura_id = (form.get('struttura_id', type=int) or struttura_id_utente
+                    if is_superadmin else mia_struttura_id)
+
+    if ruolo not in ('admin', 'utente'):
+        ruolo = 'utente'
 
     if not nome:
         errors['nome'] = 'Il nome è obbligatorio.'
@@ -166,40 +268,28 @@ def utente_modifica(id):
     if not email:
         errors['email'] = "L'email è obbligatoria."
     else:
-        existing = query_one("SELECT id FROM utenti WHERE email = ? AND id != ?", (email, id))
+        existing = query_one("SELECT id FROM utenti WHERE email=? AND id!=?", (email, id))
         if existing:
             errors['email'] = 'Questo indirizzo email è già registrato.'
-    if ruolo not in ('admin', 'utente'):
-        ruolo = 'utente'
 
     if errors:
         form_data = dict(form)
         form_data['divisioni'] = divisioni_sel
         return render_template('admin/utente_form.html',
                                utente=utente, errors=errors, form_data=form_data,
-                               divisioni=divisioni)
+                               divisioni=divisioni, strutture=strutture,
+                               is_superadmin=is_superadmin)
 
     execute(
-        """UPDATE utenti SET nome=?, cognome=?, email=?, ruolo=?, updated_at=datetime('now')
-           WHERE id=?""",
-        (nome, cognome, email, ruolo, id)
+        """UPDATE utenti SET nome=?, cognome=?, email=?, ruolo=?, struttura_id=?,
+           updated_at=datetime('now') WHERE id=?""",
+        (nome, cognome, email, ruolo, struttura_id, id)
     )
-
-    # Update divisions: delete all, re-insert
-    execute("DELETE FROM utenti_divisioni WHERE utente_id = ?", (id,))
-    for div_id in divisioni_sel:
-        try:
-            execute(
-                """INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione)
-                   VALUES (?, ?, ?)""",
-                (id, int(div_id), ruolo)
-            )
-        except Exception:
-            pass
+    _assegna_divisioni(id, divisioni_sel, struttura_id, ruolo)
 
     log_attivita(g.user['id'], 'modifica', 'utenti', id,
-                 f"Modificato utente: {nome} {cognome}", request.remote_addr)
-
+                 f"Modificato utente: {nome} {cognome}", request.remote_addr,
+                 struttura_id=struttura_id)
     flash('Utente aggiornato.', 'success')
     return redirect(url_for('admin.utenti'))
 
@@ -207,25 +297,24 @@ def utente_modifica(id):
 @admin_bp.route('/utenti/<int:id>/toggle', methods=['POST'])
 @admin_required
 def utente_toggle(id):
-    """Toggle user active/inactive."""
+    """Attiva/disattiva utente. Admin può agire solo sulla propria struttura."""
     utente = query_one("SELECT * FROM utenti WHERE id = ?", (id,))
     if not utente:
         flash('Utente non trovato.', 'danger')
         return redirect(url_for('admin.utenti'))
-
-    # Don't allow deactivating yourself
+    if not _check_utente_scope(utente):
+        flash('Non hai i permessi per questa operazione.', 'danger')
+        return redirect(url_for('admin.utenti'))
     if utente['id'] == g.user['id']:
         flash('Non puoi disattivare il tuo account.', 'warning')
         return redirect(url_for('admin.utenti'))
 
     new_status = 0 if utente['attivo'] else 1
-    execute("UPDATE utenti SET attivo = ?, updated_at = datetime('now') WHERE id = ?",
+    execute("UPDATE utenti SET attivo=?, updated_at=datetime('now') WHERE id=?",
             (new_status, id))
-
     action = 'attivato' if new_status else 'disattivato'
     log_attivita(g.user['id'], action, 'utenti', id,
                  f"Utente {action}: {utente['nome']} {utente['cognome']}", request.remote_addr)
-
     flash(f"Utente {utente['nome']} {utente['cognome']} {action}.", 'success')
     return redirect(url_for('admin.utenti'))
 
@@ -233,27 +322,26 @@ def utente_toggle(id):
 @admin_bp.route('/utenti/<int:id>/reset-password', methods=['POST'])
 @admin_required
 def utente_reset_password(id):
-    """Reset user password to a temporary one."""
+    """Reset password. Admin può agire solo sulla propria struttura."""
     utente = query_one("SELECT * FROM utenti WHERE id = ?", (id,))
     if not utente:
         flash('Utente non trovato.', 'danger')
         return redirect(url_for('admin.utenti'))
+    if not _check_utente_scope(utente):
+        flash('Non hai i permessi per questa operazione.', 'danger')
+        return redirect(url_for('admin.utenti'))
 
     import secrets
     temp_password = secrets.token_urlsafe(10)
-    password_hash = generate_password_hash(temp_password)
-
     execute(
         """UPDATE utenti SET password_hash=?, primo_accesso=1, updated_at=datetime('now')
            WHERE id=?""",
-        (password_hash, id)
+        (generate_password_hash(temp_password), id)
     )
-    # Delete all sessions
     execute("DELETE FROM sessioni WHERE utente_id = ?", (id,))
 
     log_attivita(g.user['id'], 'reset_password', 'utenti', id,
                  f"Reset password per: {utente['nome']} {utente['cognome']}", request.remote_addr)
-
     flash(f"Password resettata per {utente['nome']} {utente['cognome']}. "
           f"Nuova password temporanea: {temp_password}", 'warning')
     return redirect(url_for('admin.utenti'))

@@ -21,6 +21,7 @@
                         <th>Nome</th>
                         <th>Email</th>
                         <th>Ruolo</th>
+                        {% if is_superadmin %}<th>Struttura</th>{% endif %}
                         <th>Divisioni</th>
                         <th>Ultimo accesso</th>
                         <th>Stato</th>
@@ -33,14 +34,23 @@
                         <td class="fw-medium">{{ u.nome }} {{ u.cognome }}</td>
                         <td><code>{{ u.email }}</code></td>
                         <td>
-                            <span class="badge {% if u.ruolo == 'admin' %}bg-primary{% else %}bg-secondary{% endif %}">
-                                {{ u.ruolo|capitalize }}
-                            </span>
+                            {% if u.ruolo == 'superadmin' %}
+                            <span class="badge bg-danger">Superadmin</span>
+                            {% elif u.ruolo == 'admin' %}
+                            <span class="badge bg-primary">Admin</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Utente</span>
+                            {% endif %}
                             {% if u.primo_accesso %}
                             <span class="badge bg-warning text-dark ms-1">Primo accesso</span>
                             {% endif %}
                         </td>
-                        <td><small>{{ u.divisioni_nomi or '-' }}</small></td>
+                        {% if is_superadmin %}
+                        <td>
+                            <small class="text-muted">{{ u.struttura_nome or '—' }}</small>
+                        </td>
+                        {% endif %}
+                        <td><small>{{ u.divisioni_nomi or '—' }}</small></td>
                         <td><small class="text-muted">{{ u.ultimo_accesso or 'Mai' }}</small></td>
                         <td>
                             {% if u.attivo %}
@@ -50,13 +60,18 @@
                             {% endif %}
                         </td>
                         <td class="text-end">
+                            {% if u.ruolo == 'superadmin' and not is_superadmin %}
+                            {# Admin non può toccare il superadmin #}
+                            <span class="text-muted small">—</span>
+                            {% else %}
                             <div class="btn-group">
                                 <a href="{{ url_for('admin.utente_modifica', id=u.id) }}"
                                    class="btn btn-outline-primary btn-action" title="Modifica">
                                     <i class="bi bi-pencil"></i>
                                 </a>
+                                {% if u.id != g_user_id %}
                                 <form method="POST" action="{{ url_for('admin.utente_reset_password', id=u.id) }}"
-                                      class="d-inline" onsubmit="return confirm('Resettare la password?')">
+                                      class="d-inline" onsubmit="return confirm('Resettare la password di {{ u.nome }} {{ u.cognome }}?')">
                                     <button type="submit" class="btn btn-outline-warning btn-action" title="Reset Password">
                                         <i class="bi bi-key"></i>
                                     </button>
@@ -68,7 +83,9 @@
                                         <i class="bi bi-{% if u.attivo %}x-circle{% else %}check-circle{% endif %}"></i>
                                     </button>
                                 </form>
+                                {% endif %}
                             </div>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

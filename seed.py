@@ -32,7 +32,7 @@ def seed_database():
                    VALUES (?, ?, ?, ?, ?)""",
                 ('Struttura Principale', 'DEFAULT',
                  'Struttura predefinita (rinominare da Amministrazione → Strutture)',
-                 'ingegneria_clinica', 1)
+                 'avanzata', 1)
             )
             struttura_id = cur.lastrowid
             print(f"  -> Struttura creata (id={struttura_id})")

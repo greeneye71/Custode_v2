@@ -35,7 +35,7 @@
         <a href="{{ url_for('apparecchi.modifica', id=apparecchio.id) }}" class="btn btn-primary d-print-none">
             <i class="bi bi-pencil me-1"></i> Modifica
         </a>
-        {% if g_struttura_modalita == 'ingegneria_clinica' %}
+        {% if g_struttura_modalita == 'avanzata' %}
         <a href="{{ url_for('apparecchi.qr_code', id=apparecchio.id) }}"
            class="btn btn-outline-secondary d-print-none"
            title="Scarica QR Code">

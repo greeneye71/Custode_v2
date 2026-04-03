@@ -45,7 +45,7 @@ def nuova():
         indirizzo = request.form.get('indirizzo', '').strip()
         email_notifiche = request.form.get('email_notifiche', '').strip()
         modalita = request.form.get('modalita', 'standard')
-        if modalita not in ('standard', 'ingegneria_clinica'):
+        if modalita not in ('standard', 'avanzata'):
             modalita = 'standard'
 
         if not nome or not codice:
@@ -89,7 +89,7 @@ def modifica(struttura_id):
         indirizzo = request.form.get('indirizzo', '').strip()
         email_notifiche = request.form.get('email_notifiche', '').strip()
         modalita = request.form.get('modalita', 'standard')
-        if modalita not in ('standard', 'ingegneria_clinica'):
+        if modalita not in ('standard', 'avanzata'):
             modalita = 'standard'
         attiva = 1 if request.form.get('attiva') else 0
 

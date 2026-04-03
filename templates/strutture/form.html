@@ -60,9 +60,9 @@
                   {% if not struttura or struttura.get('modalita', 'standard') == 'standard' %}selected{% endif %}>
                   Standard
                 </option>
-                <option value="ingegneria_clinica"
-                  {% if struttura and struttura.get('modalita') == 'ingegneria_clinica' %}selected{% endif %}>
-                  Ingegneria Clinica
+                <option value="avanzata"
+                  {% if struttura and struttura.get('modalita') == 'avanzata' %}selected{% endif %}>
+                  Avanzata
                 </option>
               </select>
             </div>

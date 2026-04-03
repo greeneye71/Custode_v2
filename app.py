@@ -238,9 +238,9 @@ def create_app():
         struttura_modalita = getattr(g, 'struttura_modalita', 'standard')
         is_superadmin_impersonating = getattr(g, 'is_superadmin_impersonating', False)
 
-        # In modalità single_struttura la modalità è sempre ingegneria_clinica
+        # In modalità single_struttura la modalità è sempre avanzata
         if single_struttura:
-            struttura_modalita = 'ingegneria_clinica'
+            struttura_modalita = 'avanzata'
 
         # Lista strutture per il switcher (solo superadmin)
         strutture_list = []
@@ -267,6 +267,7 @@ def create_app():
         # Add user-related context if authenticated
         if hasattr(g, 'user') and g.user:
             ctx['current_user'] = g.user
+            ctx['g_user_id'] = g.user.get('id')
             ctx['divisioni_accessibili'] = getattr(g, 'divisioni', [])
             ctx['divisione_attiva'] = getattr(g, 'divisione_attiva', None)
             ctx['scadenze_alert_count'] = getattr(g, 'scadenze_alert_count', 0)

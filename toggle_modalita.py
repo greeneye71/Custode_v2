@@ -39,7 +39,7 @@ def descrivi_stato(is_single):
             "SINGLE-STRUTTURA  (modalità v1.x compatibile)\n"
             "  - Menu 'Strutture' nascosto\n"
             "  - Nessun superadmin necessario\n"
-            "  - Modalità ingegneria clinica forzata"
+            "  - Modalità avanzata forzata"
         )
     else:
         return (

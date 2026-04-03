@@ -3,6 +3,18 @@
 migrate_v2_0.py — Migrazione MedInventory v1.x → v2.0
 Script idempotente. Sicuro da eseguire più volte.
 
+Operazioni eseguite:
+  - Crea le nuove tabelle v2 (strutture, strutture_config, api_tokens, login_attempts)
+  - Crea la struttura di default e assegna i record esistenti
+  - Aggiunge struttura_id a divisioni, apparecchi, log_attivita, utenti
+  - Ricrea utenti con CHECK ruolo aggiornato (include superadmin)
+  - Ricrea apparecchi con UNIQUE(struttura_id, modello, matricola)
+  - Aggiunge le nuove colonne a strutture (telefono, responsabile, ecc.)
+  - Rinomina la modalita 'ingegneria_clinica' in 'avanzata'
+  - Aggiorna config.local.json con single_struttura: true
+  - Crea il file sentinella data/.version_notice
+  - Imposta PRAGMA user_version = 200
+
 Eseguire PRIMA di avviare l'app v2.0:
     python migrate_v2_0.py
 """
@@ -68,32 +80,73 @@ def run_safe(db, sql, desc=""):
 
 
 def migrate(db, config):
-    # Fast-path: se il DB è già alla v2.0, non fare nulla
-    current_version = db.execute("PRAGMA user_version").fetchone()[0]
-    if current_version >= 200:
-        logger.info("Database già alla versione 200 — nessuna migrazione necessaria.")
-        return
-
     db.execute("PRAGMA foreign_keys = OFF")
     db.execute("PRAGMA legacy_alter_table = ON")
 
+    current_version = db.execute("PRAGMA user_version").fetchone()[0]
+
     # ----------------------------------------------------------------
-    # 1. Nuove tabelle
+    # FASE A: migrazione strutturale v1 → v2 (salta se già completata)
     # ----------------------------------------------------------------
-    logger.info("1. Creazione nuove tabelle...")
+    if current_version < 200:
+        _migrate_v1_to_v2(db, config)
+    else:
+        logger.info("Fase A: già a versione 200, salto migrazione strutturale.")
+
+    # ----------------------------------------------------------------
+    # FASE B: raffinamenti schema v2.0 (sempre eseguita, idempotente)
+    # ----------------------------------------------------------------
+    logger.info("Fase B: raffinamenti schema strutture...")
+    _add_strutture_columns(db)
+    _rename_modalita_avanzata(db)
+
+    # ----------------------------------------------------------------
+    # FASE C: config, sentinella, user_version
+    # ----------------------------------------------------------------
+    _update_local_config()
+    _write_version_notice()
+
+    db.execute("PRAGMA user_version = 200")
+    db.commit()
+    db.execute("PRAGMA foreign_keys = ON")
+    db.execute("PRAGMA legacy_alter_table = OFF")
+    logger.info("Migrazione completata. PRAGMA user_version = 200")
+
+
+# ============================================================================
+# FASE A: migrazione strutturale v1 → v2
+# ============================================================================
+
+def _migrate_v1_to_v2(db, config):
+    logger.info("Fase A: migrazione strutturale v1 → v2...")
+
+    # ---- A1. Nuove tabelle ----
+    logger.info("  A1. Creazione nuove tabelle...")
 
     run_safe(db, """CREATE TABLE IF NOT EXISTS strutture (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      nome            TEXT NOT NULL,
-      codice          TEXT UNIQUE NOT NULL,
-      descrizione     TEXT,
-      indirizzo       TEXT,
-      email_notifiche TEXT,
-      modalita        TEXT NOT NULL DEFAULT 'ingegneria_clinica'
-                      CHECK(modalita IN ('standard', 'ingegneria_clinica')),
-      attiva          INTEGER DEFAULT 1,
-      created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome                TEXT NOT NULL,
+      codice              TEXT UNIQUE NOT NULL,
+      descrizione         TEXT,
+      tipo                TEXT DEFAULT 'altro'
+                          CHECK(tipo IN ('ospedale','clinica_privata','rsa','ambulatorio',
+                                         'poliambulatorio','laboratorio','altro')),
+      indirizzo           TEXT,
+      telefono            TEXT,
+      email_notifiche     TEXT,
+      pec                 TEXT,
+      responsabile        TEXT,
+      email_responsabile  TEXT,
+      codice_fiscale      TEXT,
+      partita_iva         TEXT,
+      data_attivazione    DATE,
+      scadenza_contratto  DATE,
+      note                TEXT,
+      modalita            TEXT NOT NULL DEFAULT 'standard'
+                          CHECK(modalita IN ('standard', 'avanzata')),
+      attiva              INTEGER DEFAULT 1,
+      created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
     )""", "strutture")
 
     run_safe(db, """CREATE TABLE IF NOT EXISTS strutture_config (
@@ -141,15 +194,13 @@ def migrate(db, config):
 
     db.commit()
 
-    # ----------------------------------------------------------------
-    # 2. Struttura di default
-    # ----------------------------------------------------------------
-    logger.info("2. Struttura di default...")
+    # ---- A2. Struttura di default ----
+    logger.info("  A2. Struttura di default...")
     struttura_nome = config.get('structure_name', config.get('app_name', 'Struttura Principale'))
     struttura_exists = db.execute("SELECT id FROM strutture LIMIT 1").fetchone()
     if not struttura_exists:
         db.execute(
-            """INSERT INTO strutture (nome, codice, modalita) VALUES (?, ?, 'ingegneria_clinica')""",
+            "INSERT INTO strutture (nome, codice, modalita) VALUES (?, ?, 'avanzata')",
             (struttura_nome, 'DEFAULT')
         )
         db.commit()
@@ -159,19 +210,16 @@ def migrate(db, config):
 
     struttura_id = db.execute("SELECT id FROM strutture ORDER BY id LIMIT 1").fetchone()[0]
 
-    # ----------------------------------------------------------------
-    # 3. Colonne struttura_id nelle tabelle esistenti
-    # ----------------------------------------------------------------
-    logger.info("3. Aggiunta colonne struttura_id...")
-
+    # ---- A3. Colonne struttura_id nelle tabelle esistenti ----
+    logger.info("  A3. Aggiunta colonne struttura_id...")
     for table in ('divisioni', 'apparecchi', 'log_attivita'):
         if not column_exists(db, table, 'struttura_id'):
             db.execute(f"ALTER TABLE {table} ADD COLUMN struttura_id INTEGER")
             db.execute(f"UPDATE {table} SET struttura_id = ?", (struttura_id,))
             db.commit()
-            logger.info(f"  struttura_id aggiunto a {table}")
+            logger.info(f"    struttura_id aggiunto a {table}")
         else:
-            logger.info(f"  struttura_id già presente in {table}")
+            logger.info(f"    struttura_id già presente in {table}")
 
     if not column_exists(db, 'utenti', 'struttura_id'):
         db.execute("ALTER TABLE utenti ADD COLUMN struttura_id INTEGER")
@@ -180,86 +228,190 @@ def migrate(db, config):
             (struttura_id,)
         )
         db.commit()
-        logger.info("  struttura_id aggiunto a utenti")
+        logger.info("    struttura_id aggiunto a utenti")
     else:
-        logger.info("  struttura_id già presente in utenti")
+        logger.info("    struttura_id già presente in utenti")
 
-    # ----------------------------------------------------------------
-    # 4. Estensione CHECK ruolo utenti
-    # ----------------------------------------------------------------
-    logger.info("4. Verifica CHECK ruolo utenti...")
+    # ---- A4. Estensione CHECK ruolo utenti ----
+    logger.info("  A4. Verifica CHECK ruolo utenti...")
     utenti_sql = db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='utenti'"
     ).fetchone()[0]
     if 'superadmin' not in utenti_sql:
-        logger.info("  Ricreazione tabella utenti per aggiornare CHECK ruolo...")
+        logger.info("    Ricreazione tabella utenti per aggiornare CHECK ruolo...")
         _recreate_utenti(db)
     else:
-        logger.info("  CHECK ruolo già aggiornato.")
+        logger.info("    CHECK ruolo già aggiornato.")
 
-    # ----------------------------------------------------------------
-    # 5. Ricreazione tabella apparecchi (nuovo UNIQUE struttura_id + modello + matricola)
-    # ----------------------------------------------------------------
-    logger.info("5. Aggiornamento UNIQUE su apparecchi...")
+    # ---- A5. Aggiornamento UNIQUE su apparecchi ----
+    logger.info("  A5. Aggiornamento UNIQUE su apparecchi...")
     app_sql = db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='apparecchi'"
     ).fetchone()[0]
     app_sql_normalized = re.sub(r'\s+', ' ', app_sql)
     if ('struttura_id, modello, matricola' not in app_sql_normalized
             and 'struttura_id,modello,matricola' not in app_sql_normalized):
-        logger.info("  Ricreazione tabella apparecchi per aggiornare UNIQUE...")
+        logger.info("    Ricreazione tabella apparecchi per aggiornare UNIQUE...")
         _recreate_apparecchi(db, struttura_id)
     else:
-        logger.info("  UNIQUE su apparecchi già aggiornato.")
+        logger.info("    UNIQUE su apparecchi già aggiornato.")
 
     db.commit()
 
-    # ----------------------------------------------------------------
-    # 6. config.local.json — aggiunta single_struttura
-    # ----------------------------------------------------------------
-    logger.info("6. Aggiornamento config.local.json...")
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            local_cfg = json.load(f)
-        if 'single_struttura' not in local_cfg:
-            local_cfg['single_struttura'] = True
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(local_cfg, f, indent=2, ensure_ascii=False)
-            logger.info("  single_struttura: true aggiunto a config.local.json")
+
+# ============================================================================
+# FASE B: raffinamenti schema strutture
+# ============================================================================
+
+def _add_strutture_columns(db):
+    """Aggiunge le nuove colonne a strutture se non presenti (idempotente)."""
+    nuove_colonne = [
+        ('tipo',               "TEXT DEFAULT 'altro'"),
+        ('telefono',           'TEXT'),
+        ('pec',                'TEXT'),
+        ('responsabile',       'TEXT'),
+        ('email_responsabile', 'TEXT'),
+        ('codice_fiscale',     'TEXT'),
+        ('partita_iva',        'TEXT'),
+        ('data_attivazione',   'DATE'),
+        ('scadenza_contratto', 'DATE'),
+        ('note',               'TEXT'),
+    ]
+    for col, col_def in nuove_colonne:
+        if not column_exists(db, 'strutture', col):
+            db.execute(f"ALTER TABLE strutture ADD COLUMN {col} {col_def}")
+            logger.info(f"  strutture.{col} aggiunta")
+    db.commit()
+
+
+def _rename_modalita_avanzata(db):
+    """
+    Rinomina la modalita 'ingegneria_clinica' in 'avanzata'.
+    Richiede la ricreazione della tabella strutture per aggiornare il CHECK.
+    """
+    strutture_sql = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='strutture'"
+    ).fetchone()
+    if strutture_sql is None:
+        return  # tabella non ancora creata (non dovrebbe accadere)
+
+    sql_text = strutture_sql[0]
+
+    # Controlla se il CHECK usa ancora 'ingegneria_clinica'
+    needs_recreate = 'ingegneria_clinica' in sql_text
+    # Controlla se ci sono righe con la vecchia modalita
+    has_old_value = db.execute(
+        "SELECT COUNT(*) FROM strutture WHERE modalita = 'ingegneria_clinica'"
+    ).fetchone()[0] > 0
+
+    if not needs_recreate and not has_old_value:
+        logger.info("  Modalita: nessun riferimento a 'ingegneria_clinica', niente da fare.")
+        return
+
+    if needs_recreate:
+        logger.info("  Ricreazione tabella strutture per aggiornare CHECK modalita...")
+        _recreate_strutture(db)
+    elif has_old_value:
+        # CHECK non limita piu, aggiorna solo i dati
+        db.execute(
+            "UPDATE strutture SET modalita = 'avanzata' WHERE modalita = 'ingegneria_clinica'"
+        )
+        db.commit()
+        logger.info("  Dati strutture: 'ingegneria_clinica' rinominato in 'avanzata'.")
+
+
+def _recreate_strutture(db):
+    """Ricrea strutture con CHECK modalita aggiornato e nuove colonne."""
+    cols_old = [row[1] for row in db.execute("PRAGMA table_info(strutture)").fetchall()]
+
+    db.execute("ALTER TABLE strutture RENAME TO _strutture_old")
+    db.execute("""CREATE TABLE strutture (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      nome                TEXT NOT NULL,
+      codice              TEXT UNIQUE NOT NULL,
+      descrizione         TEXT,
+      tipo                TEXT DEFAULT 'altro'
+                          CHECK(tipo IN ('ospedale','clinica_privata','rsa','ambulatorio',
+                                         'poliambulatorio','laboratorio','altro')),
+      indirizzo           TEXT,
+      telefono            TEXT,
+      email_notifiche     TEXT,
+      pec                 TEXT,
+      responsabile        TEXT,
+      email_responsabile  TEXT,
+      codice_fiscale      TEXT,
+      partita_iva         TEXT,
+      data_attivazione    DATE,
+      scadenza_contratto  DATE,
+      note                TEXT,
+      modalita            TEXT NOT NULL DEFAULT 'standard'
+                          CHECK(modalita IN ('standard', 'avanzata')),
+      attiva              INTEGER DEFAULT 1,
+      created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""")
+
+    # Colonne della nuova tabella con fallback per quelle assenti nel vecchio schema
+    # (nome_nuovo, expr_se_presente, expr_se_assente)
+    col_mapping = [
+        ('id',                  'id',                  None),
+        ('nome',                'nome',                None),
+        ('codice',              'codice',              None),
+        ('descrizione',         'descrizione',         'NULL'),
+        ('tipo',                'tipo',                "'altro'"),
+        ('indirizzo',           'indirizzo',           'NULL'),
+        ('telefono',            'telefono',            'NULL'),
+        ('email_notifiche',     'email_notifiche',     'NULL'),
+        ('pec',                 'pec',                 'NULL'),
+        ('responsabile',        'responsabile',        'NULL'),
+        ('email_responsabile',  'email_responsabile',  'NULL'),
+        ('codice_fiscale',      'codice_fiscale',      'NULL'),
+        ('partita_iva',         'partita_iva',         'NULL'),
+        ('data_attivazione',    'data_attivazione',    'NULL'),
+        ('scadenza_contratto',  'scadenza_contratto',  'NULL'),
+        ('note',                'note',                'NULL'),
+        # Rinomina ingegneria_clinica → avanzata
+        ('modalita',            None,                  None),   # gestito separatamente
+        ('attiva',              'attiva',              '1'),
+        ('created_at',          'created_at',          'CURRENT_TIMESTAMP'),
+        ('updated_at',          'updated_at',          'CURRENT_TIMESTAMP'),
+    ]
+
+    select_exprs = []
+    for col_new, col_old, fallback in col_mapping:
+        if col_new == 'modalita':
+            if 'modalita' in cols_old:
+                select_exprs.append(
+                    "CASE WHEN modalita = 'ingegneria_clinica' THEN 'avanzata' "
+                    "ELSE modalita END AS modalita"
+                )
+            else:
+                select_exprs.append("'standard' AS modalita")
+        elif col_old in cols_old:
+            select_exprs.append(col_old)
+        elif fallback is not None:
+            select_exprs.append(f"{fallback} AS {col_new}")
         else:
-            logger.info("  single_struttura già presente in config.local.json")
-    else:
-        logger.info("  config.local.json non trovato, salto.")
+            logger.warning(f"  Colonna attesa '{col_new}' non trovata, uso NULL")
+            select_exprs.append(f"NULL AS {col_new}")
 
-    # ----------------------------------------------------------------
-    # 7. File sentinella versione
-    # ----------------------------------------------------------------
-    logger.info("7. File sentinella versione...")
-    data_dir = os.path.join(BASE_DIR, 'data')
-    notice_path = os.path.join(data_dir, '.version_notice')
-    if not os.path.exists(data_dir):
-        logger.warning("  Directory data/ non trovata — file sentinella non creato. Creala prima di avviare l'app.")
-    elif os.path.exists(notice_path):
-        logger.info("  File sentinella già presente.")
-    else:
-        with open(notice_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                'old_version': '1.x',
-                'new_version': '2.0.0',
-                'upgraded_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
-            }, f)
-        logger.info("  File sentinella creato.")
+    select_clause = ", ".join(select_exprs)
+    db.execute(f"INSERT INTO strutture SELECT {select_clause} FROM _strutture_old")
+    db.execute("DROP TABLE _strutture_old")
 
-    # ----------------------------------------------------------------
-    # 8. PRAGMA user_version → 200
-    # ----------------------------------------------------------------
-    db.execute("PRAGMA user_version = 200")
+    for idx in [
+        "CREATE INDEX IF NOT EXISTS idx_strutture_codice ON strutture(codice)",
+        "CREATE INDEX IF NOT EXISTS idx_strutture_attiva ON strutture(attiva)",
+    ]:
+        db.execute(idx)
+
     db.commit()
+    logger.info("  Tabella strutture ricreata con CHECK 'avanzata' e nuove colonne.")
 
-    db.execute("PRAGMA foreign_keys = ON")
-    db.execute("PRAGMA legacy_alter_table = OFF")
-    logger.info("Migrazione completata. PRAGMA user_version = 200")
 
+# ============================================================================
+# Helper: ricreazione utenti e apparecchi
+# ============================================================================
 
 def _recreate_utenti(db):
     """Ricrea la tabella utenti con CHECK ruolo aggiornato (include 'superadmin')."""
@@ -347,39 +499,37 @@ def _recreate_apparecchi(db, struttura_id):
     )""")
     cols_old = [row[1] for row in db.execute("PRAGMA table_info(_apparecchi_old)").fetchall()]
 
-    # Colonne obbligatorie della nuova tabella con fallback per quelle assenti nel vecchio schema
-    # Formato: (nome_col_nuova, expr_se_presente, expr_se_assente)
     col_mapping = [
-        ('id',                    'id',                    None),          # sempre presente
-        ('struttura_id',          'struttura_id',          str(struttura_id)),
-        ('divisione_id',          'divisione_id',          None),          # sempre presente
-        ('descrizione',           'descrizione',           'NULL'),
-        ('matricola',             'matricola',             None),          # sempre presente
-        ('numero_inventario',     'numero_inventario',     'NULL'),
-        ('marca',                 'marca',                 None),          # sempre presente
-        ('modello',               'modello',               None),          # sempre presente
-        ('anno_fabbricazione',    'anno_fabbricazione',    'NULL'),
-        ('classificazione',       'classificazione',       'NULL'),
-        ('ubicazione',            'ubicazione',            'NULL'),
-        ('stato',                 'stato',                 "'funzionante'"),
-        ('connesso_rete',         'connesso_rete',         '0'),
-        ('ip_address',            'ip_address',            'NULL'),
-        ('mac_address',           'mac_address',           'NULL'),
-        ('hostname',              'hostname',              'NULL'),
-        ('porta',                 'porta',                 'NULL'),
-        ('protocollo',            'protocollo',            'NULL'),
-        ('url_interfaccia',       'url_interfaccia',       'NULL'),
-        ('fornitore',             'fornitore',             'NULL'),
-        ('codice_fornitore',      'codice_fornitore',      'NULL'),
-        ('garanzia_scadenza',     'garanzia_scadenza',     'NULL'),
-        ('contratto_manutenzione','contratto_manutenzione','NULL'),
-        ('note',                  'note',                  'NULL'),
-        ('foto_path',             'foto_path',             'NULL'),
-        ('soggetto_verifica',     'soggetto_verifica',     '1'),
-        ('created_by',            'created_by',            'NULL'),
-        ('updated_by',            'updated_by',            'NULL'),
-        ('created_at',            'created_at',            'CURRENT_TIMESTAMP'),
-        ('updated_at',            'updated_at',            'CURRENT_TIMESTAMP'),
+        ('id',                     'id',                     None),
+        ('struttura_id',           'struttura_id',           str(struttura_id)),
+        ('divisione_id',           'divisione_id',           None),
+        ('descrizione',            'descrizione',            'NULL'),
+        ('matricola',              'matricola',              None),
+        ('numero_inventario',      'numero_inventario',      'NULL'),
+        ('marca',                  'marca',                  None),
+        ('modello',                'modello',                None),
+        ('anno_fabbricazione',     'anno_fabbricazione',     'NULL'),
+        ('classificazione',        'classificazione',        'NULL'),
+        ('ubicazione',             'ubicazione',             'NULL'),
+        ('stato',                  'stato',                  "'funzionante'"),
+        ('connesso_rete',          'connesso_rete',          '0'),
+        ('ip_address',             'ip_address',             'NULL'),
+        ('mac_address',            'mac_address',            'NULL'),
+        ('hostname',               'hostname',               'NULL'),
+        ('porta',                  'porta',                  'NULL'),
+        ('protocollo',             'protocollo',             'NULL'),
+        ('url_interfaccia',        'url_interfaccia',        'NULL'),
+        ('fornitore',              'fornitore',              'NULL'),
+        ('codice_fornitore',       'codice_fornitore',       'NULL'),
+        ('garanzia_scadenza',      'garanzia_scadenza',      'NULL'),
+        ('contratto_manutenzione', 'contratto_manutenzione', 'NULL'),
+        ('note',                   'note',                   'NULL'),
+        ('foto_path',              'foto_path',              'NULL'),
+        ('soggetto_verifica',      'soggetto_verifica',      '1'),
+        ('created_by',             'created_by',             'NULL'),
+        ('updated_by',             'updated_by',             'NULL'),
+        ('created_at',             'created_at',             'CURRENT_TIMESTAMP'),
+        ('updated_at',             'updated_at',             'CURRENT_TIMESTAMP'),
     ]
 
     select_exprs = []
@@ -389,7 +539,6 @@ def _recreate_apparecchi(db, struttura_id):
         elif fallback is not None:
             select_exprs.append(f"{fallback} AS {col_new}")
         else:
-            # Colonna marcata come "sempre presente" ma assente — usa NULL e logga warning
             logger.warning(f"  Colonna attesa '{col_new}' non trovata in _apparecchi_old, uso NULL")
             select_exprs.append(f"NULL AS {col_new}")
 
@@ -407,6 +556,49 @@ def _recreate_apparecchi(db, struttura_id):
         db.execute(idx)
     db.commit()
 
+
+# ============================================================================
+# FASE C: config e sentinella
+# ============================================================================
+
+def _update_local_config():
+    """Aggiunge single_struttura: true a config.local.json se non presente."""
+    if not os.path.exists(CONFIG_PATH):
+        logger.info("  config.local.json non trovato, salto.")
+        return
+    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+        local_cfg = json.load(f)
+    if 'single_struttura' not in local_cfg:
+        local_cfg['single_struttura'] = True
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(local_cfg, f, indent=2, ensure_ascii=False)
+        logger.info("  single_struttura: true aggiunto a config.local.json")
+    else:
+        logger.info("  single_struttura già presente in config.local.json")
+
+
+def _write_version_notice():
+    """Crea data/.version_notice (file sentinella per l'app)."""
+    data_dir = os.path.join(BASE_DIR, 'data')
+    notice_path = os.path.join(data_dir, '.version_notice')
+    if not os.path.exists(data_dir):
+        logger.warning("  Directory data/ non trovata — file sentinella non creato.")
+        return
+    if os.path.exists(notice_path):
+        logger.info("  File sentinella già presente.")
+        return
+    with open(notice_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            'old_version': '1.x',
+            'new_version': '2.0.0',
+            'upgraded_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
+        }, f)
+    logger.info("  File sentinella creato.")
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
     config = load_config()
@@ -434,10 +626,10 @@ def main():
         raise
     else:
         db.close()
-        logger.info("=" * 50)
+        logger.info("=" * 55)
         logger.info("Migrazione v2.0 completata con successo.")
         logger.info(f"Backup pre-migrazione: {backup_path}")
-        logger.info("Avviare l'applicazione con: python app.py")
+        logger.info("Avviare l'applicazione con: python run_production.py")
 
 
 if __name__ == '__main__':
