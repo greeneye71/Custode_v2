@@ -430,13 +430,37 @@ sc query cloudflared
 
 ## Parte 10 — Configurazione sicura in MedInventory
 
-Dopo aver configurato il tunnel, attivare le opzioni di sicurezza in `config.local.json`:
+### Script `cloudflare_mode.py`
+
+MedInventory include uno script CLI per attivare, disattivare e diagnosticare
+l'integrazione con Cloudflare Tunnel senza dover modificare manualmente i file
+di configurazione. Funziona sia su **Windows** che su **Linux**.
+
+| Comando | Descrizione |
+|---|---|
+| `python cloudflare_mode.py --status` | Mostra lo stato attuale (sola lettura) |
+| `python cloudflare_mode.py --on` | Attiva la modalità Cloudflare |
+| `python cloudflare_mode.py --off` | Disattiva la modalità Cloudflare |
+| `python cloudflare_mode.py --test` | Diagnostica completa del tunnel (10 sezioni) |
+| `python cloudflare_mode.py` | Mostra stato e chiede conferma per il cambio |
+
+**Cosa imposta `--on`** in `config.local.json`:
 
 ```json
 {
   "cloudflare_mode": true,
   "force_https":     true,
   "host":            "127.0.0.1"
+}
+```
+
+**Cosa ripristina `--off`**:
+
+```json
+{
+  "cloudflare_mode": false,
+  "force_https":     false,
+  "host":            "0.0.0.0"
 }
 ```
 
@@ -475,15 +499,21 @@ Indipendentemente da `cloudflare_mode` e `force_https`, MedInventory invia sempr
 
 ```bash
 # 1. Configurare il tunnel come descritto nelle parti 1-7
-# 2. Aggiornare config.local.json
-python toggle_modalita.py --status      # verifica modalità
-# Aprire config.local.json e aggiungere:
-#   "cloudflare_mode": true,
-#   "force_https": true,
-#   "host": "127.0.0.1"
-# 3. Riavviare
+
+# 2. Attivare la modalità Cloudflare (aggiorna config.local.json automaticamente)
+python cloudflare_mode.py --on
+
+# 3. Riavviare MedInventory per applicare le modifiche
 python run_production.py
+
+# 4. Verificare il funzionamento end-to-end
+python cloudflare_mode.py --test
 ```
+
+La diagnostica `--test` controlla in sequenza: configurazione MedInventory,
+installazione di `cloudflared`, stato del processo/servizio, file `config.yml`
+del tunnel, raggiungibilità locale, tunnel HTTPS, header di sicurezza,
+flag dei cookie, redirect HTTP→HTTPS e risoluzione DNS.
 
 ---
 
