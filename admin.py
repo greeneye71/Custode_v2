@@ -28,8 +28,17 @@ ANTHROPIC_MODELS = [
     ('claude-3-haiku-20240307',    'Claude 3 Haiku — Legacy veloce'),
 ]
 
+GEMINI_MODELS = [
+    ('gemini-2.0-flash',          'Gemini 2.0 Flash — Veloce (consigliato)'),
+    ('gemini-2.0-flash-lite',     'Gemini 2.0 Flash-Lite — Più economico'),
+    ('gemini-1.5-pro',            'Gemini 1.5 Pro — Avanzato'),
+    ('gemini-1.5-flash',          'Gemini 1.5 Flash — Bilanciato'),
+    ('gemini-1.5-flash-8b',       'Gemini 1.5 Flash-8B — Leggerissimo'),
+]
+
 AI_PROVIDERS = [
     ('anthropic',          'Anthropic Claude (Cloud)'),
+    ('gemini',             'Google Gemini (Cloud)'),
     ('ollama',             'Ollama (Locale)'),
     ('lmstudio',           'LM Studio (Locale)'),
     ('openai_compatible',  'Altro OpenAI-compatibile'),
@@ -477,6 +486,10 @@ def configurazione():
         if api_key and api_key != '••••••••':
             config['anthropic_api_key'] = api_key
 
+        gemini_key = request.form.get('gemini_api_key', '').strip()
+        if gemini_key and gemini_key != '••••••••':
+            config['gemini_api_key'] = gemini_key
+
         config['ai_import_model'] = request.form.get('ai_import_model', config.get('ai_import_model', '')).strip()
         config['ai_email_model'] = request.form.get('ai_email_model', config.get('ai_email_model', '')).strip()
         config['ai_verifiche_model'] = request.form.get('ai_verifiche_model', config.get('ai_verifiche_model', '')).strip()
@@ -545,8 +558,15 @@ def configurazione():
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
 
+    if display_config.get('gemini_api_key'):
+        key = display_config['gemini_api_key']
+        display_config['gemini_api_key_masked'] = key[:4] + '••••••••' + key[-4:] if len(key) > 8 else '••••••••'
+    else:
+        display_config['gemini_api_key_masked'] = ''
+
     return render_template('admin/configurazione.html', config=display_config,
                            anthropic_models=ANTHROPIC_MODELS,
+                           gemini_models=GEMINI_MODELS,
                            ai_providers=AI_PROVIDERS,
                            ai_provider_defaults=AI_PROVIDER_DEFAULTS)
 
