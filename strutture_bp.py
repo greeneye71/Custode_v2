@@ -35,43 +35,79 @@ def index():
     return render_template('strutture/index.html', strutture=strutture)
 
 
+_TIPI_STRUTTURA = ('ospedale', 'clinica_privata', 'rsa', 'ambulatorio',
+                   'poliambulatorio', 'laboratorio', 'altro')
+
+
+def _leggi_form_struttura(form):
+    """Estrae e normalizza tutti i campi struttura dal form POST."""
+    modalita = form.get('modalita', 'standard')
+    if modalita not in ('standard', 'avanzata'):
+        modalita = 'standard'
+    tipo = form.get('tipo', 'altro')
+    if tipo not in _TIPI_STRUTTURA:
+        tipo = 'altro'
+    return {
+        'nome':               form.get('nome', '').strip(),
+        'codice':             form.get('codice', '').strip().upper(),
+        'descrizione':        form.get('descrizione', '').strip() or None,
+        'tipo':               tipo,
+        'indirizzo':          form.get('indirizzo', '').strip() or None,
+        'telefono':           form.get('telefono', '').strip() or None,
+        'email_notifiche':    form.get('email_notifiche', '').strip() or None,
+        'pec':                form.get('pec', '').strip() or None,
+        'responsabile':       form.get('responsabile', '').strip() or None,
+        'email_responsabile': form.get('email_responsabile', '').strip() or None,
+        'codice_fiscale':     form.get('codice_fiscale', '').strip() or None,
+        'partita_iva':        form.get('partita_iva', '').strip() or None,
+        'data_attivazione':   form.get('data_attivazione', '').strip() or None,
+        'scadenza_contratto': form.get('scadenza_contratto', '').strip() or None,
+        'note':               form.get('note', '').strip() or None,
+        'modalita':           modalita,
+    }
+
+
 @strutture_bp.route('/nuova', methods=['GET', 'POST'])
 @superadmin_required
 def nuova():
     if request.method == 'POST':
-        nome = request.form.get('nome', '').strip()
-        codice = request.form.get('codice', '').strip().upper()
-        descrizione = request.form.get('descrizione', '').strip()
-        indirizzo = request.form.get('indirizzo', '').strip()
-        email_notifiche = request.form.get('email_notifiche', '').strip()
-        modalita = request.form.get('modalita', 'standard')
-        if modalita not in ('standard', 'avanzata'):
-            modalita = 'standard'
+        dati = _leggi_form_struttura(request.form)
 
-        if not nome or not codice:
+        if not dati['nome'] or not dati['codice']:
             flash('Nome e codice sono obbligatori.', 'danger')
-            return render_template('strutture/form.html', struttura=request.form)
+            return render_template('strutture/form.html', struttura=request.form,
+                                   tipi_struttura=_TIPI_STRUTTURA)
 
         try:
             cur = execute(
-                """INSERT INTO strutture (nome, codice, descrizione, indirizzo, email_notifiche, modalita)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (nome, codice, descrizione or None, indirizzo or None,
-                 email_notifiche or None, modalita)
+                """INSERT INTO strutture
+                   (nome, codice, descrizione, tipo, indirizzo, telefono,
+                    email_notifiche, pec, responsabile, email_responsabile,
+                    codice_fiscale, partita_iva, data_attivazione,
+                    scadenza_contratto, note, modalita)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (dati['nome'], dati['codice'], dati['descrizione'], dati['tipo'],
+                 dati['indirizzo'], dati['telefono'], dati['email_notifiche'],
+                 dati['pec'], dati['responsabile'], dati['email_responsabile'],
+                 dati['codice_fiscale'], dati['partita_iva'],
+                 dati['data_attivazione'], dati['scadenza_contratto'],
+                 dati['note'], dati['modalita'])
             )
             log_attivita(g.user['id'], 'crea', 'struttura', cur.lastrowid,
-                         f'Struttura "{nome}" creata')
-            flash(f'Struttura "{nome}" creata con successo.', 'success')
+                         f'Struttura "{dati["nome"]}" creata')
+            flash(f'Struttura "{dati["nome"]}" creata con successo.', 'success')
             return redirect(url_for('strutture.index'))
         except Exception as e:
             if 'UNIQUE' in str(e):
-                flash(f'Il codice "{codice}" è già in uso.', 'danger')
+                flash(f'Il codice "{dati["codice"]}" è già in uso.', 'danger')
             else:
                 current_app.logger.error(f'Errore creazione struttura: {e}')
                 flash('Errore durante il salvataggio. Riprovare.', 'danger')
-        return render_template('strutture/form.html', struttura=request.form)
+        return render_template('strutture/form.html', struttura=request.form,
+                               tipi_struttura=_TIPI_STRUTTURA)
 
-    return render_template('strutture/form.html', struttura=None)
+    return render_template('strutture/form.html', struttura=None,
+                           tipi_struttura=_TIPI_STRUTTURA)
 
 
 @strutture_bp.route('/<int:struttura_id>/modifica', methods=['GET', 'POST'])
@@ -83,30 +119,33 @@ def modifica(struttura_id):
         return redirect(url_for('strutture.index'))
 
     if request.method == 'POST':
-        nome = request.form.get('nome', '').strip()
-        codice = request.form.get('codice', '').strip().upper()
-        descrizione = request.form.get('descrizione', '').strip()
-        indirizzo = request.form.get('indirizzo', '').strip()
-        email_notifiche = request.form.get('email_notifiche', '').strip()
-        modalita = request.form.get('modalita', 'standard')
-        if modalita not in ('standard', 'avanzata'):
-            modalita = 'standard'
+        dati = _leggi_form_struttura(request.form)
         attiva = 1 if request.form.get('attiva') else 0
 
-        if not nome or not codice:
+        if not dati['nome'] or not dati['codice']:
             flash('Nome e codice sono obbligatori.', 'danger')
-            return render_template('strutture/form.html', struttura=dict(struttura) | dict(request.form))
+            return render_template('strutture/form.html',
+                                   struttura=dict(struttura) | dict(request.form),
+                                   tipi_struttura=_TIPI_STRUTTURA)
 
         try:
             execute(
-                """UPDATE strutture SET nome=?, codice=?, descrizione=?, indirizzo=?,
-                   email_notifiche=?, modalita=?, attiva=?, updated_at=CURRENT_TIMESTAMP
+                """UPDATE strutture SET
+                   nome=?, codice=?, descrizione=?, tipo=?, indirizzo=?,
+                   telefono=?, email_notifiche=?, pec=?, responsabile=?,
+                   email_responsabile=?, codice_fiscale=?, partita_iva=?,
+                   data_attivazione=?, scadenza_contratto=?, note=?,
+                   modalita=?, attiva=?, updated_at=CURRENT_TIMESTAMP
                    WHERE id=?""",
-                (nome, codice, descrizione or None, indirizzo or None,
-                 email_notifiche or None, modalita, attiva, struttura_id)
+                (dati['nome'], dati['codice'], dati['descrizione'], dati['tipo'],
+                 dati['indirizzo'], dati['telefono'], dati['email_notifiche'],
+                 dati['pec'], dati['responsabile'], dati['email_responsabile'],
+                 dati['codice_fiscale'], dati['partita_iva'],
+                 dati['data_attivazione'], dati['scadenza_contratto'],
+                 dati['note'], dati['modalita'], attiva, struttura_id)
             )
             log_attivita(g.user['id'], 'modifica', 'struttura', struttura_id,
-                         f'Struttura "{nome}" modificata')
+                         f'Struttura "{dati["nome"]}" modificata')
             flash('Struttura aggiornata.', 'success')
             return redirect(url_for('strutture.index'))
         except Exception as e:
@@ -114,7 +153,8 @@ def modifica(struttura_id):
             flash('Errore durante il salvataggio. Riprovare.', 'danger')
         struttura = dict(struttura) | dict(request.form)
 
-    return render_template('strutture/form.html', struttura=struttura)
+    return render_template('strutture/form.html', struttura=struttura,
+                           tipi_struttura=_TIPI_STRUTTURA)
 
 
 @strutture_bp.route('/<int:struttura_id>/config', methods=['GET', 'POST'])

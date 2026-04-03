@@ -10,51 +10,53 @@
 </div>
 
 <div class="row">
-  <div class="col-lg-8">
+  <div class="col-lg-9">
     <form method="POST" action="{{ url_for('strutture.modifica', struttura_id=struttura.get('id')) if struttura and struttura.get('id') else url_for('strutture.nuova') }}">
+
+      <!-- ── Identificazione ─────────────────────────────────────── -->
       <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-building me-1"></i> Dati struttura</div>
+        <div class="card-header"><i class="bi bi-building me-1"></i> Identificazione</div>
         <div class="card-body">
           <div class="row g-3">
 
-            <div class="col-md-8">
+            <div class="col-md-6">
               <label class="form-label">Nome <span class="text-danger">*</span></label>
               <input type="text" class="form-control" name="nome"
                      value="{{ struttura.get('nome', '') if struttura else '' }}"
                      required placeholder="Es. Ospedale Santa Maria">
             </div>
 
-            <div class="col-md-4">
+            <div class="col-md-3">
               <label class="form-label">Codice <span class="text-danger">*</span></label>
               <input type="text" class="form-control text-uppercase" name="codice"
                      value="{{ struttura.get('codice', '') if struttura else '' }}"
                      required placeholder="Es. OSM"
                      style="text-transform: uppercase;">
-              <div class="form-text">Codice univoco (verrà convertito in maiuscolo).</div>
+              <div class="form-text">Codice univoco.</div>
+            </div>
+
+            <div class="col-md-3">
+              <label class="form-label">Tipo struttura</label>
+              <select class="form-select" name="tipo">
+                {% set tipo_corrente = struttura.get('tipo', 'altro') if struttura else 'altro' %}
+                <option value="ospedale"        {% if tipo_corrente == 'ospedale' %}selected{% endif %}>Ospedale</option>
+                <option value="clinica_privata" {% if tipo_corrente == 'clinica_privata' %}selected{% endif %}>Clinica privata</option>
+                <option value="rsa"             {% if tipo_corrente == 'rsa' %}selected{% endif %}>RSA</option>
+                <option value="ambulatorio"     {% if tipo_corrente == 'ambulatorio' %}selected{% endif %}>Ambulatorio</option>
+                <option value="poliambulatorio" {% if tipo_corrente == 'poliambulatorio' %}selected{% endif %}>Poliambulatorio</option>
+                <option value="laboratorio"     {% if tipo_corrente == 'laboratorio' %}selected{% endif %}>Laboratorio</option>
+                <option value="altro"           {% if tipo_corrente == 'altro' %}selected{% endif %}>Altro</option>
+              </select>
             </div>
 
             <div class="col-12">
               <label class="form-label">Descrizione</label>
               <textarea class="form-control" name="descrizione" rows="2"
-                        placeholder="Descrizione opzionale della struttura">{{ struttura.get('descrizione', '') if struttura else '' }}</textarea>
-            </div>
-
-            <div class="col-12">
-              <label class="form-label">Indirizzo</label>
-              <input type="text" class="form-control" name="indirizzo"
-                     value="{{ struttura.get('indirizzo', '') if struttura else '' }}"
-                     placeholder="Via, numero civico, città">
+                        placeholder="Descrizione opzionale">{{ struttura.get('descrizione', '') if struttura else '' }}</textarea>
             </div>
 
             <div class="col-md-6">
-              <label class="form-label">Email notifiche</label>
-              <input type="email" class="form-control" name="email_notifiche"
-                     value="{{ struttura.get('email_notifiche', '') if struttura else '' }}"
-                     placeholder="notifiche@struttura.it">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Modalità</label>
+              <label class="form-label">Modalità operativa</label>
               <select class="form-select" name="modalita">
                 <option value="standard"
                   {% if not struttura or struttura.get('modalita', 'standard') == 'standard' %}selected{% endif %}>
@@ -65,20 +67,139 @@
                   Avanzata
                 </option>
               </select>
+              <div class="form-text">
+                <strong>Avanzata</strong>: abilita QR code, log attività, verifiche elettriche e API.
+              </div>
             </div>
 
             {% if struttura and struttura.get('id') %}
-            <div class="col-12">
+            <div class="col-md-6 d-flex align-items-end pb-1">
               <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="attiva" id="attiva"
                        {% if struttura.get('attiva', 1) %}checked{% endif %}>
                 <label class="form-check-label" for="attiva">Struttura attiva</label>
               </div>
-              <div class="form-text">Deseleziona per disattivare l'accesso a questa struttura.</div>
             </div>
             {% endif %}
 
           </div>
+        </div>
+      </div>
+
+      <!-- ── Recapiti ────────────────────────────────────────────── -->
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-geo-alt me-1"></i> Recapiti</div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-12">
+              <label class="form-label">Indirizzo</label>
+              <input type="text" class="form-control" name="indirizzo"
+                     value="{{ struttura.get('indirizzo', '') if struttura else '' }}"
+                     placeholder="Via, numero civico, città, CAP">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Telefono</label>
+              <input type="tel" class="form-control" name="telefono"
+                     value="{{ struttura.get('telefono', '') if struttura else '' }}"
+                     placeholder="+39 02 1234567">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Email notifiche</label>
+              <input type="email" class="form-control" name="email_notifiche"
+                     value="{{ struttura.get('email_notifiche', '') if struttura else '' }}"
+                     placeholder="notifiche@struttura.it">
+              <div class="form-text">Destinatario dei report e degli alert scadenze.</div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">PEC</label>
+              <input type="email" class="form-control" name="pec"
+                     value="{{ struttura.get('pec', '') if struttura else '' }}"
+                     placeholder="struttura@pec.it">
+              <div class="form-text">Posta Elettronica Certificata.</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Responsabile ────────────────────────────────────────── -->
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-person-badge me-1"></i> Responsabile</div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-md-6">
+              <label class="form-label">Nome responsabile</label>
+              <input type="text" class="form-control" name="responsabile"
+                     value="{{ struttura.get('responsabile', '') if struttura else '' }}"
+                     placeholder="Es. Dott. Mario Rossi">
+              <div class="form-text">Referente principale (direttore sanitario, resp. IC, ecc.).</div>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Email responsabile</label>
+              <input type="email" class="form-control" name="email_responsabile"
+                     value="{{ struttura.get('email_responsabile', '') if struttura else '' }}"
+                     placeholder="mario.rossi@struttura.it">
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Dati fiscali ────────────────────────────────────────── -->
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-file-earmark-text me-1"></i> Dati fiscali e contrattuali</div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-md-4">
+              <label class="form-label">Codice fiscale</label>
+              <input type="text" class="form-control" name="codice_fiscale"
+                     value="{{ struttura.get('codice_fiscale', '') if struttura else '' }}"
+                     placeholder="RSSMRA80A01H501U"
+                     maxlength="16" style="text-transform: uppercase;">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Partita IVA</label>
+              <input type="text" class="form-control" name="partita_iva"
+                     value="{{ struttura.get('partita_iva', '') if struttura else '' }}"
+                     placeholder="IT 12345678901"
+                     maxlength="13">
+            </div>
+
+            <div class="col-md-4">
+              <!-- spacer -->
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Data attivazione contratto</label>
+              <input type="date" class="form-control" name="data_attivazione"
+                     value="{{ struttura.get('data_attivazione', '') if struttura else '' }}">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Scadenza contratto</label>
+              <input type="date" class="form-control" name="scadenza_contratto"
+                     value="{{ struttura.get('scadenza_contratto', '') if struttura else '' }}">
+              <div class="form-text">Usato per alert preventivi.</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Note ───────────────────────────────────────────────── -->
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-journal-text me-1"></i> Note</div>
+        <div class="card-body">
+          <textarea class="form-control" name="note" rows="3"
+                    placeholder="Note interne di gestione, istruzioni specifiche, ecc.">{{ struttura.get('note', '') if struttura else '' }}</textarea>
         </div>
       </div>
 
@@ -89,6 +210,7 @@
         </button>
         <a href="{{ url_for('strutture.index') }}" class="btn btn-outline-secondary">Annulla</a>
       </div>
+
     </form>
   </div>
 </div>
