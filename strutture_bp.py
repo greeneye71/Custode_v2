@@ -142,11 +142,12 @@ def _sync_divisioni_struttura(db, struttura_id, form):
         if not nome:
             raise ValueError('Ogni divisione esistente deve avere un nome.')
 
+        codice = _codice_univoco_divisione(db, nome, struttura_id, esclude_id=div_id)
         cur = db.execute(
             """UPDATE divisioni
-               SET nome=?, colore=?, descrizione=?, attiva=?, updated_at=CURRENT_TIMESTAMP
+               SET nome=?, codice=?, colore=?, descrizione=?, attiva=?, updated_at=CURRENT_TIMESTAMP
                WHERE id=? AND struttura_id=?""",
-            (nome, colore, descrizione, attiva, div_id, struttura_id)
+            (nome, codice, colore, descrizione, attiva, div_id, struttura_id)
         )
         if cur.rowcount == 0:
             raise ValueError('Una delle divisioni selezionate non appartiene alla struttura corrente.')
@@ -288,6 +289,13 @@ def modifica(struttura_id):
                  dati['note'], dati['modalita'], attiva, struttura_id)
             )
             _sync_divisioni_struttura(db, struttura_id, request.form)
+            # Invalida sessioni degli utenti se la struttura viene disattivata
+            if not attiva:
+                db.execute(
+                    "DELETE FROM sessioni WHERE utente_id IN "
+                    "(SELECT id FROM utenti WHERE struttura_id=?)",
+                    (struttura_id,)
+                )
             db.commit()
             log_attivita(g.user['id'], 'modifica', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" modificata')
@@ -398,11 +406,25 @@ def elimina_divisione(struttura_id, div_id):
         flash('Non puoi eliminare l\'ultima divisione della struttura.', 'danger')
         return redirect(url_for('strutture.modifica', struttura_id=struttura_id))
 
-    execute("DELETE FROM divisioni WHERE id=? AND struttura_id=?", (div_id, struttura_id))
-    log_attivita(g.user['id'], 'elimina', 'divisioni', div_id,
-                 f'Eliminata divisione "{div["nome"]}" dalla struttura {struttura_id}',
-                 struttura_id=struttura_id)
-    flash(f'Divisione "{div["nome"]}" eliminata.', 'success')
+    try:
+        db = get_db()
+        # Annulla FK nullable che puntano alla divisione (nessuna ha CASCADE)
+        db.execute("UPDATE utenti SET divisione_default_id=NULL WHERE divisione_default_id=?", (div_id,))
+        db.execute("UPDATE email_config SET divisione_id=NULL WHERE divisione_id=?", (div_id,))
+        db.execute("UPDATE import_history SET divisione_id=NULL WHERE divisione_id=?", (div_id,))
+        db.execute("DELETE FROM divisioni WHERE id=? AND struttura_id=?", (div_id, struttura_id))
+        db.commit()
+        log_attivita(g.user['id'], 'elimina', 'divisioni', div_id,
+                     f'Eliminata divisione "{div["nome"]}" dalla struttura {struttura_id}',
+                     struttura_id=struttura_id)
+        flash(f'Divisione "{div["nome"]}" eliminata.', 'success')
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        current_app.logger.error(f'Errore eliminazione divisione {div_id}: {e}')
+        flash('Errore durante l\'eliminazione della divisione.', 'danger')
     return redirect(url_for('strutture.modifica', struttura_id=struttura_id))
 
 
