@@ -1,0 +1,16 @@
+<li class="nav-item dropdown">
+  <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+    <i class="bi bi-building me-1"></i>
+    {% if g_struttura %}{{ g_struttura.nome }}{% else %}Seleziona struttura{% endif %}
+  </a>
+  <ul class="dropdown-menu dropdown-menu-end">
+    {% for s in strutture_list %}
+    <li>
+      <a class="dropdown-item {% if g_struttura and g_struttura.id == s.id %}active{% endif %}"
+         href="{{ url_for('auth.tecnico_seleziona_struttura', struttura_id=s.id) }}">
+        <i class="bi bi-building me-2"></i>{{ s.nome }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</li>

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{% if tecnico %}Modifica Tecnico{% else %}Nuovo Tecnico{% endif %} — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-0">{% if tecnico %}Modifica Tecnico{% else %}Nuovo Tecnico{% endif %}</h1>
+    </div>
+    <a href="{{ url_for('admin.tecnici') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Torna alla lista
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <form method="post">
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Dati anagrafici</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Nome <span class="text-danger">*</span></label>
+                            <input type="text" name="nome"
+                                   class="form-control {% if errors.nome %}is-invalid{% endif %}"
+                                   value="{{ request.form.get('nome', tecnico.nome if tecnico else '') }}"
+                                   required>
+                            {% if errors.nome %}<div class="invalid-feedback">{{ errors.nome }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Cognome <span class="text-danger">*</span></label>
+                            <input type="text" name="cognome"
+                                   class="form-control {% if errors.cognome %}is-invalid{% endif %}"
+                                   value="{{ request.form.get('cognome', tecnico.cognome if tecnico else '') }}"
+                                   required>
+                            {% if errors.cognome %}<div class="invalid-feedback">{{ errors.cognome }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">Email <span class="text-danger">*</span></label>
+                            <input type="email" name="email"
+                                   class="form-control {% if errors.email %}is-invalid{% endif %}"
+                                   value="{{ request.form.get('email', tecnico.email if tecnico else '') }}"
+                                   required>
+                            {% if errors.email %}<div class="invalid-feedback">{{ errors.email }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">
+                                Password
+                                {% if not tecnico %}
+                                    <span class="text-danger">*</span>
+                                {% else %}
+                                    <span class="text-muted small">(lascia vuoto per non cambiare)</span>
+                                {% endif %}
+                            </label>
+                            <input type="password" name="password"
+                                   class="form-control {% if errors.password %}is-invalid{% endif %}"
+                                   {% if not tecnico %}required{% endif %}
+                                   minlength="8"
+                                   placeholder="Minimo 8 caratteri">
+                            {% if errors.password %}<div class="invalid-feedback">{{ errors.password }}</div>{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header fw-semibold">Strutture assegnate</div>
+                <div class="card-body">
+                    {% if strutture %}
+                    <div class="row g-2">
+                        {% for s in strutture %}
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox"
+                                       name="strutture" value="{{ s.id }}" id="s{{ s.id }}"
+                                       {% if s.id in strutture_assegnate or s.id|string in strutture_assegnate %}checked{% endif %}>
+                                <label class="form-check-label" for="s{{ s.id }}">
+                                    {{ s.nome }}
+                                </label>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-muted mb-0">Nessuna struttura attiva disponibile.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>
+                    {% if tecnico %}Salva modifiche{% else %}Crea Tecnico{% endif %}
+                </button>
+                <a href="{{ url_for('admin.tecnici') }}" class="btn btn-outline-secondary">Annulla</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

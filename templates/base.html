@@ -92,8 +92,12 @@
                 {# Right side: Division selector + User menu #}
                 <ul class="navbar-nav">
                     {# Struttura switcher (solo superadmin, modalità multi-struttura) #}
-                    {% if current_user and current_user.ruolo == 'superadmin' and not single_struttura %}
-                      {% include 'partials/struttura_switcher.html' %}
+                    {% if current_user and not single_struttura %}
+                      {% if current_user.ruolo == 'superadmin' %}
+                        {% include 'partials/struttura_switcher.html' %}
+                      {% elif current_user.ruolo == 'tecnico' and strutture_list|length > 1 %}
+                        {% include 'partials/struttura_switcher_tecnico.html' %}
+                      {% endif %}
                     {% endif %}
 
                     {# Division selector #}
@@ -111,7 +115,7 @@
                             {% endif %}
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            {% if current_user is defined and current_user.ruolo == 'admin' %}
+                            {% if current_user is defined and current_user.ruolo in ('admin', 'tecnico') %}
                             <li>
                                 <a class="dropdown-item {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == 'tutte' %}active{% endif %}"
                                    href="{{ url_for('auth.cambia_divisione', divisione_id='tutte') }}">
@@ -251,6 +255,12 @@
                         <a class="nav-link {% if request.path.startswith('/strutture') %}active{% endif %}"
                            href="{{ url_for('strutture.index') }}">
                             <i class="bi bi-building me-1"></i>Strutture
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'admin.tecnic' in request.endpoint|default('') %}active{% endif %}"
+                           href="{{ url_for('admin.tecnici') }}">
+                            <i class="bi bi-person-gear"></i> Tecnici
                         </a>
                     </li>
                     {% endif %}

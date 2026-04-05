@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Tecnici — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h1 class="h3 mb-0">Tecnici</h1>
+        <p class="text-muted mb-0">Utenti tecnici con accesso a pi&ugrave; strutture</p>
+    </div>
+    <a href="{{ url_for('admin.tecnico_nuovo') }}" class="btn btn-primary">
+        <i class="bi bi-person-plus me-1"></i> Nuovo Tecnico
+    </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}{% for cat, msg in messages %}
+<div class="alert alert-{{ cat }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endfor %}{% endif %}{% endwith %}
+
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Nome</th>
+                    <th>Email</th>
+                    <th>Strutture assegnate</th>
+                    <th>Stato</th>
+                    <th>Ultimo accesso</th>
+                    <th class="text-end">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in tecnici %}
+                <tr>
+                    <td class="fw-medium">{{ t.cognome }} {{ t.nome }}</td>
+                    <td class="text-muted">{{ t.email }}</td>
+                    <td>
+                        {% if t.strutture_nomi %}
+                            {% for nome in t.strutture_nomi.split(', ') %}
+                            <span class="badge bg-secondary me-1">{{ nome }}</span>
+                            {% endfor %}
+                        {% else %}
+                            <span class="text-muted small">Nessuna struttura</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if t.attivo %}
+                        <span class="badge bg-success">Attivo</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Disattivo</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-muted small">
+                        {{ t.ultimo_accesso or '&mdash;' }}
+                    </td>
+                    <td class="text-end">
+                        <a href="{{ url_for('admin.tecnico_modifica', id=t.id) }}"
+                           class="btn btn-sm btn-outline-primary me-1">
+                            <i class="bi bi-pencil"></i>
+                        </a>
+                        <form method="post"
+                              action="{{ url_for('admin.tecnico_elimina', id=t.id) }}"
+                              class="d-inline"
+                              onsubmit="return confirm('Eliminare il tecnico {{ t.nome|e }} {{ t.cognome|e }}?')">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">
+                        Nessun tecnico presente. <a href="{{ url_for('admin.tecnico_nuovo') }}">Crea il primo</a>.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
