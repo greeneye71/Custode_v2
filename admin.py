@@ -1229,3 +1229,170 @@ def sblocca_ip():
                  struttura_id=getattr(g, 'struttura_id', None))
     flash(f'IP {ip} sbloccato.', 'success')
     return redirect(url_for('admin.sicurezza'))
+
+
+# ============================================================================
+# GESTIONE TECNICI (solo superadmin)
+# ============================================================================
+
+@admin_bp.route('/tecnici')
+@superadmin_required
+def tecnici():
+    """Lista tecnici con strutture assegnate."""
+    tecnici_list = query_all("""
+        SELECT u.id, u.nome, u.cognome, u.email, u.attivo, u.ultimo_accesso,
+               GROUP_CONCAT(s.nome, ', ') as strutture_nomi,
+               COUNT(ts.struttura_id) as num_strutture
+        FROM utenti u
+        LEFT JOIN tecnici_strutture ts ON u.id = ts.tecnico_id
+        LEFT JOIN strutture s ON ts.struttura_id = s.id
+        WHERE u.ruolo = 'tecnico'
+        GROUP BY u.id
+        ORDER BY u.cognome, u.nome
+    """)
+    return render_template('admin/tecnici.html', tecnici=tecnici_list)
+
+
+@admin_bp.route('/tecnici/nuovo', methods=['GET', 'POST'])
+@superadmin_required
+def tecnico_nuovo():
+    """Crea un nuovo tecnico."""
+    strutture = query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
+
+    if request.method == 'GET':
+        return render_template('admin/tecnico_form.html',
+                               tecnico=None, errors={},
+                               strutture=strutture, strutture_assegnate=[])
+
+    errors = {}
+    nome     = request.form.get('nome', '').strip()
+    cognome  = request.form.get('cognome', '').strip()
+    email    = request.form.get('email', '').strip().lower()
+    password = request.form.get('password', '').strip()
+    strutture_sel = request.form.getlist('strutture')
+
+    if not nome:
+        errors['nome'] = 'Il nome è obbligatorio.'
+    if not cognome:
+        errors['cognome'] = 'Il cognome è obbligatorio.'
+    if not email:
+        errors['email'] = "L'email è obbligatoria."
+    elif query_one("SELECT id FROM utenti WHERE email = ?", (email,)):
+        errors['email'] = 'Questo indirizzo email è già registrato.'
+    if not password or len(password) < 8:
+        errors['password'] = 'La password deve essere di almeno 8 caratteri.'
+
+    if errors:
+        return render_template('admin/tecnico_form.html',
+                               tecnico=None, errors=errors,
+                               strutture=strutture, strutture_assegnate=strutture_sel)
+
+    password_hash = generate_password_hash(password)
+    cursor = execute(
+        """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, primo_accesso, struttura_id)
+           VALUES (?, ?, ?, ?, 'tecnico', 1, NULL)""",
+        (email, password_hash, nome, cognome)
+    )
+    tecnico_id = cursor.lastrowid
+
+    for sid in strutture_sel:
+        try:
+            execute(
+                "INSERT INTO tecnici_strutture (tecnico_id, struttura_id) VALUES (?, ?)",
+                (tecnico_id, int(sid))
+            )
+        except Exception:
+            pass
+
+    log_attivita(g.user['id'], 'creazione', 'utenti', tecnico_id,
+                 f"Tecnico creato: {nome} {cognome}", request.remote_addr)
+    flash(f"Tecnico {nome} {cognome} creato con successo.", 'success')
+    return redirect(url_for('admin.tecnici'))
+
+
+@admin_bp.route('/tecnici/<int:id>/modifica', methods=['GET', 'POST'])
+@superadmin_required
+def tecnico_modifica(id):
+    """Modifica un tecnico e le strutture assegnate."""
+    tecnico = query_one("SELECT * FROM utenti WHERE id = ? AND ruolo = 'tecnico'", (id,))
+    if not tecnico:
+        flash('Tecnico non trovato.', 'danger')
+        return redirect(url_for('admin.tecnici'))
+
+    strutture = query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
+    strutture_assegnate = [
+        r['struttura_id'] for r in
+        query_all("SELECT struttura_id FROM tecnici_strutture WHERE tecnico_id = ?", (id,))
+    ]
+
+    if request.method == 'GET':
+        return render_template('admin/tecnico_form.html',
+                               tecnico=tecnico, errors={},
+                               strutture=strutture, strutture_assegnate=strutture_assegnate)
+
+    errors = {}
+    nome          = request.form.get('nome', '').strip()
+    cognome       = request.form.get('cognome', '').strip()
+    email         = request.form.get('email', '').strip().lower()
+    strutture_sel = request.form.getlist('strutture')
+    nuova_pw      = request.form.get('password', '').strip()
+
+    if not nome:
+        errors['nome'] = 'Il nome è obbligatorio.'
+    if not cognome:
+        errors['cognome'] = 'Il cognome è obbligatorio.'
+    if not email:
+        errors['email'] = "L'email è obbligatoria."
+    elif query_one("SELECT id FROM utenti WHERE email = ? AND id != ?", (email, id)):
+        errors['email'] = 'Email già usata da un altro utente.'
+    if nuova_pw and len(nuova_pw) < 8:
+        errors['password'] = 'La password deve essere di almeno 8 caratteri.'
+
+    if errors:
+        return render_template('admin/tecnico_form.html',
+                               tecnico=tecnico, errors=errors,
+                               strutture=strutture, strutture_assegnate=strutture_sel)
+
+    if nuova_pw:
+        execute(
+            """UPDATE utenti SET nome=?, cognome=?, email=?, password_hash=?,
+                      updated_at=datetime('now') WHERE id=?""",
+            (nome, cognome, email, generate_password_hash(nuova_pw), id)
+        )
+    else:
+        execute(
+            "UPDATE utenti SET nome=?, cognome=?, email=?, updated_at=datetime('now') WHERE id=?",
+            (nome, cognome, email, id)
+        )
+
+    execute("DELETE FROM tecnici_strutture WHERE tecnico_id = ?", (id,))
+    for sid in strutture_sel:
+        try:
+            execute(
+                "INSERT INTO tecnici_strutture (tecnico_id, struttura_id) VALUES (?, ?)",
+                (id, int(sid))
+            )
+        except Exception:
+            pass
+
+    log_attivita(g.user['id'], 'modifica', 'utenti', id,
+                 f"Tecnico modificato: {nome} {cognome}", request.remote_addr)
+    flash(f"Tecnico {nome} {cognome} aggiornato.", 'success')
+    return redirect(url_for('admin.tecnici'))
+
+
+@admin_bp.route('/tecnici/<int:id>/elimina', methods=['POST'])
+@superadmin_required
+def tecnico_elimina(id):
+    """Elimina un tecnico (le assegnazioni strutture vengono rimosse per CASCADE)."""
+    tecnico = query_one("SELECT * FROM utenti WHERE id = ? AND ruolo = 'tecnico'", (id,))
+    if not tecnico:
+        flash('Tecnico non trovato.', 'danger')
+        return redirect(url_for('admin.tecnici'))
+
+    execute("DELETE FROM utenti WHERE id = ?", (id,))
+    log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
+                 f"Tecnico eliminato: {tecnico['nome']} {tecnico['cognome']}",
+                 request.remote_addr)
+    flash(f"Tecnico {tecnico['nome']} {tecnico['cognome']} eliminato.", 'success')
+    return redirect(url_for('admin.tecnici'))
