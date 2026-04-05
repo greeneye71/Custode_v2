@@ -256,14 +256,26 @@ def create_app():
         if single_struttura:
             struttura_modalita = 'avanzata'
 
-        # Lista strutture per il switcher (solo superadmin)
+        # Lista strutture per il switcher (superadmin: tutte; tecnico: le sue)
         strutture_list = []
-        if getattr(g, 'user', None) and g.user.get('ruolo') == 'superadmin':
-            if not hasattr(g, '_strutture_list_cache'):
-                g._strutture_list_cache = query_all(
-                    "SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome"
-                )
-            strutture_list = g._strutture_list_cache
+        if getattr(g, 'user', None):
+            _ruolo = g.user.get('ruolo')
+            if _ruolo == 'superadmin':
+                if not hasattr(g, '_strutture_list_cache'):
+                    g._strutture_list_cache = query_all(
+                        "SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome"
+                    )
+                strutture_list = g._strutture_list_cache
+            elif _ruolo == 'tecnico':
+                if not hasattr(g, '_strutture_list_cache'):
+                    g._strutture_list_cache = query_all(
+                        """SELECT s.id, s.nome FROM strutture s
+                           JOIN tecnici_strutture ts ON s.id = ts.struttura_id
+                           WHERE ts.tecnico_id = ? AND s.attiva = 1
+                           ORDER BY s.nome""",
+                        (g.user['id'],)
+                    )
+                strutture_list = g._strutture_list_cache
 
         ctx = {
             'app_config': config,
