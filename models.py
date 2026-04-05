@@ -262,6 +262,15 @@ def apply_schema_updates():
             FOREIGN KEY (created_by) REFERENCES utenti(id)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_accessori_apparecchio ON accessori(apparecchio_id)",
+        """CREATE TABLE IF NOT EXISTS tecnici_strutture (
+            tecnico_id   INTEGER NOT NULL,
+            struttura_id INTEGER NOT NULL,
+            PRIMARY KEY (tecnico_id, struttura_id),
+            FOREIGN KEY (tecnico_id)   REFERENCES utenti(id) ON DELETE CASCADE,
+            FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_tecnici_strutture_tecnico   ON tecnici_strutture(tecnico_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tecnici_strutture_struttura ON tecnici_strutture(struttura_id)",
         # Ricrea la vista prossime_scadenze per mostrare solo l'ultima manutenzione/verifica
         # per ogni (apparecchio, tipo) invece di tutti i record storici
         "DROP VIEW IF EXISTS prossime_scadenze",

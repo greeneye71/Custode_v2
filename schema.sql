@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS utenti (
   password_hash TEXT NOT NULL,
   nome TEXT NOT NULL,
   cognome TEXT NOT NULL,
-  ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin', 'admin', 'utente')),
+  ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin', 'admin', 'utente', 'tecnico')),
   divisione_default_id INTEGER,
   attivo INTEGER DEFAULT 1,
   primo_accesso INTEGER DEFAULT 1,
@@ -151,6 +151,20 @@ CREATE TABLE IF NOT EXISTS utenti_divisioni (
 
 CREATE INDEX IF NOT EXISTS idx_utenti_divisioni_utente ON utenti_divisioni(utente_id);
 CREATE INDEX IF NOT EXISTS idx_utenti_divisioni_divisione ON utenti_divisioni(divisione_id);
+
+-- ============================================
+-- TECNICI_STRUTTURE (strutture accessibili per tecnico)
+-- ============================================
+CREATE TABLE IF NOT EXISTS tecnici_strutture (
+  tecnico_id   INTEGER NOT NULL,
+  struttura_id INTEGER NOT NULL,
+  PRIMARY KEY (tecnico_id, struttura_id),
+  FOREIGN KEY (tecnico_id)   REFERENCES utenti(id) ON DELETE CASCADE,
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tecnici_strutture_tecnico   ON tecnici_strutture(tecnico_id);
+CREATE INDEX IF NOT EXISTS idx_tecnici_strutture_struttura ON tecnici_strutture(struttura_id);
 
 -- ============================================
 -- SESSIONI
