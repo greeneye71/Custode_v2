@@ -1270,11 +1270,24 @@ def tecnico_nuovo():
                                strutture=strutture, strutture_assegnate=strutture_sel)
 
     password_hash = generate_password_hash(password)
-    cursor = execute(
-        """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, primo_accesso, struttura_id)
-           VALUES (?, ?, ?, ?, 'tecnico', 1, NULL)""",
-        (email, password_hash, nome, cognome)
-    )
+    try:
+        cursor = execute(
+            """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, primo_accesso, struttura_id)
+               VALUES (?, ?, ?, ?, 'tecnico', 1, NULL)""",
+            (email, password_hash, nome, cognome)
+        )
+    except Exception as exc:
+        import sqlite3 as _sqlite3
+        if isinstance(exc, _sqlite3.IntegrityError):
+            if 'UNIQUE' in str(exc):
+                errors['email'] = 'Questo indirizzo email è già registrato.'
+            else:
+                errors['_form'] = f'Errore database: {exc}. Riavviare il server per applicare le migrazioni.'
+        else:
+            errors['_form'] = f'Errore imprevisto: {exc}'
+        return render_template('admin/tecnico_form.html',
+                               tecnico=None, errors=errors,
+                               strutture=strutture, strutture_assegnate=strutture_sel)
     tecnico_id = cursor.lastrowid
 
     for sid in strutture_sel:

@@ -12,6 +12,9 @@
 
 <div class="row">
     <div class="col-lg-8">
+        {% if errors._form %}
+        <div class="alert alert-danger">{{ errors._form }}</div>
+        {% endif %}
         <form method="post">
             <div class="card mb-4">
                 <div class="card-header fw-semibold">Dati anagrafici</div>
