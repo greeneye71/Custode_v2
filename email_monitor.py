@@ -276,13 +276,20 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 last_apparecchio_id = None
 
                 # Copy PDF to verbali folder for attachment to manutenzioni
-                verbali_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), '..', 'uploads', 'verbali')
-                os.makedirs(verbali_dir, exist_ok=True)
+                from models import upload_subdir as _upload_subdir
+                _uploads_base = os.path.normpath(
+                    os.path.join(os.path.dirname(os.path.abspath(db_path)), '..', 'uploads')
+                )
+                verbali_dir, verbale_rel_prefix = _upload_subdir(
+                    'verbali', struttura_id,
+                    uploads_base=_uploads_base,
+                    single_struttura=(app_config or {}).get('single_struttura', False)
+                )
                 verbale_name = f"{int(datetime.now().timestamp())}_{idx}_{safe_base}"
                 verbale_dest = os.path.join(verbali_dir, verbale_name)
                 import shutil
                 shutil.copy2(pdf_path, verbale_dest)
-                verbale_rel_path = f"verbali/{verbale_name}"
+                verbale_rel_path = f"{verbale_rel_prefix}/{verbale_name}"
 
                 conn = sqlite3.connect(db_path, timeout=10)
                 conn.row_factory = sqlite3.Row

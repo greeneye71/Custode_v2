@@ -29,6 +29,32 @@ def close_db(e=None):
         db.close()
 
 
+def upload_subdir(subdir, struttura_id=None, uploads_base=None, single_struttura=None):
+    """
+    Restituisce (abs_path, rel_prefix) per i file di upload.
+
+    Modalità single-struttura  → uploads/{subdir}/         rel: {subdir}
+    Modalità multi-struttura   → uploads/strutture/{id}/{subdir}/  rel: strutture/{id}/{subdir}
+
+    Può essere usata sia in contesto Flask (senza parametri extra) sia fuori Flask
+    (passando uploads_base e single_struttura esplicitamente, es. in email_monitor).
+    """
+    if uploads_base is None:
+        uploads_base = current_app.config['UPLOADS_PATH']
+    if single_struttura is None:
+        single_struttura = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+
+    if single_struttura or struttura_id is None:
+        abs_path = os.path.join(uploads_base, subdir)
+        rel_prefix = subdir
+    else:
+        abs_path = os.path.join(uploads_base, 'strutture', str(struttura_id), subdir)
+        rel_prefix = f"strutture/{struttura_id}/{subdir}"
+
+    os.makedirs(abs_path, exist_ok=True)
+    return abs_path, rel_prefix
+
+
 def init_db():
     """Initialize the database from schema.sql."""
     db = get_db()

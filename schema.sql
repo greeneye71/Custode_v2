@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS divisioni (
   attiva INTEGER DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  struttura_id INTEGER NOT NULL DEFAULT 1,
+  struttura_id INTEGER NOT NULL,
   UNIQUE(struttura_id, nome),
   UNIQUE(struttura_id, codice),
   FOREIGN KEY (struttura_id) REFERENCES strutture(id)
@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS apparecchi (
   updated_by INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  struttura_id INTEGER NOT NULL DEFAULT 1,
+  struttura_id INTEGER NOT NULL,
   UNIQUE(struttura_id, modello, matricola),
   FOREIGN KEY (struttura_id) REFERENCES strutture(id),
   FOREIGN KEY (divisione_id) REFERENCES divisioni(id),

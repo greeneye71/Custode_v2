@@ -364,14 +364,20 @@ def create_app():
 
         # Division filter
         div = getattr(g, 'divisione_attiva', None)
+        struttura_id = getattr(g, 'struttura_id', None)
         if div and div.get('id') != 'tutte':
             div_clause = "AND a.divisione_id = ?"
             div_params = [div['id']]
             div_clause_m = "AND a.divisione_id = ?"
         elif getattr(g, 'user', {}).get('ruolo') == 'admin':
-            div_clause = ""
-            div_params = []
-            div_clause_m = ""
+            if struttura_id:
+                div_clause = "AND a.struttura_id = ?"
+                div_params = [struttura_id]
+                div_clause_m = "AND a.struttura_id = ?"
+            else:
+                div_clause = ""
+                div_params = []
+                div_clause_m = ""
         else:
             ids = [d['id'] for d in getattr(g, 'divisioni', [])]
             if ids:

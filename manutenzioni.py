@@ -13,7 +13,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from auth import login_required
-from models import query_one, query_all, execute, log_attivita
+from models import query_one, query_all, execute, log_attivita, upload_subdir
 
 manutenzioni_bp = Blueprint('manutenzioni', __name__)
 
@@ -30,6 +30,9 @@ def _get_divisione_filter(table_alias='a'):
     if div and div.get('id') != 'tutte':
         return f"AND {table_alias}.divisione_id = ?", [div['id']]
     elif g.user['ruolo'] == 'admin':
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
         return "", []
     else:
         ids = [d['id'] for d in g.divisioni]
@@ -105,19 +108,18 @@ def _validate_manutenzione(form_data):
     return data, errors
 
 
-def _save_verbale(file_obj, manutenzione_id):
+def _save_verbale(file_obj, manutenzione_id, struttura_id=None):
     """Save uploaded PDF verbale for a manutenzione. Returns relative path or None."""
     if not file_obj or not file_obj.filename:
         return None
     ext = file_obj.filename.rsplit('.', 1)[-1].lower()
     if ext not in ALLOWED_VERBALE_EXT:
         return None
-    uploads_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'verbali')
-    os.makedirs(uploads_dir, exist_ok=True)
+    uploads_dir, rel_prefix = upload_subdir('verbali', struttura_id)
     safe_name = secure_filename(f"{int(datetime.now().timestamp())}_{file_obj.filename}")
     full_path = os.path.join(uploads_dir, safe_name)
     file_obj.save(full_path)
-    return f"verbali/{safe_name}"
+    return f"{rel_prefix}/{safe_name}"
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +239,7 @@ def nuova():
     # Save verbale if uploaded
     verbale_file = request.files.get('verbale')
     if verbale_file and verbale_file.filename:
-        verbale_path = _save_verbale(verbale_file, manutenzione_id)
+        verbale_path = _save_verbale(verbale_file, manutenzione_id, getattr(g, 'struttura_id', None))
         if verbale_path:
             execute("UPDATE manutenzioni SET verbale_path = ? WHERE id = ?",
                     (verbale_path, manutenzione_id))
@@ -257,17 +259,19 @@ def nuova():
 @login_required
 def modifica(id):
     """Edit a maintenance record."""
+    struttura_id = getattr(g, 'struttura_id', None)
     manutenzione = query_one(
         """SELECT m.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
-           WHERE m.id = ?""", (id,)
+           WHERE m.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
+        (id, struttura_id, struttura_id)
     )
     if not manutenzione:
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 
-    if g.user['ruolo'] != 'admin':
+    if g.user['ruolo'] not in ('admin', 'superadmin'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if manutenzione['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato.', 'danger')
@@ -301,7 +305,7 @@ def modifica(id):
     # Update verbale if new file uploaded
     verbale_file = request.files.get('verbale')
     if verbale_file and verbale_file.filename:
-        verbale_path = _save_verbale(verbale_file, id)
+        verbale_path = _save_verbale(verbale_file, id, getattr(g, 'struttura_id', None))
         if verbale_path:
             execute("UPDATE manutenzioni SET verbale_path = ? WHERE id = ?",
                     (verbale_path, id))
@@ -317,16 +321,18 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a maintenance record."""
+    struttura_id = getattr(g, 'struttura_id', None)
     manutenzione = query_one(
         """SELECT m.*, a.divisione_id FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
-           WHERE m.id = ?""", (id,)
+           WHERE m.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
+        (id, struttura_id, struttura_id)
     )
     if not manutenzione:
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 
-    if g.user['ruolo'] != 'admin':
+    if g.user['ruolo'] not in ('admin', 'superadmin'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if manutenzione['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato.', 'danger')

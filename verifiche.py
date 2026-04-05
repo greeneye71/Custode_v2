@@ -15,7 +15,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from auth import login_required
-from models import query_one, query_all, execute, log_attivita
+from models import query_one, query_all, execute, log_attivita, upload_subdir
 
 verifiche_bp = Blueprint('verifiche', __name__)
 
@@ -32,6 +32,9 @@ def _get_divisione_filter(table_alias='a'):
     if div and div.get('id') != 'tutte':
         return f"AND {table_alias}.divisione_id = ?", [div['id']]
     elif g.user['ruolo'] == 'admin':
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
         return "", []
     else:
         ids = [d['id'] for d in g.divisioni]
@@ -108,19 +111,18 @@ def _validate_verifica(form_data):
     return data, errors
 
 
-def _save_documento(file_obj, verifica_id):
+def _save_documento(file_obj, verifica_id, struttura_id=None):
     """Save uploaded PDF document for a verifica. Returns relative path or None."""
     if not file_obj or not file_obj.filename:
         return None
     ext = file_obj.filename.rsplit('.', 1)[-1].lower()
     if ext not in ALLOWED_DOC_EXT:
         return None
-    uploads_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'verifiche')
-    os.makedirs(uploads_dir, exist_ok=True)
+    uploads_dir, rel_prefix = upload_subdir('verifiche', struttura_id)
     safe_name = secure_filename(f"{int(datetime.now().timestamp())}_{file_obj.filename}")
     full_path = os.path.join(uploads_dir, safe_name)
     file_obj.save(full_path)
-    return f"verifiche/{safe_name}"
+    return f"{rel_prefix}/{safe_name}"
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +238,7 @@ def nuova():
     # Save documento if uploaded
     doc_file = request.files.get('documento')
     if doc_file and doc_file.filename:
-        doc_path = _save_documento(doc_file, verifica_id)
+        doc_path = _save_documento(doc_file, verifica_id, getattr(g, 'struttura_id', None))
         if doc_path:
             execute("UPDATE verifiche SET documento_path = ? WHERE id = ?",
                     (doc_path, verifica_id))

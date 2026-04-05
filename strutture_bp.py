@@ -4,6 +4,7 @@ MedInventory - Gestione Strutture (superadmin)
 
 import base64
 import hashlib
+import re
 
 from cryptography.fernet import Fernet
 from flask import (
@@ -11,10 +12,56 @@ from flask import (
     flash, g, current_app
 )
 from auth import superadmin_required
-from models import query_all, query_one, execute, log_attivita, \
+from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
+
+
+# ---------------------------------------------------------------------------
+# Helpers codice auto-generazione
+# ---------------------------------------------------------------------------
+
+def _codice_base_da_nome(nome):
+    """Genera un codice base di 2-5 lettere dalle iniziali del nome."""
+    pulito = re.sub(r'[^a-zA-Z0-9\s]', '', nome).upper()
+    parole = pulito.split()
+    if len(parole) >= 2:
+        base = ''.join(p[0] for p in parole if p)[:6]
+    elif parole:
+        base = parole[0][:6]
+    else:
+        base = 'X'
+    return re.sub(r'[^A-Z0-9]', '', base) or 'X'
+
+
+def _codice_univoco_struttura(db, nome):
+    """Genera un codice univoco per la tabella strutture."""
+    base = _codice_base_da_nome(nome)
+    existing = {r[0] for r in db.execute("SELECT codice FROM strutture").fetchall()}
+    codice = base
+    n = 1
+    while codice in existing:
+        codice = f"{base}{n}"
+        n += 1
+    return codice
+
+
+def _codice_univoco_divisione(db, nome, struttura_id, esclude_id=None):
+    """Genera un codice univoco per divisioni nella struttura."""
+    base = _codice_base_da_nome(nome)
+    q = "SELECT codice FROM divisioni WHERE struttura_id=?"
+    params = [struttura_id]
+    if esclude_id:
+        q += " AND id!=?"
+        params.append(esclude_id)
+    existing = {r[0] for r in db.execute(q, params).fetchall()}
+    codice = base
+    n = 1
+    while codice in existing:
+        codice = f"{base}{n}"
+        n += 1
+    return codice
 
 
 @strutture_bp.route('/')
@@ -39,6 +86,93 @@ _TIPI_STRUTTURA = ('ospedale', 'clinica_privata', 'rsa', 'ambulatorio',
                    'poliambulatorio', 'laboratorio', 'altro')
 
 
+def _crea_divisione_predefinita(db, struttura_id, nome_struttura):
+    """Crea la divisione iniziale della struttura appena registrata."""
+    codice = _codice_univoco_divisione(db, nome_struttura, struttura_id)
+    cur = db.execute(
+        """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+           VALUES (?, ?, ?, ?, ?)""",
+        (
+            nome_struttura,
+            codice,
+            '#0ea5e9',
+            'Divisione predefinita creata automaticamente alla creazione della struttura.',
+            struttura_id,
+        )
+    )
+    return cur.lastrowid
+
+
+def _get_divisioni_struttura(struttura_id):
+    return query_all(
+        "SELECT * FROM divisioni WHERE struttura_id = ? ORDER BY nome",
+        (struttura_id,)
+    )
+
+
+def _sync_divisioni_struttura(db, struttura_id, form):
+    existing_ids = form.getlist('existing_div_id')
+    existing_nomi = form.getlist('existing_div_nome')
+    existing_colori = form.getlist('existing_div_colore')
+    existing_descrizioni = form.getlist('existing_div_descrizione')
+    active_ids = {int(v) for v in form.getlist('existing_div_attiva') if str(v).isdigit()}
+
+    new_nomi_raw = [n.strip() for n in form.getlist('new_div_nome') if n.strip()]
+
+    # Validazione unicità nomi nell'intero batch prima di toccare il DB
+    all_nomi_batch = [
+        (existing_nomi[idx] if idx < len(existing_nomi) else '').strip()
+        for idx, v in enumerate(existing_ids)
+        if (existing_nomi[idx] if idx < len(existing_nomi) else '').strip()
+    ] + new_nomi_raw
+    if len(all_nomi_batch) != len(set(n.lower() for n in all_nomi_batch)):
+        raise ValueError('Sono presenti divisioni con lo stesso nome. Ogni divisione deve avere un nome univoco.')
+
+    for idx, div_id_raw in enumerate(existing_ids):
+        try:
+            div_id = int(div_id_raw)
+        except (TypeError, ValueError):
+            continue
+
+        nome = (existing_nomi[idx] if idx < len(existing_nomi) else '').strip()
+        colore = (existing_colori[idx] if idx < len(existing_colori) else '#0ea5e9').strip() or '#0ea5e9'
+        descrizione = (existing_descrizioni[idx] if idx < len(existing_descrizioni) else '').strip() or None
+        attiva = 1 if div_id in active_ids else 0
+
+        if not nome:
+            raise ValueError('Ogni divisione esistente deve avere un nome.')
+
+        cur = db.execute(
+            """UPDATE divisioni
+               SET nome=?, colore=?, descrizione=?, attiva=?, updated_at=CURRENT_TIMESTAMP
+               WHERE id=? AND struttura_id=?""",
+            (nome, colore, descrizione, attiva, div_id, struttura_id)
+        )
+        if cur.rowcount == 0:
+            raise ValueError('Una delle divisioni selezionate non appartiene alla struttura corrente.')
+
+    new_nomi = form.getlist('new_div_nome')
+    new_colori = form.getlist('new_div_colore')
+    new_descrizioni = form.getlist('new_div_descrizione')
+
+    for idx, nome_raw in enumerate(new_nomi):
+        nome = nome_raw.strip()
+        colore = (new_colori[idx] if idx < len(new_colori) else '#0ea5e9').strip() or '#0ea5e9'
+        descrizione = (new_descrizioni[idx] if idx < len(new_descrizioni) else '').strip() or None
+
+        if not any([nome, descrizione]):
+            continue
+        if not nome:
+            raise ValueError('Ogni nuova divisione deve avere un nome.')
+
+        codice = _codice_univoco_divisione(db, nome, struttura_id)
+        db.execute(
+            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (nome, codice, colore, descrizione, struttura_id)
+        )
+
+
 def _leggi_form_struttura(form):
     """Estrae e normalizza tutti i campi struttura dal form POST."""
     modalita = form.get('modalita', 'standard')
@@ -49,7 +183,6 @@ def _leggi_form_struttura(form):
         tipo = 'altro'
     return {
         'nome':               form.get('nome', '').strip(),
-        'codice':             form.get('codice', '').strip().upper(),
         'descrizione':        form.get('descrizione', '').strip() or None,
         'tipo':               tipo,
         'indirizzo':          form.get('indirizzo', '').strip() or None,
@@ -72,42 +205,48 @@ def _leggi_form_struttura(form):
 def nuova():
     if request.method == 'POST':
         dati = _leggi_form_struttura(request.form)
-
-        if not dati['nome'] or not dati['codice']:
-            flash('Nome e codice sono obbligatori.', 'danger')
+        if not dati['nome']:
+            flash('Il nome è obbligatorio.', 'danger')
             return render_template('strutture/form.html', struttura=request.form,
-                                   tipi_struttura=_TIPI_STRUTTURA)
-
+                                   tipi_struttura=_TIPI_STRUTTURA, divisioni=[])
         try:
-            cur = execute(
+            db = get_db()
+            codice = _codice_univoco_struttura(db, dati['nome'])
+            cur = db.execute(
                 """INSERT INTO strutture
                    (nome, codice, descrizione, tipo, indirizzo, telefono,
                     email_notifiche, pec, responsabile, email_responsabile,
                     codice_fiscale, partita_iva, data_attivazione,
                     scadenza_contratto, note, modalita)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (dati['nome'], dati['codice'], dati['descrizione'], dati['tipo'],
+                (dati['nome'], codice, dati['descrizione'], dati['tipo'],
                  dati['indirizzo'], dati['telefono'], dati['email_notifiche'],
                  dati['pec'], dati['responsabile'], dati['email_responsabile'],
                  dati['codice_fiscale'], dati['partita_iva'],
                  dati['data_attivazione'], dati['scadenza_contratto'],
                  dati['note'], dati['modalita'])
             )
-            log_attivita(g.user['id'], 'crea', 'struttura', cur.lastrowid,
+            struttura_id = cur.lastrowid
+            divisione_id = _crea_divisione_predefinita(db, struttura_id, dati['nome'])
+            db.commit()
+            log_attivita(g.user['id'], 'crea', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" creata')
+            log_attivita(g.user['id'], 'creazione', 'divisioni', divisione_id,
+                         f'Divisione predefinita creata per struttura "{dati["nome"]}"',
+                         struttura_id=struttura_id)
             flash(f'Struttura "{dati["nome"]}" creata con successo.', 'success')
             return redirect(url_for('strutture.index'))
         except Exception as e:
-            if 'UNIQUE' in str(e):
-                flash(f'Il codice "{dati["codice"]}" è già in uso.', 'danger')
-            else:
-                current_app.logger.error(f'Errore creazione struttura: {e}')
-                flash('Errore durante il salvataggio. Riprovare.', 'danger')
+            try:
+                get_db().rollback()
+            except Exception:
+                pass
+            current_app.logger.error(f'Errore creazione struttura: {e}')
+            flash('Errore durante il salvataggio. Riprovare.', 'danger')
         return render_template('strutture/form.html', struttura=request.form,
-                               tipi_struttura=_TIPI_STRUTTURA)
-
+                               tipi_struttura=_TIPI_STRUTTURA, divisioni=[])
     return render_template('strutture/form.html', struttura=None,
-                           tipi_struttura=_TIPI_STRUTTURA)
+                           tipi_struttura=_TIPI_STRUTTURA, divisioni=[])
 
 
 @strutture_bp.route('/<int:struttura_id>/modifica', methods=['GET', 'POST'])
@@ -118,43 +257,60 @@ def modifica(struttura_id):
         flash('Struttura non trovata.', 'danger')
         return redirect(url_for('strutture.index'))
 
+    divisioni = _get_divisioni_struttura(struttura_id)
+
     if request.method == 'POST':
         dati = _leggi_form_struttura(request.form)
         attiva = 1 if request.form.get('attiva') else 0
 
-        if not dati['nome'] or not dati['codice']:
-            flash('Nome e codice sono obbligatori.', 'danger')
+        if not dati['nome']:
+            flash('Il nome è obbligatorio.', 'danger')
             return render_template('strutture/form.html',
                                    struttura=dict(struttura) | dict(request.form),
-                                   tipi_struttura=_TIPI_STRUTTURA)
+                                   tipi_struttura=_TIPI_STRUTTURA,
+                                   divisioni=divisioni)
 
         try:
-            execute(
+            db = get_db()
+            db.execute(
                 """UPDATE strutture SET
-                   nome=?, codice=?, descrizione=?, tipo=?, indirizzo=?,
+                   nome=?, descrizione=?, tipo=?, indirizzo=?,
                    telefono=?, email_notifiche=?, pec=?, responsabile=?,
                    email_responsabile=?, codice_fiscale=?, partita_iva=?,
                    data_attivazione=?, scadenza_contratto=?, note=?,
                    modalita=?, attiva=?, updated_at=CURRENT_TIMESTAMP
                    WHERE id=?""",
-                (dati['nome'], dati['codice'], dati['descrizione'], dati['tipo'],
+                (dati['nome'], dati['descrizione'], dati['tipo'],
                  dati['indirizzo'], dati['telefono'], dati['email_notifiche'],
                  dati['pec'], dati['responsabile'], dati['email_responsabile'],
                  dati['codice_fiscale'], dati['partita_iva'],
                  dati['data_attivazione'], dati['scadenza_contratto'],
                  dati['note'], dati['modalita'], attiva, struttura_id)
             )
+            _sync_divisioni_struttura(db, struttura_id, request.form)
+            db.commit()
             log_attivita(g.user['id'], 'modifica', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" modificata')
             flash('Struttura aggiornata.', 'success')
             return redirect(url_for('strutture.index'))
+        except ValueError as e:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            flash(str(e), 'danger')
         except Exception as e:
+            try:
+                get_db().rollback()
+            except Exception:
+                pass
             current_app.logger.error(f'Errore modifica struttura {struttura_id}: {e}')
             flash('Errore durante il salvataggio. Riprovare.', 'danger')
         struttura = dict(struttura) | dict(request.form)
+        divisioni = _get_divisioni_struttura(struttura_id)
 
     return render_template('strutture/form.html', struttura=struttura,
-                           tipi_struttura=_TIPI_STRUTTURA)
+                           tipi_struttura=_TIPI_STRUTTURA, divisioni=divisioni)
 
 
 @strutture_bp.route('/<int:struttura_id>/config', methods=['GET', 'POST'])
@@ -203,6 +359,46 @@ def config(struttura_id):
     cfg = get_struttura_config_all(struttura_id)
     return render_template('strutture/config.html',
                            struttura=struttura, cfg=cfg, chiavi=chiavi_visibili)
+
+
+# ============================================================================
+# DIVISIONE MANAGEMENT (dal contesto struttura)
+# ============================================================================
+
+@strutture_bp.route('/<int:struttura_id>/divisioni/<int:div_id>/elimina', methods=['POST'])
+@superadmin_required
+def elimina_divisione(struttura_id, div_id):
+    struttura = query_one("SELECT id FROM strutture WHERE id=?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    div = query_one("SELECT * FROM divisioni WHERE id=? AND struttura_id=?", (div_id, struttura_id))
+    if not div:
+        flash('Divisione non trovata.', 'danger')
+        return redirect(url_for('strutture.modifica', struttura_id=struttura_id))
+
+    count_app = query_one(
+        "SELECT COUNT(*) as cnt FROM apparecchi WHERE divisione_id=?",
+        (div_id,)
+    )
+    if count_app and count_app['cnt'] > 0:
+        flash(f'Impossibile eliminare "{div["nome"]}": ha {count_app["cnt"]} apparecchi associati (inclusi dismessi). Riassegnali prima.', 'danger')
+        return redirect(url_for('strutture.modifica', struttura_id=struttura_id))
+
+    count_div = query_one(
+        "SELECT COUNT(*) as cnt FROM divisioni WHERE struttura_id=?", (struttura_id,)
+    )
+    if count_div and count_div['cnt'] <= 1:
+        flash('Non puoi eliminare l\'ultima divisione della struttura.', 'danger')
+        return redirect(url_for('strutture.modifica', struttura_id=struttura_id))
+
+    execute("DELETE FROM divisioni WHERE id=? AND struttura_id=?", (div_id, struttura_id))
+    log_attivita(g.user['id'], 'elimina', 'divisioni', div_id,
+                 f'Eliminata divisione "{div["nome"]}" dalla struttura {struttura_id}',
+                 struttura_id=struttura_id)
+    flash(f'Divisione "{div["nome"]}" eliminata.', 'success')
+    return redirect(url_for('strutture.modifica', struttura_id=struttura_id))
 
 
 # ============================================================================

@@ -19,6 +19,9 @@ def _get_divisione_filter():
     if div and div.get('id') != 'tutte':
         return "AND a.divisione_id = ?", [div['id']]
     elif getattr(g, 'user', {}).get('ruolo') == 'admin':
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            return "AND a.struttura_id = ?", [struttura_id]
         return "", []
     else:
         ids = [d['id'] for d in getattr(g, 'divisioni', [])]

@@ -366,91 +366,193 @@ def utente_reset_password(id):
 # DIVISION MANAGEMENT
 # ============================================================================
 
+
+def _get_struttura_divisioni_admin():
+    """Restituisce la struttura corrente nel pannello divisioni."""
+    if g.user['ruolo'] == 'superadmin':
+        return request.args.get('struttura_id', type=int)
+    return _get_mia_struttura_id()
+
+
+def _get_divisione_in_scope(divisione_id):
+    """Carica una divisione verificando lo scope dell'utente corrente."""
+    if g.user['ruolo'] == 'superadmin':
+        return query_one(
+            """SELECT d.*, s.nome AS struttura_nome
+               FROM divisioni d
+               LEFT JOIN strutture s ON s.id = d.struttura_id
+               WHERE d.id = ?""",
+            (divisione_id,)
+        )
+
+    struttura_id = _get_mia_struttura_id()
+    return query_one(
+        """SELECT d.*, s.nome AS struttura_nome
+           FROM divisioni d
+           LEFT JOIN strutture s ON s.id = d.struttura_id
+           WHERE d.id = ? AND d.struttura_id = ?""",
+        (divisione_id, struttura_id)
+    )
+
+
 @admin_bp.route('/divisioni')
 @admin_required
 def divisioni():
-    """List all divisions."""
+    """List all divisions scoped by structure."""
+    is_superadmin = g.user['ruolo'] == 'superadmin'
+    struttura_id = _get_struttura_divisioni_admin()
+
+    if is_superadmin:
+        strutture = query_all(
+            "SELECT id, nome FROM strutture WHERE attiva = 1 ORDER BY nome"
+        )
+        params = []
+        where = ""
+        if struttura_id:
+            where = "WHERE d.struttura_id = ?"
+            params = [struttura_id]
+    else:
+        struttura_id = _get_mia_struttura_id()
+        strutture = []
+        where = "WHERE d.struttura_id = ?"
+        params = [struttura_id]
+
     divs = query_all(
-        """SELECT d.*,
+        f"""SELECT d.*, s.nome as struttura_nome,
                   (SELECT COUNT(*) FROM apparecchi a WHERE a.divisione_id = d.id AND a.stato != 'dismesso') as num_apparecchi,
                   (SELECT COUNT(*) FROM utenti_divisioni ud WHERE ud.divisione_id = d.id) as num_utenti
-           FROM divisioni d ORDER BY d.nome"""
+           FROM divisioni d
+           LEFT JOIN strutture s ON s.id = d.struttura_id
+           {where}
+           ORDER BY s.nome, d.nome""",
+        params
     )
-    return render_template('admin/divisioni.html', divisioni=divs)
+    return render_template(
+        'admin/divisioni.html',
+        divisioni=divs,
+        strutture=strutture,
+        struttura_id_attiva=struttura_id,
+        is_superadmin=is_superadmin,
+    )
 
 
 @admin_bp.route('/divisioni/nuova', methods=['POST'])
 @admin_required
 def divisione_nuova():
-    """Create a new division."""
+    """Create a new division in the selected structure."""
+    from strutture_bp import _codice_univoco_divisione
+    from models import get_db as _get_db
+
     nome = request.form.get('nome', '').strip()
-    codice = request.form.get('codice', '').strip().upper()
     colore = request.form.get('colore', '#0ea5e9')
     descrizione = request.form.get('descrizione', '').strip()
+    struttura_id = (request.form.get('struttura_id', type=int)
+                    if g.user['ruolo'] == 'superadmin'
+                    else _get_mia_struttura_id())
 
-    if not nome or not codice:
-        flash('Nome e codice sono obbligatori.', 'danger')
+    if not nome or not struttura_id:
+        flash('Nome e struttura sono obbligatori.', 'danger')
         return redirect(url_for('admin.divisioni'))
 
     try:
+        db = _get_db()
+        codice = _codice_univoco_divisione(db, nome, struttura_id)
         cursor = execute(
-            """INSERT INTO divisioni (nome, codice, colore, descrizione)
-               VALUES (?, ?, ?, ?)""",
-            (nome, codice, colore, descrizione or None)
+            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (nome, codice, colore, descrizione or None, struttura_id)
         )
         log_attivita(g.user['id'], 'creazione', 'divisioni', cursor.lastrowid,
-                     f"Creata divisione: {nome}", request.remote_addr)
+                     f"Creata divisione: {nome}", request.remote_addr,
+                     struttura_id=struttura_id)
         flash(f'Divisione "{nome}" creata.', 'success')
-    except Exception as e:
-        flash(f'Errore: nome o codice già esistente.', 'danger')
+    except Exception:
+        flash('Errore: nome già esistente nella struttura selezionata.', 'danger')
 
+    if g.user['ruolo'] == 'superadmin':
+        return redirect(url_for('admin.divisioni', struttura_id=struttura_id))
     return redirect(url_for('admin.divisioni'))
 
 
 @admin_bp.route('/divisioni/<int:id>/modifica', methods=['POST'])
 @admin_required
 def divisione_modifica(id):
-    """Edit a division."""
+    """Edit a division within the current scope."""
+    div = _get_divisione_in_scope(id)
+    if not div:
+        flash('Divisione non trovata.', 'danger')
+        return redirect(url_for('admin.divisioni'))
+
     nome = request.form.get('nome', '').strip()
-    codice = request.form.get('codice', '').strip().upper()
     colore = request.form.get('colore', '#0ea5e9')
     descrizione = request.form.get('descrizione', '').strip()
+    target_struttura_id = (request.form.get('struttura_id', type=int)
+                           if g.user['ruolo'] == 'superadmin'
+                           else div['struttura_id'])
 
-    if not nome or not codice:
-        flash('Nome e codice sono obbligatori.', 'danger')
+    if not nome or not target_struttura_id:
+        flash('Nome e struttura sono obbligatori.', 'danger')
         return redirect(url_for('admin.divisioni'))
 
     try:
+        if g.user['ruolo'] == 'superadmin' and target_struttura_id != div['struttura_id']:
+            target = query_one(
+                "SELECT id FROM strutture WHERE id = ? AND attiva = 1",
+                (target_struttura_id,)
+            )
+            if not target:
+                flash('Struttura di destinazione non valida.', 'danger')
+                return redirect(url_for('admin.divisioni', struttura_id=div['struttura_id']))
+
+            link_app = query_one(
+                "SELECT COUNT(*) AS cnt FROM apparecchi WHERE divisione_id = ?",
+                (id,)
+            )
+            link_utenti = query_one(
+                "SELECT COUNT(*) AS cnt FROM utenti_divisioni WHERE divisione_id = ?",
+                (id,)
+            )
+            if (link_app and link_app['cnt']) or (link_utenti and link_utenti['cnt']):
+                flash('Non puoi spostare la divisione su un\'altra struttura finché ha apparecchi o utenti associati.', 'danger')
+                return redirect(url_for('admin.divisioni', struttura_id=div['struttura_id']))
+
         execute(
-            """UPDATE divisioni SET nome=?, codice=?, colore=?, descrizione=?,
+            """UPDATE divisioni SET nome=?, colore=?, descrizione=?, struttura_id=?,
                       updated_at=datetime('now')
-               WHERE id=?""",
-            (nome, codice, colore, descrizione or None, id)
+               WHERE id=? AND struttura_id=?""",
+            (nome, colore, descrizione or None, target_struttura_id, id, div['struttura_id'])
         )
         log_attivita(g.user['id'], 'modifica', 'divisioni', id,
-                     f"Modificata divisione: {nome}", request.remote_addr)
+                     f"Modificata divisione: {nome}", request.remote_addr,
+                     struttura_id=target_struttura_id)
         flash(f'Divisione "{nome}" aggiornata.', 'success')
     except Exception:
-        flash('Errore: nome o codice già esistente.', 'danger')
+        flash('Errore: nome già esistente nella struttura selezionata.', 'danger')
 
+    if g.user['ruolo'] == 'superadmin':
+        return redirect(url_for('admin.divisioni', struttura_id=target_struttura_id))
     return redirect(url_for('admin.divisioni'))
 
 
 @admin_bp.route('/divisioni/<int:id>/toggle', methods=['POST'])
 @admin_required
 def divisione_toggle(id):
-    """Toggle division active/inactive."""
-    div = query_one("SELECT * FROM divisioni WHERE id = ?", (id,))
+    """Toggle division active/inactive within the current scope."""
+    div = _get_divisione_in_scope(id)
     if not div:
         flash('Divisione non trovata.', 'danger')
         return redirect(url_for('admin.divisioni'))
 
     new_status = 0 if div['attiva'] else 1
-    execute("UPDATE divisioni SET attiva = ?, updated_at = datetime('now') WHERE id = ?",
-            (new_status, id))
+    execute(
+        "UPDATE divisioni SET attiva = ?, updated_at = datetime('now') WHERE id = ? AND struttura_id = ?",
+        (new_status, id, div['struttura_id'])
+    )
 
     action = 'attivata' if new_status else 'disattivata'
     flash(f"Divisione \"{div['nome']}\" {action}.", 'success')
+    if g.user['ruolo'] == 'superadmin':
+        return redirect(url_for('admin.divisioni', struttura_id=div['struttura_id']))
     return redirect(url_for('admin.divisioni'))
 
 

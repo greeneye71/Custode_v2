@@ -492,6 +492,16 @@
 <script>
 var providerDefaults = {{ ai_provider_defaults | tojson }};
 
+function setGroupEnabled(divId, enabled) {
+    var div = document.getElementById(divId);
+    if (!div) return;
+    div.querySelectorAll('input, select, textarea').forEach(function(el) {
+        if (enabled) el.removeAttribute('disabled');
+        else el.setAttribute('disabled', 'disabled');
+    });
+    div.style.display = enabled ? '' : 'none';
+}
+
 function toggleAIProvider() {
     var provider    = document.getElementById('ai_provider').value;
     var isAnthropic = (provider === 'anthropic');
@@ -500,23 +510,23 @@ function toggleAIProvider() {
     var isLocal     = (!isAnthropic && !isGemini && !isOpenAI);
 
     // Anthropic-specific fields
-    document.getElementById('ai_anthropic_settings').style.display    = isAnthropic ? '' : 'none';
-    document.getElementById('ai_import_model_group').style.display    = isAnthropic ? '' : 'none';
-    document.getElementById('ai_email_model_group').style.display     = isAnthropic ? '' : 'none';
+    setGroupEnabled('ai_anthropic_settings',  isAnthropic);
+    setGroupEnabled('ai_import_model_group',  isAnthropic);
+    setGroupEnabled('ai_email_model_group',   isAnthropic);
 
     // Gemini-specific fields
-    document.getElementById('ai_gemini_settings').style.display             = isGemini ? '' : 'none';
-    document.getElementById('ai_gemini_import_model_group').style.display   = isGemini ? '' : 'none';
-    document.getElementById('ai_gemini_email_model_group').style.display    = isGemini ? '' : 'none';
+    setGroupEnabled('ai_gemini_settings',            isGemini);
+    setGroupEnabled('ai_gemini_import_model_group',  isGemini);
+    setGroupEnabled('ai_gemini_email_model_group',   isGemini);
 
     // OpenAI-specific fields
-    document.getElementById('ai_openai_settings').style.display             = isOpenAI ? '' : 'none';
-    document.getElementById('ai_openai_import_model_group').style.display   = isOpenAI ? '' : 'none';
-    document.getElementById('ai_openai_email_model_group').style.display    = isOpenAI ? '' : 'none';
+    setGroupEnabled('ai_openai_settings',            isOpenAI);
+    setGroupEnabled('ai_openai_import_model_group',  isOpenAI);
+    setGroupEnabled('ai_openai_email_model_group',   isOpenAI);
 
     // Local-specific fields
-    document.getElementById('ai_local_url_group').style.display   = isLocal ? '' : 'none';
-    document.getElementById('ai_local_model_group').style.display = isLocal ? '' : 'none';
+    setGroupEnabled('ai_local_url_group',   isLocal);
+    setGroupEnabled('ai_local_model_group', isLocal);
 
     // Provider hint
     var hint = document.getElementById('ai_provider_hint');

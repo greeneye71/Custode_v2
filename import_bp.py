@@ -656,14 +656,22 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                      data.get('note'), g.user['id'], row['apparecchio_match_id'])
                 )
             else:
+                # Deriva struttura_id dalla divisione selezionata
+                div_row = query_one(
+                    "SELECT struttura_id FROM divisioni WHERE id=?",
+                    (import_rec['divisione_id'],)
+                )
+                imp_struttura_id = (div_row['struttura_id'] if div_row
+                                    else getattr(g, 'struttura_id', None))
                 execute(
                     """INSERT INTO apparecchi
-                       (divisione_id, matricola, descrizione, numero_inventario,
+                       (divisione_id, struttura_id, matricola, descrizione, numero_inventario,
                         marca, modello, anno_fabbricazione, classificazione,
                         ubicazione, fornitore, codice_fornitore, garanzia_scadenza,
                         contratto_manutenzione, ip_address, note, created_by)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (import_rec['divisione_id'],
+                     imp_struttura_id,
                      data.get('matricola', ''),
                      data.get('descrizione'),
                      data.get('numero_inventario'),

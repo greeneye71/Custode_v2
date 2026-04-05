@@ -4,13 +4,34 @@
 {% block content %}
 <div class="page-header d-flex justify-content-between align-items-center">
     <div>
-        <h2><i class="bi bi-building me-2"></i>Gestione Divisioni</h2>
+        <h2><i class="bi bi-diagram-3 me-2"></i>Gestione Divisioni</h2>
         <p class="text-muted mb-0">{{ divisioni|length }} divisioni configurate</p>
     </div>
     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newDivModal">
         <i class="bi bi-plus-lg me-1"></i> Nuova Divisione
     </button>
 </div>
+
+{% if is_superadmin %}
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="GET" action="{{ url_for('admin.divisioni') }}" class="row g-3 align-items-end">
+            <div class="col-md-5">
+                <label class="form-label">Filtra per Struttura</label>
+                <select class="form-select" name="struttura_id" onchange="this.form.submit()">
+                    <option value="">Tutte le strutture</option>
+                    {% for s in strutture %}
+                    <option value="{{ s.id }}" {% if struttura_id_attiva == s.id %}selected{% endif %}>{{ s.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <a href="{{ url_for('admin.divisioni') }}" class="btn btn-outline-secondary w-100">Reset</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <div class="row g-4">
     {% for d in divisioni %}
@@ -24,18 +45,19 @@
                             {{ d.nome }}
                         </h5>
                         <small class="text-muted">Codice: <strong>{{ d.codice }}</strong></small>
+                        {% if d.struttura_nome %}
+                        <div><small class="text-muted">Struttura: <strong>{{ d.struttura_nome }}</strong></small></div>
+                        {% endif %}
                         {% if d.descrizione %}
                         <p class="text-muted small mt-1 mb-0">{{ d.descrizione }}</p>
                         {% endif %}
                     </div>
                     <div class="d-flex gap-1">
-                        <button class="btn btn-outline-primary btn-action"
-                                data-bs-toggle="modal" data-bs-target="#editDiv{{ d.id }}">
+                        <button class="btn btn-outline-primary btn-action" data-bs-toggle="modal" data-bs-target="#editDiv{{ d.id }}">
                             <i class="bi bi-pencil"></i>
                         </button>
                         <form method="POST" action="{{ url_for('admin.divisione_toggle', id=d.id) }}" class="d-inline">
-                            <button type="submit"
-                                    class="btn btn-outline-{% if d.attiva %}danger{% else %}success{% endif %} btn-action">
+                            <button type="submit" class="btn btn-outline-{% if d.attiva %}danger{% else %}success{% endif %} btn-action">
                                 <i class="bi bi-{% if d.attiva %}x-circle{% else %}check-circle{% endif %}"></i>
                             </button>
                         </form>
@@ -60,7 +82,6 @@
         </div>
     </div>
 
-    {# Edit modal for this division #}
     <div class="modal fade" id="editDiv{{ d.id }}" tabindex="-1">
         <div class="modal-dialog">
             <form method="POST" action="{{ url_for('admin.divisione_modifica', id=d.id) }}">
@@ -71,12 +92,22 @@
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label class="form-label">Nome</label>
-                            <input type="text" class="form-control" name="nome" value="{{ d.nome }}" required>
+                            <label class="form-label">Struttura <span class="text-danger">*</span></label>
+                            {% if is_superadmin %}
+                            <select class="form-select" name="struttura_id" required>
+                                {% for s in strutture %}
+                                <option value="{{ s.id }}" {% if d.struttura_id == s.id %}selected{% endif %}>{{ s.nome }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Il cambio struttura è consentito solo se la divisione non ha apparecchi o utenti associati.</div>
+                            {% else %}
+                            <input type="hidden" name="struttura_id" value="{{ d.struttura_id }}">
+                            <input type="text" class="form-control" value="{{ d.struttura_nome }}" disabled>
+                            {% endif %}
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Codice</label>
-                            <input type="text" class="form-control" name="codice" value="{{ d.codice }}" required>
+                            <label class="form-label">Nome</label>
+                            <input type="text" class="form-control" name="nome" value="{{ d.nome }}" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Colore</label>
@@ -98,7 +129,6 @@
     {% endfor %}
 </div>
 
-{# New division modal #}
 <div class="modal fade" id="newDivModal" tabindex="-1">
     <div class="modal-dialog">
         <form method="POST" action="{{ url_for('admin.divisione_nuova') }}">
@@ -108,13 +138,20 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
+                    {% if is_superadmin %}
+                    <div class="mb-3">
+                        <label class="form-label">Struttura <span class="text-danger">*</span></label>
+                        <select class="form-select" name="struttura_id" required>
+                            <option value="">Seleziona struttura</option>
+                            {% for s in strutture %}
+                            <option value="{{ s.id }}" {% if struttura_id_attiva == s.id %}selected{% endif %}>{{ s.nome }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endif %}
                     <div class="mb-3">
                         <label class="form-label">Nome <span class="text-danger">*</span></label>
                         <input type="text" class="form-control" name="nome" required placeholder="Es. Radiologia">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Codice <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control" name="codice" required placeholder="Es. RAD">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Colore</label>

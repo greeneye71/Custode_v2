@@ -17,7 +17,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from auth import login_required, modalita_avanzata_required
-from models import query_one, query_all, execute, log_attivita
+from models import query_one, query_all, execute, log_attivita, upload_subdir
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -35,6 +35,9 @@ def _get_divisione_filter():
     if div and div.get('id') != 'tutte':
         return "AND a.divisione_id = ?", [div['id']]
     elif g.user['ruolo'] == 'admin':
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            return "AND a.struttura_id = ?", [struttura_id]
         return "", []
     else:
         ids = [d['id'] for d in g.divisioni]
@@ -54,14 +57,18 @@ def _validate_apparecchio(form_data, edit_id=None):
     if not data['matricola']:
         errors['matricola'] = 'La matricola è obbligatoria.'
     else:
-        # Check unique on (modello, matricola): stessa matricola è ammessa su modelli diversi
+        # Check unique on (struttura_id, modello, matricola)
         modello_check = form_data.get('modello', '').strip()
+        struttura_id_check = getattr(g, 'struttura_id', None)
         existing = query_one(
-            "SELECT id FROM apparecchi WHERE matricola = ? AND modello = ? AND id != ?",
-            (data['matricola'], modello_check, edit_id or 0)
+            """SELECT id FROM apparecchi
+               WHERE matricola = ? AND modello = ? AND id != ?
+               AND (struttura_id = ? OR (struttura_id IS NULL AND ? IS NULL))""",
+            (data['matricola'], modello_check, edit_id or 0,
+             struttura_id_check, struttura_id_check)
         )
         if existing:
-            errors['matricola'] = 'Questa combinazione modello + matricola è già presente nel sistema.'
+            errors['matricola'] = 'Questa combinazione modello + matricola è già presente in questa struttura.'
 
     data['marca'] = form_data.get('marca', '').strip()
     if not data['marca']:
@@ -357,16 +364,20 @@ def nuovo():
                                divisioni=g.divisioni, form_data=request.form,
                                accessori=_parse_accessori_from_form(request.form))
 
+    # Deriva struttura_id dalla divisione selezionata (fonte autoritativa)
+    div_row = query_one("SELECT struttura_id FROM divisioni WHERE id=?", (data['divisione_id'],))
+    struttura_id = div_row['struttura_id'] if div_row else getattr(g, 'struttura_id', None)
+
     cursor = execute(
         """INSERT INTO apparecchi
-           (divisione_id, descrizione, matricola, numero_inventario,
+           (divisione_id, struttura_id, descrizione, matricola, numero_inventario,
             marca, modello, anno_fabbricazione, classificazione,
             ubicazione, stato, soggetto_verifica, connesso_rete, ip_address, mac_address,
             hostname, porta, protocollo, url_interfaccia,
             fornitore, codice_fornitore, garanzia_scadenza,
             contratto_manutenzione, note, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (data['divisione_id'], data['descrizione'], data['matricola'],
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (data['divisione_id'], struttura_id, data['descrizione'], data['matricola'],
          data['numero_inventario'], data['marca'], data['modello'],
          data['anno_fabbricazione'], data['classificazione'],
          data['ubicazione'], data['stato'], data['soggetto_verifica'],
@@ -390,6 +401,7 @@ def nuovo():
 @login_required
 def dettaglio(id):
     """Show apparecchio detail page."""
+    struttura_id = getattr(g, 'struttura_id', None)
     apparecchio = query_one(
         """SELECT a.*, d.nome as divisione_nome, d.colore as divisione_colore,
                   u1.nome || ' ' || u1.cognome as creato_da,
@@ -398,16 +410,16 @@ def dettaglio(id):
            LEFT JOIN divisioni d ON a.divisione_id = d.id
            LEFT JOIN utenti u1 ON a.created_by = u1.id
            LEFT JOIN utenti u2 ON a.updated_by = u2.id
-           WHERE a.id = ?""",
-        (id,)
+           WHERE a.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
+        (id, struttura_id, struttura_id)
     )
 
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
-    # Check division access
-    if g.user['ruolo'] != 'admin':
+    # Check division access for utenti (admin già limitato dalla query struttura_id)
+    if g.user['ruolo'] not in ('admin', 'superadmin'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if apparecchio['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato a questo apparecchio.', 'danger')
@@ -529,12 +541,16 @@ def qr_code(id):
 @login_required
 def modifica(id):
     """Edit an apparecchio."""
-    apparecchio = query_one("SELECT * FROM apparecchi WHERE id = ?", (id,))
+    struttura_id = getattr(g, 'struttura_id', None)
+    apparecchio = query_one(
+        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
+        (id, struttura_id, struttura_id)
+    )
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
-    if g.user['ruolo'] != 'admin':
+    if g.user['ruolo'] not in ('admin', 'superadmin'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if apparecchio['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato a questo apparecchio.', 'danger')
@@ -628,8 +644,8 @@ def upload_foto(id):
         return redirect(url_for('apparecchi.dettaglio', id=id))
 
     # Save file
-    uploads_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'foto')
-    os.makedirs(uploads_dir, exist_ok=True)
+    struttura_id = getattr(g, 'struttura_id', None)
+    uploads_dir, rel_prefix = upload_subdir('foto', struttura_id)
     filename = f"{int(time.time())}_{secure_filename(file.filename)}"
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
@@ -637,7 +653,7 @@ def upload_foto(id):
     # Update database
     execute(
         "UPDATE apparecchi SET foto_path = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?",
-        (f"foto/{filename}", g.user['id'], id)
+        (f"{rel_prefix}/{filename}", g.user['id'], id)
     )
 
     flash('Foto caricata con successo.', 'success')
@@ -669,8 +685,8 @@ def upload_documento(id):
         tipo = 'report'
 
     # Save file
-    uploads_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'documenti')
-    os.makedirs(uploads_dir, exist_ok=True)
+    struttura_id = getattr(g, 'struttura_id', None)
+    uploads_dir, rel_prefix = upload_subdir('documenti', struttura_id)
     filename = f"{int(time.time())}_{secure_filename(file.filename)}"
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
@@ -682,7 +698,7 @@ def upload_documento(id):
     execute(
         """INSERT INTO documenti (apparecchio_id, tipo, filename, filepath, filesize, uploaded_by)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        (id, tipo, file.filename, f"documenti/{filename}", filesize, g.user['id'])
+        (id, tipo, file.filename, f"{rel_prefix}/{filename}", filesize, g.user['id'])
     )
 
     flash(f'Documento "{file.filename}" caricato con successo.', 'success')
