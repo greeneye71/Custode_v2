@@ -164,6 +164,20 @@ def _load_user_from_session():
             )
             if struttura is None:
                 session.pop('struttura_impersonata_id', None)
+    elif g.user['ruolo'] == 'tecnico':
+        struttura_impersonata_id = session.get('struttura_impersonata_id')
+        if struttura_impersonata_id:
+            allowed = query_one(
+                "SELECT struttura_id FROM tecnici_strutture WHERE tecnico_id = ? AND struttura_id = ?",
+                (g.user['id'], struttura_impersonata_id)
+            )
+            if allowed:
+                struttura = query_one(
+                    "SELECT * FROM strutture WHERE id = ? AND attiva = 1",
+                    (struttura_impersonata_id,)
+                )
+            if struttura is None:
+                session.pop('struttura_impersonata_id', None)
     else:
         struttura_id = g.user.get('struttura_id')
         if struttura_id:
@@ -190,7 +204,7 @@ def _load_user_from_session():
             )
         else:
             g.divisioni = []
-    elif g.user['ruolo'] == 'admin':
+    elif g.user['ruolo'] in ('admin', 'tecnico'):
         struttura_id = g.struttura_id
         if struttura_id:
             g.divisioni = query_all(
@@ -198,9 +212,7 @@ def _load_user_from_session():
                 (struttura_id,)
             )
         else:
-            g.divisioni = query_all(
-                "SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome"
-            )
+            g.divisioni = []
     else:
         g.divisioni = query_all(
             """SELECT d.* FROM divisioni d
@@ -216,12 +228,17 @@ def _load_user_from_session():
 
     if div_attiva_id and div_attiva_id in accessible_ids:
         g.divisione_attiva = next(d for d in g.divisioni if d['id'] == div_attiva_id)
-    elif div_attiva_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin'):
+    elif div_attiva_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin', 'tecnico'):
         g.divisione_attiva = {'id': 'tutte', 'nome': 'Tutte le divisioni', 'colore': '#6b7280'}
     elif g.divisioni:
-        # Default to first accessible division
-        g.divisione_attiva = g.divisioni[0]
-        session['divisione_attiva_id'] = g.divisioni[0]['id']
+        if g.user['ruolo'] == 'tecnico':
+            # Il tecnico vede tutte le divisioni per default
+            g.divisione_attiva = {'id': 'tutte', 'nome': 'Tutte le divisioni', 'colore': '#6b7280'}
+            session['divisione_attiva_id'] = 'tutte'
+        else:
+            # Default to first accessible division
+            g.divisione_attiva = g.divisioni[0]
+            session['divisione_attiva_id'] = g.divisioni[0]['id']
     else:
         g.divisione_attiva = None
 
@@ -232,14 +249,14 @@ def _load_user_from_session():
                WHERE divisione_id = ? AND priorita IN ('scaduto', 'urgente', 'attenzione')""",
             (g.divisione_attiva['id'],)
         )
-    elif g.user['ruolo'] in ('admin', 'superadmin') and g.struttura_id:
+    elif g.user['ruolo'] in ('admin', 'superadmin', 'tecnico') and g.struttura_id:
         result = query_one(
             """SELECT COUNT(*) as cnt FROM prossime_scadenze ps
                JOIN apparecchi a ON a.id = ps.apparecchio_id
                WHERE a.struttura_id = ? AND ps.priorita IN ('scaduto', 'urgente', 'attenzione')""",
             (g.struttura_id,)
         )
-    elif g.user['ruolo'] in ('admin', 'superadmin'):
+    elif g.user['ruolo'] in ('admin', 'superadmin', 'tecnico'):
         result = query_one(
             """SELECT COUNT(*) as cnt FROM prossime_scadenze
                WHERE priorita IN ('scaduto', 'urgente', 'attenzione')"""
@@ -357,6 +374,24 @@ def login():
     if user['primo_accesso']:
         return redirect(url_for('auth.cambio_password'))
 
+    # Tecnico: seleziona struttura se non ancora impostata
+    if user['ruolo'] == 'tecnico':
+        strutture_assegnate = query_all(
+            """SELECT s.id FROM strutture s
+               JOIN tecnici_strutture ts ON s.id = ts.struttura_id
+               WHERE ts.tecnico_id = ? AND s.attiva = 1""",
+            (user['id'],)
+        )
+        if not strutture_assegnate:
+            execute("DELETE FROM sessioni WHERE token = ?", (token,))
+            session.clear()
+            flash("Nessuna struttura assegnata. Contattare l'amministratore.", 'danger')
+            return render_template('login.html', email=email)
+        if len(strutture_assegnate) == 1:
+            session['struttura_impersonata_id'] = strutture_assegnate[0]['id']
+        else:
+            return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
+
     return redirect(url_for('index'))
 
 
@@ -456,7 +491,7 @@ def cambio_password():
 @login_required
 def cambia_divisione(divisione_id):
     """Switch the active division."""
-    if divisione_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin'):
+    if divisione_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin', 'tecnico'):
         session['divisione_attiva_id'] = 'tutte'
     else:
         try:
@@ -505,3 +540,43 @@ def esci_impersonazione():
     """Superadmin torna alla vista globale."""
     session.pop('struttura_impersonata_id', None)
     return redirect(url_for('strutture.index'))
+
+
+@auth_bp.route('/tecnico/seleziona-struttura')
+@login_required
+def tecnico_seleziona_struttura_page():
+    """Pagina di selezione struttura per tecnico con più strutture assegnate."""
+    if g.user['ruolo'] != 'tecnico':
+        return redirect(url_for('index'))
+    strutture = query_all(
+        """SELECT s.id, s.nome FROM strutture s
+           JOIN tecnici_strutture ts ON s.id = ts.struttura_id
+           WHERE ts.tecnico_id = ? AND s.attiva = 1
+           ORDER BY s.nome""",
+        (g.user['id'],)
+    )
+    return render_template('auth/seleziona_struttura_tecnico.html', strutture=strutture)
+
+
+@auth_bp.route('/tecnico/struttura/<int:struttura_id>')
+@login_required
+def tecnico_seleziona_struttura(struttura_id):
+    """Tecnico imposta la struttura attiva (verifica accesso)."""
+    if g.user['ruolo'] != 'tecnico':
+        flash('Accesso non autorizzato.', 'danger')
+        return redirect(url_for('index'))
+    allowed = query_one(
+        "SELECT struttura_id FROM tecnici_strutture WHERE tecnico_id = ? AND struttura_id = ?",
+        (g.user['id'], struttura_id)
+    )
+    if not allowed:
+        flash('Struttura non assegnata.', 'danger')
+        return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
+    struttura = query_one(
+        "SELECT nome FROM strutture WHERE id = ? AND attiva = 1", (struttura_id,)
+    )
+    if not struttura:
+        flash('Struttura non trovata o non attiva.', 'danger')
+        return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
+    session['struttura_impersonata_id'] = struttura_id
+    return redirect(url_for('index'))
