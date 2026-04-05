@@ -1372,6 +1372,20 @@ def tecnico_elimina(id):
         flash('Tecnico non trovato.', 'danger')
         return redirect(url_for('admin.tecnici'))
 
+    # Annulla i riferimenti FK nullable prima di cancellare (no CASCADE su queste tabelle)
+    for tbl, col in [
+        ('log_attivita',   'utente_id'),
+        ('apparecchi',     'created_by'),
+        ('manutenzioni',   'created_by'),
+        ('manutenzioni',   'updated_by'),
+        ('verifiche',      'created_by'),
+        ('documenti',      'uploaded_by'),
+        ('accessori',      'created_by'),
+        ('import_history', 'imported_by'),
+        ('divisioni',      'created_by'),
+    ]:
+        execute(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = ?", (id,))
+
     execute("DELETE FROM utenti WHERE id = ?", (id,))
     log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
                  f"Tecnico eliminato: {tecnico['nome']} {tecnico['cognome']}",
