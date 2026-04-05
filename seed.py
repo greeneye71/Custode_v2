@@ -7,9 +7,30 @@ Usage: python seed.py
 
 import os
 import sys
+import shutil
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_BASE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _BASE)
+
+
+def _ensure_config():
+    """Crea config.json da config.example.json se mancante (prima installazione)."""
+    config_path = os.path.join(_BASE, 'config.json')
+    example_path = os.path.join(_BASE, 'config.example.json')
+    if not os.path.exists(config_path):
+        if not os.path.exists(example_path):
+            print("ERRORE: config.example.json non trovato. Il repository potrebbe essere incompleto.")
+            sys.exit(1)
+        shutil.copy2(example_path, config_path)
+        print(f"Creato config.json da config.example.json")
+        print("  -> Le chiavi crittografiche verranno generate automaticamente.")
+        print("  -> Modificare config.local.json per personalizzare host, porta e API key AI.\n")
+
+    # Crea la directory data/ se mancante
+    data_dir = os.path.join(_BASE, 'data')
+    os.makedirs(data_dir, exist_ok=True)
+
 
 from app import create_app
 from models import query_one, query_all, execute
@@ -18,6 +39,7 @@ from werkzeug.security import generate_password_hash
 
 def seed_database():
     """Populate the database with initial data."""
+    _ensure_config()
     app = create_app()
 
     with app.app_context():
