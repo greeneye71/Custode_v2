@@ -348,6 +348,44 @@ ORDER BY prossima_scadenza ASC""",
             logger.warning(f"Migration step skipped (may already be applied): {e}")
     db.commit()
 
+    # Aggiunge 'tecnico' al CHECK ruolo di utenti se non già presente (v2.2)
+    try:
+        row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='utenti'"
+        ).fetchone()
+        if row and "'tecnico'" not in row[0]:
+            logger.info("Migrazione v2.2: aggiunta ruolo tecnico a tabella utenti...")
+            cols = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
+            col_list = ', '.join(cols)
+            db.execute("PRAGMA foreign_keys = OFF")
+            db.execute("ALTER TABLE utenti RENAME TO utenti_old_v22")
+            db.execute("""
+                CREATE TABLE utenti (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT UNIQUE NOT NULL,
+                  password_hash TEXT NOT NULL,
+                  nome TEXT NOT NULL,
+                  cognome TEXT NOT NULL,
+                  ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin', 'admin', 'utente', 'tecnico')),
+                  divisione_default_id INTEGER,
+                  attivo INTEGER DEFAULT 1,
+                  primo_accesso INTEGER DEFAULT 1,
+                  ultimo_accesso DATETIME,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  struttura_id INTEGER,
+                  FOREIGN KEY (struttura_id) REFERENCES strutture(id),
+                  FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id)
+                )
+            """)
+            db.execute(f"INSERT INTO utenti SELECT {col_list} FROM utenti_old_v22")
+            db.execute("DROP TABLE utenti_old_v22")
+            db.execute("PRAGMA foreign_keys = ON")
+            db.commit()
+            logger.info("Migrazione v2.2 completata.")
+    except Exception as e:
+        logger.warning(f"Migrazione v2.2 utenti (ruolo tecnico): {e}")
+
     # Versioning schema DB tramite PRAGMA user_version
     # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)
     schema_ver = db.execute("PRAGMA user_version").fetchone()[0]
