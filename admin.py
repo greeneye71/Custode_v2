@@ -661,26 +661,12 @@ def configurazione():
 
     # Mask sensitive fields for display
     display_config = dict(config)
-    if display_config.get('anthropic_api_key'):
-        key = display_config['anthropic_api_key']
-        display_config['anthropic_api_key_masked'] = key[:8] + '••••••••' + key[-4:] if len(key) > 12 else '••••••••'
-    else:
-        display_config['anthropic_api_key_masked'] = ''
+    display_config['anthropic_api_key_masked'] = '••••••••' if display_config.get('anthropic_api_key') else ''
+    display_config['gemini_api_key_masked'] = '••••••••' if display_config.get('gemini_api_key') else ''
+    display_config['openai_api_key_masked'] = '••••••••' if display_config.get('openai_api_key') else ''
 
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
-
-    if display_config.get('gemini_api_key'):
-        key = display_config['gemini_api_key']
-        display_config['gemini_api_key_masked'] = key[:4] + '••••••••' + key[-4:] if len(key) > 8 else '••••••••'
-    else:
-        display_config['gemini_api_key_masked'] = ''
-
-    if display_config.get('openai_api_key'):
-        key = display_config['openai_api_key']
-        display_config['openai_api_key_masked'] = key[:8] + '••••••••' + key[-4:] if len(key) > 12 else '••••••••'
-    else:
-        display_config['openai_api_key_masked'] = ''
 
     return render_template('admin/configurazione.html', config=display_config,
                            anthropic_models=ANTHROPIC_MODELS,

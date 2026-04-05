@@ -27,20 +27,34 @@
 
             <div class="col-md-4">
               <label class="form-label">Provider AI</label>
-              <select class="form-select" name="ai_provider">
+              <select class="form-select" name="ai_provider" id="struttura_ai_provider"
+                      onchange="toggleStrutturaAIFields()">
                 <option value="" {% if not cfg.get('ai_provider') %}selected{% endif %}>— usa default globale —</option>
                 <option value="anthropic"        {% if cfg.get('ai_provider') == 'anthropic' %}selected{% endif %}>Anthropic Claude</option>
+                <option value="gemini"           {% if cfg.get('ai_provider') == 'gemini' %}selected{% endif %}>Google Gemini</option>
+                <option value="openai"           {% if cfg.get('ai_provider') == 'openai' %}selected{% endif %}>OpenAI</option>
                 <option value="ollama"           {% if cfg.get('ai_provider') == 'ollama' %}selected{% endif %}>Ollama (locale)</option>
                 <option value="lmstudio"         {% if cfg.get('ai_provider') == 'lmstudio' %}selected{% endif %}>LM Studio (locale)</option>
                 <option value="openai_compatible" {% if cfg.get('ai_provider') == 'openai_compatible' %}selected{% endif %}>OpenAI-compatible</option>
               </select>
             </div>
 
-            <div class="col-md-8">
+            <div class="col-md-8" id="struttura_anthropic_key">
               <label class="form-label">Anthropic API Key</label>
               <input type="password" class="form-control" name="anthropic_api_key"
-                     value=""
-                     placeholder="{% if cfg.get('anthropic_api_key') %}Lascia vuoto per non modificare{% else %}Non configurata{% endif %}">
+                     placeholder="{% if cfg.get('anthropic_api_key') %}Configurata — lascia vuoto per non modificare{% else %}Non configurata{% endif %}">
+            </div>
+
+            <div class="col-md-8" id="struttura_gemini_key" style="display:none;">
+              <label class="form-label">Google Gemini API Key</label>
+              <input type="password" class="form-control" name="gemini_api_key"
+                     placeholder="{% if cfg.get('gemini_api_key') %}Configurata — lascia vuoto per non modificare{% else %}AIza...{% endif %}">
+            </div>
+
+            <div class="col-md-8" id="struttura_openai_key" style="display:none;">
+              <label class="form-label">OpenAI API Key</label>
+              <input type="password" class="form-control" name="openai_api_key"
+                     placeholder="{% if cfg.get('openai_api_key') %}Configurata — lascia vuoto per non modificare{% else %}sk-...{% endif %}">
             </div>
 
             <div class="col-md-6">
@@ -187,4 +201,28 @@
 
   </div>
 </form>
+
+<script>
+function toggleStrutturaAIFields() {
+    var provider = document.getElementById('struttura_ai_provider').value;
+    var isAnthropic = (provider === 'anthropic');
+    var isGemini    = (provider === 'gemini');
+    var isOpenAI    = (provider === 'openai');
+
+    function setField(id, show) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.style.display = show ? '' : 'none';
+        el.querySelectorAll('input, select').forEach(function(f) {
+            if (show) f.removeAttribute('disabled');
+            else f.setAttribute('disabled', 'disabled');
+        });
+    }
+
+    setField('struttura_anthropic_key', isAnthropic);
+    setField('struttura_gemini_key',    isGemini);
+    setField('struttura_openai_key',    isOpenAI);
+}
+document.addEventListener('DOMContentLoaded', toggleStrutturaAIFields);
+</script>
 {% endblock %}

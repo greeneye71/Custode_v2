@@ -322,11 +322,14 @@ def config(struttura_id):
         return redirect(url_for('strutture.index'))
 
     chiavi_visibili = [
-        'ai_provider', 'anthropic_api_key', 'ai_import_model',
-        'ai_email_model', 'ai_local_base_url', 'ai_local_model',
+        'ai_provider', 'anthropic_api_key', 'gemini_api_key', 'openai_api_key',
+        'ai_import_model', 'ai_email_model',
+        'ai_local_base_url', 'ai_local_model',
         'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'smtp_use_tls',
         'report_frequenza', 'report_schedulato_attivo',
     ]
+    # Campi API key: se lasciati vuoti mantieni il valore esistente (non cancellare)
+    API_KEY_FIELDS = {'anthropic_api_key', 'gemini_api_key', 'openai_api_key'}
 
     if request.method == 'POST':
         CHECKBOX_KEYS = {'smtp_use_tls', 'report_schedulato_attivo'}
@@ -337,11 +340,13 @@ def config(struttura_id):
                 valore = request.form.get(chiave, '').strip()
             if valore:
                 set_struttura_config(struttura_id, chiave, valore)
-            else:
+            elif chiave not in API_KEY_FIELDS:
+                # Campi normali vuoti: cancella per tornare al default globale
                 execute(
                     "DELETE FROM strutture_config WHERE struttura_id=? AND chiave=?",
                     (struttura_id, chiave)
                 )
+            # API key vuota: non fare nulla (mantieni il valore esistente)
         smtp_password = request.form.get('smtp_password', '').strip()
         if smtp_password:
             key = current_app.config['APP_CONFIG'].get('encryption_key', '')
