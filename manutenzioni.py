@@ -366,8 +366,9 @@ def scarica_verbale(id):
         return redirect(url_for('manutenzioni.lista'))
 
     uploads_path = current_app.config['UPLOADS_PATH']
-    directory = os.path.join(uploads_path, 'verbali')
-    filename = os.path.basename(manutenzione['verbale_path'])
+    rel = manutenzione['verbale_path']
+    directory = os.path.join(uploads_path, os.path.dirname(rel))
+    filename = os.path.basename(rel)
     return send_from_directory(directory, filename, as_attachment=True)
 
 

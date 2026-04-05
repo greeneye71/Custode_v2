@@ -394,6 +394,11 @@ ORDER BY prossima_scadenza ASC""",
             db.rollback()
         except Exception:
             pass
+        try:
+            db.execute("PRAGMA legacy_alter_table = OFF")
+            db.execute("PRAGMA foreign_keys = ON")
+        except Exception:
+            pass
 
     # Versioning schema DB tramite PRAGMA user_version
     # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)

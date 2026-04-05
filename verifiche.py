@@ -257,17 +257,19 @@ def nuova():
 @login_required
 def modifica(id):
     """Edit a verifica record."""
+    struttura_id = getattr(g, 'struttura_id', None)
     verifica = query_one(
         """SELECT v.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
-           WHERE v.id = ?""", (id,)
+           WHERE v.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
+        (id, struttura_id, struttura_id)
     )
     if not verifica:
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
 
-    if g.user['ruolo'] != 'admin':
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if verifica['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato.', 'danger')
@@ -300,7 +302,7 @@ def modifica(id):
     # Update documento if new file uploaded
     doc_file = request.files.get('documento')
     if doc_file and doc_file.filename:
-        doc_path = _save_documento(doc_file, id)
+        doc_path = _save_documento(doc_file, id, getattr(g, 'struttura_id', None))
         if doc_path:
             execute("UPDATE verifiche SET documento_path = ? WHERE id = ?",
                     (doc_path, id))
@@ -316,16 +318,18 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a verifica record."""
+    struttura_id = getattr(g, 'struttura_id', None)
     verifica = query_one(
-        """SELECT v.*, a.divisione_id FROM verifiche v
+        """SELECT v.*, a.divisione_id, v.apparecchio_id FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
-           WHERE v.id = ?""", (id,)
+           WHERE v.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
+        (id, struttura_id, struttura_id)
     )
     if not verifica:
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
 
-    if g.user['ruolo'] != 'admin':
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if verifica['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato.', 'danger')
@@ -359,8 +363,9 @@ def scarica_documento(id):
         return redirect(url_for('verifiche.lista'))
 
     uploads_path = current_app.config['UPLOADS_PATH']
-    directory = os.path.join(uploads_path, 'verifiche')
-    filename = os.path.basename(verifica['documento_path'])
+    rel = verifica['documento_path']
+    directory = os.path.join(uploads_path, os.path.dirname(rel))
+    filename = os.path.basename(rel)
     return send_from_directory(directory, filename, as_attachment=True)
 
 

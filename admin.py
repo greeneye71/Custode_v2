@@ -1385,6 +1385,9 @@ def tecnico_elimina(id):
         flash('Tecnico non trovato.', 'danger')
         return redirect(url_for('admin.tecnici'))
 
+    # Invalida esplicitamente le sessioni attive del tecnico
+    execute("DELETE FROM sessioni WHERE utente_id = ?", (id,))
+
     # Annulla i riferimenti FK nullable prima di cancellare (no CASCADE su queste tabelle)
     for tbl, col in [
         ('log_attivita',   'utente_id'),
@@ -1395,7 +1398,6 @@ def tecnico_elimina(id):
         ('documenti',      'uploaded_by'),
         ('accessori',      'created_by'),
         ('import_history', 'imported_by'),
-        ('divisioni',      'created_by'),
     ]:
         execute(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = ?", (id,))
 

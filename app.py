@@ -372,7 +372,12 @@ def create_app():
     @app.route('/')
     @auth_login_required
     def index():
+        from flask import redirect, url_for
         from models import query_one, query_all
+
+        # Tecnico senza struttura selezionata → pagina di selezione
+        if getattr(g, 'user', {}).get('ruolo') == 'tecnico' and not getattr(g, 'struttura_id', None):
+            return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
 
         # Division filter
         div = getattr(g, 'divisione_attiva', None)
@@ -381,7 +386,7 @@ def create_app():
             div_clause = "AND a.divisione_id = ?"
             div_params = [div['id']]
             div_clause_m = "AND a.divisione_id = ?"
-        elif getattr(g, 'user', {}).get('ruolo') == 'admin':
+        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
             if struttura_id:
                 div_clause = "AND a.struttura_id = ?"
                 div_params = [struttura_id]
@@ -415,10 +420,18 @@ def create_app():
                 "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id = ? AND priorita IN ('scaduto','urgente','attenzione','avviso')",
                 [div['id']]
             )
-        elif getattr(g, 'user', {}).get('ruolo') == 'admin':
-            r = query_one(
-                "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE priorita IN ('scaduto','urgente','attenzione','avviso')"
-            )
+        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
+            if struttura_id:
+                r = query_one(
+                    """SELECT COUNT(*) as cnt FROM prossime_scadenze ps
+                       JOIN apparecchi a ON a.id = ps.apparecchio_id
+                       WHERE a.struttura_id = ? AND ps.priorita IN ('scaduto','urgente','attenzione','avviso')""",
+                    [struttura_id]
+                )
+            else:
+                r = query_one(
+                    "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE priorita IN ('scaduto','urgente','attenzione','avviso')"
+                )
         else:
             ids = [d['id'] for d in getattr(g, 'divisioni', [])]
             if ids:
@@ -460,6 +473,16 @@ def create_app():
                    WHERE ps.divisione_id = ?
                    ORDER BY ps.prossima_scadenza ASC LIMIT 10""",
                 [div['id']]
+            )
+        elif struttura_id:
+            scadenze_imminenti = query_all(
+                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
+                   FROM prossime_scadenze ps
+                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
+                   JOIN apparecchi a ON a.id = ps.apparecchio_id
+                   WHERE a.struttura_id = ?
+                   ORDER BY ps.prossima_scadenza ASC LIMIT 10""",
+                [struttura_id]
             )
         else:
             scadenze_imminenti = query_all(
