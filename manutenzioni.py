@@ -29,7 +29,7 @@ def _get_divisione_filter(table_alias='a'):
     div = g.divisione_attiva
     if div and div.get('id') != 'tutte':
         return f"AND {table_alias}.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] == 'admin':
+    elif g.user['ruolo'] in ('admin', 'tecnico'):
         struttura_id = getattr(g, 'struttura_id', None)
         if struttura_id:
             return f"AND {table_alias}.struttura_id = ?", [struttura_id]
@@ -271,7 +271,7 @@ def modifica(id):
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 
-    if g.user['ruolo'] not in ('admin', 'superadmin'):
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if manutenzione['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato.', 'danger')
@@ -332,7 +332,7 @@ def elimina(id):
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 
-    if g.user['ruolo'] not in ('admin', 'superadmin'):
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if manutenzione['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato.', 'danger')

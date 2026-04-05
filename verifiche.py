@@ -31,7 +31,7 @@ def _get_divisione_filter(table_alias='a'):
     div = g.divisione_attiva
     if div and div.get('id') != 'tutte':
         return f"AND {table_alias}.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] == 'admin':
+    elif g.user['ruolo'] in ('admin', 'tecnico'):
         struttura_id = getattr(g, 'struttura_id', None)
         if struttura_id:
             return f"AND {table_alias}.struttura_id = ?", [struttura_id]

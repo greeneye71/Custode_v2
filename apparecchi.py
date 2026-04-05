@@ -34,7 +34,7 @@ def _get_divisione_filter():
     div = g.divisione_attiva
     if div and div.get('id') != 'tutte':
         return "AND a.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] == 'admin':
+    elif g.user['ruolo'] in ('admin', 'tecnico'):
         struttura_id = getattr(g, 'struttura_id', None)
         if struttura_id:
             return "AND a.struttura_id = ?", [struttura_id]
@@ -419,7 +419,7 @@ def dettaglio(id):
         return redirect(url_for('apparecchi.lista'))
 
     # Check division access for utenti (admin già limitato dalla query struttura_id)
-    if g.user['ruolo'] not in ('admin', 'superadmin'):
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if apparecchio['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato a questo apparecchio.', 'danger')
@@ -550,7 +550,7 @@ def modifica(id):
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
-    if g.user['ruolo'] not in ('admin', 'superadmin'):
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         accessible_ids = [d['id'] for d in g.divisioni]
         if apparecchio['divisione_id'] not in accessible_ids:
             flash('Accesso non autorizzato a questo apparecchio.', 'danger')
