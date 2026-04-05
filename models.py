@@ -357,6 +357,10 @@ ORDER BY prossima_scadenza ASC""",
             logger.info("Migrazione v2.2: aggiunta ruolo tecnico a tabella utenti...")
             cols = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
             col_list = ', '.join(cols)
+            # legacy_alter_table=ON: impedisce a SQLite 3.26+ di aggiornare
+            # automaticamente i riferimenti FK nelle tabelle figlie durante il RENAME,
+            # altrimenti sessioni/utenti_divisioni punterebbero a utenti_old_v22.
+            db.execute("PRAGMA legacy_alter_table = ON")
             db.execute("PRAGMA foreign_keys = OFF")
             db.execute("ALTER TABLE utenti RENAME TO utenti_old_v22")
             db.execute("""
@@ -380,11 +384,16 @@ ORDER BY prossima_scadenza ASC""",
             """)
             db.execute(f"INSERT INTO utenti SELECT {col_list} FROM utenti_old_v22")
             db.execute("DROP TABLE utenti_old_v22")
+            db.execute("PRAGMA legacy_alter_table = OFF")
             db.execute("PRAGMA foreign_keys = ON")
             db.commit()
             logger.info("Migrazione v2.2 completata.")
     except Exception as e:
-        logger.warning(f"Migrazione v2.2 utenti (ruolo tecnico): {e}")
+        logger.error(f"Migrazione v2.2 utenti (ruolo tecnico) FALLITA: {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     # Versioning schema DB tramite PRAGMA user_version
     # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)
