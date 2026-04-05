@@ -143,6 +143,15 @@ def utenti():
     return render_template('admin/utenti.html', utenti=users, is_superadmin=is_superadmin)
 
 
+@admin_bp.route('/struttura/<int:struttura_id>/divisioni-json')
+@admin_required
+def struttura_divisioni_json(struttura_id):
+    """Restituisce le divisioni attive di una struttura in JSON (usato da AJAX nel form utente)."""
+    from flask import jsonify
+    divisioni = _divisioni_per_struttura(struttura_id)
+    return jsonify([{'id': d['id'], 'nome': d['nome'], 'colore': d['colore']} for d in divisioni])
+
+
 @admin_bp.route('/utenti/nuovo', methods=['GET', 'POST'])
 @admin_required
 def utente_nuovo():
@@ -153,18 +162,14 @@ def utente_nuovo():
     strutture = (query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
                  if is_superadmin else [])
 
-    # Superadmin: usa il filtro GET per precaricare le divisioni prima del POST
     if is_superadmin:
-        preview_struttura_id = request.args.get('struttura_id', type=int)
-        divisioni = _divisioni_per_struttura(preview_struttura_id)
+        divisioni = []  # caricate via AJAX al cambio struttura
     else:
-        preview_struttura_id = None
         divisioni = _divisioni_per_struttura(mia_struttura_id)
 
     if request.method == 'GET':
-        form_data = {'struttura_id': preview_struttura_id} if preview_struttura_id else {}
         return render_template('admin/utente_form.html',
-                               utente=None, errors={}, form_data=form_data,
+                               utente=None, errors={}, form_data={},
                                divisioni=divisioni, strutture=strutture,
                                is_superadmin=is_superadmin)
 
@@ -238,14 +243,7 @@ def utente_modifica(id):
     strutture = (query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
                  if is_superadmin else [])
 
-    # Superadmin: il GET param struttura_id permette di filtrare le divisioni
-    # senza perdere i dati già inseriti
-    if is_superadmin:
-        preview_struttura_id = request.args.get('struttura_id', type=int) or struttura_id_utente
-        divisioni = _divisioni_per_struttura(preview_struttura_id)
-    else:
-        preview_struttura_id = mia_struttura_id
-        divisioni = _divisioni_per_struttura(mia_struttura_id)
+    divisioni = _divisioni_per_struttura(struttura_id_utente)
 
     utente_div_ids = [str(r['divisione_id']) for r in
                       query_all("SELECT divisione_id FROM utenti_divisioni WHERE utente_id=?", (id,))]
@@ -253,9 +251,6 @@ def utente_modifica(id):
     if request.method == 'GET':
         form_data = dict(utente)
         form_data['divisioni'] = utente_div_ids
-        # Sovrascrive struttura_id con quello del filtro GET (se il superadmin ha cambiato)
-        if is_superadmin and request.args.get('struttura_id'):
-            form_data['struttura_id'] = preview_struttura_id
         return render_template('admin/utente_form.html',
                                utente=utente, errors={}, form_data=form_data,
                                divisioni=divisioni, strutture=strutture,
@@ -288,11 +283,12 @@ def utente_modifica(id):
             errors['email'] = 'Questo indirizzo email è già registrato.'
 
     if errors:
+        divisioni_post = _divisioni_per_struttura(struttura_id or struttura_id_utente)
         form_data = dict(form)
         form_data['divisioni'] = divisioni_sel
         return render_template('admin/utente_form.html',
                                utente=utente, errors=errors, form_data=form_data,
-                               divisioni=divisioni, strutture=strutture,
+                               divisioni=divisioni_post, strutture=strutture,
                                is_superadmin=is_superadmin)
 
     execute(

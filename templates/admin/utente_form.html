@@ -93,7 +93,7 @@
             <!-- Divisioni -->
             <div class="card mb-4">
                 <div class="card-header"><i class="bi bi-diagram-3 me-1"></i> Divisioni Assegnate</div>
-                <div class="card-body">
+                <div class="card-body" id="divisioni-container">
                     {% if divisioni %}
                     <div class="row g-2">
                         {% for d in divisioni %}
@@ -103,7 +103,7 @@
                                        value="{{ d.id }}" id="div{{ d.id }}"
                                        {% if d.id|string in (form_data.get('divisioni') or []) %}checked{% endif %}>
                                 <label class="form-check-label d-flex align-items-center" for="div{{ d.id }}">
-                                    <span class="divisione-dot me-2" style="background-color: {{ d.colore }}; width:12px; height:12px; border-radius:50%; display:inline-block;"></span>
+                                    <span class="me-2" style="background-color: {{ d.colore }}; width:12px; height:12px; border-radius:50%; display:inline-block;"></span>
                                     {{ d.nome }}
                                 </label>
                             </div>
@@ -156,10 +156,34 @@
 <script>
 document.getElementById('struttura_id').addEventListener('change', function() {
     const sid = this.value;
-    if (!sid) return;
-    const url = new URL(window.location.href);
-    url.searchParams.set('struttura_id', sid);
-    window.location.href = url.toString();
+    const container = document.getElementById('divisioni-container');
+    if (!sid) {
+        container.innerHTML = '<p class="text-muted mb-0">Seleziona prima una struttura per vedere le divisioni disponibili.</p>';
+        return;
+    }
+    fetch('{{ url_for("admin.struttura_divisioni_json", struttura_id=0) }}'.replace('/0/', '/' + sid + '/'))
+        .then(r => r.json())
+        .then(divisioni => {
+            if (!divisioni.length) {
+                container.innerHTML = '<p class="text-muted mb-0">Nessuna divisione attiva per questa struttura.</p>';
+                return;
+            }
+            const html = divisioni.map(d => `
+                <div class="col-md-6">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="divisioni"
+                               value="${d.id}" id="div${d.id}" checked>
+                        <label class="form-check-label d-flex align-items-center" for="div${d.id}">
+                            <span class="me-2" style="background-color:${d.colore};width:12px;height:12px;border-radius:50%;display:inline-block;"></span>
+                            ${d.nome}
+                        </label>
+                    </div>
+                </div>`).join('');
+            container.innerHTML = '<div class="row g-2">' + html + '</div>';
+        })
+        .catch(() => {
+            container.innerHTML = '<p class="text-danger mb-0">Errore nel caricamento delle divisioni.</p>';
+        });
 });
 </script>
 {% endif %}
