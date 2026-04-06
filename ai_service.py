@@ -322,6 +322,7 @@ def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
         "generationConfig": {
             "maxOutputTokens": max_tokens,
             "temperature": 0.1,
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     with httpx.Client(timeout=300.0) as client:
@@ -347,6 +348,7 @@ def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, ma
         "generationConfig": {
             "maxOutputTokens": max_tokens,
             "temperature": 0.1,
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     with httpx.Client(timeout=300.0) as client:
