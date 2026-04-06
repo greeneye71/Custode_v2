@@ -11,7 +11,7 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     flash, g, current_app
 )
-from auth import superadmin_required
+from auth import superadmin_required, login_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config
 
@@ -322,39 +322,46 @@ def modifica(struttura_id):
 
 
 @strutture_bp.route('/<int:struttura_id>/config', methods=['GET', 'POST'])
-@superadmin_required
+@login_required
 def config(struttura_id):
+    ruolo = g.user['ruolo']
+    if ruolo not in ('admin', 'superadmin'):
+        flash('Accesso non autorizzato.', 'danger')
+        return redirect(url_for('index'))
+    if ruolo == 'admin' and g.user.get('struttura_id') != struttura_id:
+        flash('Non puoi accedere alla configurazione di un\'altra struttura.', 'danger')
+        return redirect(url_for('index'))
+
+    is_admin_only = (ruolo == 'admin')
+
     struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
     if not struttura:
         flash('Struttura non trovata.', 'danger')
-        return redirect(url_for('strutture.index'))
-
-    chiavi_visibili = [
-        'ai_provider', 'anthropic_api_key', 'gemini_api_key', 'openai_api_key',
-        'ai_import_model', 'ai_email_model',
-        'ai_local_base_url', 'ai_local_model',
-        'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'smtp_use_tls',
-        'report_frequenza', 'report_schedulato_attivo',
-    ]
-    # Campi API key: se lasciati vuoti mantieni il valore esistente (non cancellare)
-    API_KEY_FIELDS = {'anthropic_api_key', 'gemini_api_key', 'openai_api_key'}
+        return redirect(url_for('strutture.index') if not is_admin_only else url_for('index'))
 
     if request.method == 'POST':
+        if is_admin_only:
+            # Admin uses the AJAX test-ai endpoint for AI config, not this form
+            return redirect(url_for('strutture.config', struttura_id=struttura_id))
+
+        # Superadmin only: save SMTP + report fields
+        chiavi_smtp_report = [
+            'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'smtp_use_tls',
+            'report_frequenza', 'report_schedulato_attivo',
+        ]
         CHECKBOX_KEYS = {'smtp_use_tls', 'report_schedulato_attivo'}
-        for chiave in chiavi_visibili:
+        for chiave in chiavi_smtp_report:
             if chiave in CHECKBOX_KEYS:
                 valore = '1' if request.form.get(chiave) else ''
             else:
                 valore = request.form.get(chiave, '').strip()
             if valore:
                 set_struttura_config(struttura_id, chiave, valore)
-            elif chiave not in API_KEY_FIELDS:
-                # Campi normali vuoti: cancella per tornare al default globale
+            else:
                 execute(
                     "DELETE FROM strutture_config WHERE struttura_id=? AND chiave=?",
                     (struttura_id, chiave)
                 )
-            # API key vuota: non fare nulla (mantieni il valore esistente)
         smtp_password = request.form.get('smtp_password', '').strip()
         if smtp_password:
             key = current_app.config['APP_CONFIG'].get('encryption_key', '')
@@ -369,9 +376,17 @@ def config(struttura_id):
         flash('Configurazione salvata.', 'success')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
+    from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS
+
     cfg = get_struttura_config_all(struttura_id)
     return render_template('strutture/config.html',
-                           struttura=struttura, cfg=cfg, chiavi=chiavi_visibili)
+                           struttura=struttura,
+                           cfg=cfg,
+                           is_admin_only=is_admin_only,
+                           ai_providers=AI_PROVIDERS,
+                           anthropic_models=ANTHROPIC_MODELS,
+                           gemini_models=GEMINI_MODELS,
+                           openai_models=OPENAI_MODELS)
 
 
 # ============================================================================
