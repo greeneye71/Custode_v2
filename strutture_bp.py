@@ -9,12 +9,12 @@ import re
 from cryptography.fernet import Fernet
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, g, current_app
+    flash, g, current_app, jsonify
 )
 from auth import superadmin_required, login_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
-    get_struttura_config_all, set_struttura_config
-from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS
+    get_struttura_config_all, set_struttura_config, get_struttura_config
+from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
 
@@ -323,7 +323,8 @@ def modifica(struttura_id):
 
 
 def _fetch_anthropic_models(api_key):
-    """Fetch available Anthropic models via /v1/models API. Falls back to hardcoded list."""
+    """Fetch available Anthropic models via /v1/models API. Falls back to hardcoded list on network errors.
+    Raises on HTTP errors (invalid key, server error) so the caller can return ok: False."""
     import httpx
     try:
         with httpx.Client(timeout=10.0) as client:
@@ -335,12 +336,15 @@ def _fetch_anthropic_models(api_key):
             data = r.json()
             ids = [m['id'] for m in data.get('data', []) if m.get('id')]
             return ids if ids else [m[0] for m in ANTHROPIC_MODELS]
+    except httpx.HTTPStatusError:
+        raise
     except Exception:
         return [m[0] for m in ANTHROPIC_MODELS]
 
 
 def _fetch_gemini_models(api_key):
-    """Fetch available Gemini models via /v1beta/models API. Falls back to hardcoded list."""
+    """Fetch available Gemini models via /v1beta/models API. Falls back to hardcoded list on network errors.
+    Raises on HTTP errors (invalid key, server error) so the caller can return ok: False."""
     import httpx
     try:
         with httpx.Client(timeout=10.0) as client:
@@ -356,12 +360,15 @@ def _fetch_gemini_models(api_key):
                 if 'generateContent' in m.get('supportedGenerationMethods', [])
             ]
             return ids if ids else [m[0] for m in GEMINI_MODELS]
+    except httpx.HTTPStatusError:
+        raise
     except Exception:
         return [m[0] for m in GEMINI_MODELS]
 
 
 def _fetch_openai_models(api_key):
-    """Fetch available OpenAI models via /v1/models API. Falls back to hardcoded list."""
+    """Fetch available OpenAI models via /v1/models API. Falls back to hardcoded list on network errors.
+    Raises on HTTP errors (invalid key, server error) so the caller can return ok: False."""
     import httpx
     try:
         with httpx.Client(timeout=10.0) as client:
@@ -374,6 +381,8 @@ def _fetch_openai_models(api_key):
             ids = [m['id'] for m in data.get('data', []) if m.get('id')]
             gpt_ids = [m for m in ids if m.startswith('gpt-')]
             return gpt_ids if gpt_ids else ids if ids else [m[0] for m in OPENAI_MODELS]
+    except httpx.HTTPStatusError:
+        raise
     except Exception:
         return [m[0] for m in OPENAI_MODELS]
 
@@ -481,8 +490,6 @@ def config(struttura_id):
 @login_required
 def test_ai_config(struttura_id):
     """Save AI settings and test the connection. Returns JSON with model list."""
-    from flask import jsonify
-
     ruolo = g.user['ruolo']
     if ruolo not in ('admin', 'superadmin'):
         return jsonify({'ok': False, 'message': 'Accesso non autorizzato'}), 403
@@ -521,11 +528,10 @@ def test_ai_config(struttura_id):
         if valore:
             set_struttura_config(struttura_id, chiave, valore)
 
-    from models import get_struttura_config as _gsc
-    active_anthropic_key = _gsc(struttura_id, 'anthropic_api_key') or ''
-    active_gemini_key    = _gsc(struttura_id, 'gemini_api_key') or ''
-    active_openai_key    = _gsc(struttura_id, 'openai_api_key') or ''
-    active_base_url      = _gsc(struttura_id, 'ai_local_base_url') or ''
+    active_anthropic_key = get_struttura_config(struttura_id, 'anthropic_api_key') or ''
+    active_gemini_key    = get_struttura_config(struttura_id, 'gemini_api_key') or ''
+    active_openai_key    = get_struttura_config(struttura_id, 'openai_api_key') or ''
+    active_base_url      = get_struttura_config(struttura_id, 'ai_local_base_url') or ''
 
     try:
         if provider == 'anthropic':
