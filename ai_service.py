@@ -286,6 +286,31 @@ def _gemini_extract_text(data):
     return text.strip()
 
 
+_GEMINI_TRANSIENT_ERRORS = {429, 500, 502, 503, 504}
+_GEMINI_RETRY_DELAYS = [3, 10]  # secondi tra i tentativi
+
+
+def _gemini_post(client, url, payload, api_key):
+    """POST verso Gemini con retry automatico su errori transitori (503, 429, ecc.)."""
+    import time
+    last_exc = None
+    for attempt, delay in enumerate([0] + _GEMINI_RETRY_DELAYS):
+        if delay:
+            time.sleep(delay)
+        try:
+            response = client.post(url, json=payload, params={"key": api_key})
+            if response.status_code in _GEMINI_TRANSIENT_ERRORS and attempt < len(_GEMINI_RETRY_DELAYS):
+                last_exc = None
+                continue
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            last_exc = e
+            if hasattr(e, 'response') and e.response.status_code not in _GEMINI_TRANSIENT_ERRORS:
+                raise
+    raise last_exc
+
+
 def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
     """Chiama l'API nativa Google Gemini (solo testo)."""
     import httpx
@@ -300,9 +325,7 @@ def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
         },
     }
     with httpx.Client(timeout=300.0) as client:
-        response = client.post(url, json=payload, params={"key": api_key})
-        response.raise_for_status()
-        data = response.json()
+        data = _gemini_post(client, url, payload, api_key)
 
     return _gemini_extract_text(data)
 
@@ -327,9 +350,7 @@ def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, ma
         },
     }
     with httpx.Client(timeout=300.0) as client:
-        response = client.post(url, json=payload, params={"key": api_key})
-        response.raise_for_status()
-        data = response.json()
+        data = _gemini_post(client, url, payload, api_key)
 
     return _gemini_extract_text(data)
 
