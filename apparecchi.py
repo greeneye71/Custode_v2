@@ -581,7 +581,7 @@ def modifica(id):
            hostname=?, porta=?, protocollo=?, url_interfaccia=?,
            fornitore=?, codice_fornitore=?, garanzia_scadenza=?,
            contratto_manutenzione=?, note=?, updated_by=?, updated_at=datetime('now')
-           WHERE id=?""",
+           WHERE id=? AND (struttura_id = ? OR ? IS NULL)""",
         (data['divisione_id'], data['descrizione'], data['matricola'],
          data['numero_inventario'], data['marca'], data['modello'],
          data['anno_fabbricazione'], data['classificazione'],
@@ -589,7 +589,7 @@ def modifica(id):
          data['connesso_rete'], data['ip_address'], data['mac_address'], data['hostname'],
          data['porta'], data['protocollo'], data['url_interfaccia'],
          data['fornitore'], data['codice_fornitore'], data['garanzia_scadenza'],
-         data['contratto_manutenzione'], data['note'], g.user['id'], id)
+         data['contratto_manutenzione'], data['note'], g.user['id'], id, struttura_id, struttura_id)
     )
 
     _save_accessori(id, request.form, g.user['id'])
@@ -606,14 +606,19 @@ def modifica(id):
 @login_required
 def dismetti(id):
     """Soft-delete: set stato to 'dismesso'."""
-    apparecchio = query_one("SELECT * FROM apparecchi WHERE id = ?", (id,))
+    struttura_id = getattr(g, 'struttura_id', None)
+    apparecchio = query_one(
+        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
+        (id, struttura_id, struttura_id)
+    )
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
     execute(
-        "UPDATE apparecchi SET stato = 'dismesso', updated_by = ?, updated_at = datetime('now') WHERE id = ?",
-        (g.user['id'], id)
+        """UPDATE apparecchi SET stato = 'dismesso', updated_by = ?, updated_at = datetime('now')
+           WHERE id = ? AND (struttura_id = ? OR ? IS NULL)""",
+        (g.user['id'], id, struttura_id, struttura_id)
     )
 
     log_attivita(g.user['id'], 'dismissione', 'apparecchi', id,
@@ -628,7 +633,11 @@ def dismetti(id):
 @login_required
 def upload_foto(id):
     """Upload a photo for an apparecchio."""
-    apparecchio = query_one("SELECT * FROM apparecchi WHERE id = ?", (id,))
+    struttura_id = getattr(g, 'struttura_id', None)
+    apparecchio = query_one(
+        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
+        (id, struttura_id, struttura_id)
+    )
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
@@ -652,8 +661,9 @@ def upload_foto(id):
 
     # Update database
     execute(
-        "UPDATE apparecchi SET foto_path = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?",
-        (f"{rel_prefix}/{filename}", g.user['id'], id)
+        """UPDATE apparecchi SET foto_path = ?, updated_by = ?, updated_at = datetime('now')
+           WHERE id = ? AND (struttura_id = ? OR ? IS NULL)""",
+        (f"{rel_prefix}/{filename}", g.user['id'], id, struttura_id, struttura_id)
     )
 
     flash('Foto caricata con successo.', 'success')
@@ -664,7 +674,11 @@ def upload_foto(id):
 @login_required
 def upload_documento(id):
     """Upload a document for an apparecchio."""
-    apparecchio = query_one("SELECT * FROM apparecchi WHERE id = ?", (id,))
+    struttura_id = getattr(g, 'struttura_id', None)
+    apparecchio = query_one(
+        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
+        (id, struttura_id, struttura_id)
+    )
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
