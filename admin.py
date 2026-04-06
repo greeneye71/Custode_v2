@@ -16,7 +16,6 @@ from werkzeug.security import generate_password_hash
 
 from auth import admin_required, superadmin_required, modalita_avanzata_required
 from models import query_one, query_all, execute, log_attivita
-from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -546,30 +545,6 @@ def configurazione():
         except ValueError:
             pass
 
-        # AI provider
-        config['ai_provider'] = request.form.get('ai_provider', 'anthropic').strip()
-
-        # API key (only update if not empty placeholder)
-        api_key = request.form.get('anthropic_api_key', '').strip()
-        if api_key and api_key != '••••••••':
-            config['anthropic_api_key'] = api_key
-
-        gemini_key = request.form.get('gemini_api_key', '').strip()
-        if gemini_key and gemini_key != '••••••••':
-            config['gemini_api_key'] = gemini_key
-
-        openai_key = request.form.get('openai_api_key', '').strip()
-        if openai_key and openai_key != '••••••••':
-            config['openai_api_key'] = openai_key
-
-        config['ai_import_model'] = request.form.get('ai_import_model', config.get('ai_import_model', '')).strip()
-        config['ai_email_model'] = request.form.get('ai_email_model', config.get('ai_email_model', '')).strip()
-        config['ai_verifiche_model'] = request.form.get('ai_verifiche_model', config.get('ai_verifiche_model', '')).strip()
-
-        # Local AI settings
-        config['ai_local_base_url'] = request.form.get('ai_local_base_url', '').strip()
-        config['ai_local_model'] = request.form.get('ai_local_model', '').strip()
-
         interval = request.form.get('email_check_interval_minutes', '15').strip()
         try:
             config['email_check_interval_minutes'] = int(interval)
@@ -621,66 +596,10 @@ def configurazione():
 
     # Mask sensitive fields for display
     display_config = dict(config)
-    display_config['anthropic_api_key_masked'] = '••••••••' if display_config.get('anthropic_api_key') else ''
-    display_config['gemini_api_key_masked'] = '••••••••' if display_config.get('gemini_api_key') else ''
-    display_config['openai_api_key_masked'] = '••••••••' if display_config.get('openai_api_key') else ''
-
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
 
-    return render_template('admin/configurazione.html', config=display_config,
-                           anthropic_models=ANTHROPIC_MODELS,
-                           gemini_models=GEMINI_MODELS,
-                           openai_models=OPENAI_MODELS,
-                           ai_providers=AI_PROVIDERS,
-                           ai_provider_defaults=AI_PROVIDER_DEFAULTS)
-
-
-# ============================================================================
-# AI LOCAL MODELS PROXY
-# ============================================================================
-
-@admin_bp.route('/ai-models', methods=['POST'])
-@admin_required
-def ai_models_proxy():
-    """Proxy request to local AI server to fetch available models (avoids CORS)."""
-    from flask import jsonify
-    import httpx
-
-    base_url = request.json.get('base_url', '').strip().rstrip('/')
-    if not base_url:
-        return jsonify({'error': 'URL non specificato'}), 400
-
-    models = []
-
-    # Try OpenAI-compatible endpoint first (/v1/models)
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.get(f"{base_url}/v1/models")
-            r.raise_for_status()
-            data = r.json()
-            models = [m.get('id') or m.get('name') for m in (data.get('data') or data.get('models') or [])]
-            if models:
-                return jsonify({'models': models})
-    except Exception:
-        pass
-
-    # Fallback: Ollama native API (/api/tags)
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.get(f"{base_url}/api/tags")
-            r.raise_for_status()
-            data = r.json()
-            models = [m.get('name') for m in (data.get('models') or [])]
-            if models:
-                return jsonify({'models': models})
-    except Exception:
-        pass
-
-    if not models:
-        return jsonify({'error': 'Nessun modello trovato o server non raggiungibile'}), 502
-
-    return jsonify({'models': models})
+    return render_template('admin/configurazione.html', config=display_config)
 
 
 # ============================================================================
