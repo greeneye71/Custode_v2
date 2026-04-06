@@ -162,11 +162,11 @@
                                     <i class="bi bi-key me-2"></i> Cambia Password
                                 </a>
                             </li>
-                            {% if current_user.ruolo == 'admin' %}
+                            {% if current_user.ruolo == 'admin' and current_user.struttura_id %}
                             <li><hr class="dropdown-divider"></li>
                             <li>
-                                <a class="dropdown-item" href="{{ url_for('admin.configurazione') }}">
-                                    <i class="bi bi-gear me-2"></i> Configurazione
+                                <a class="dropdown-item" href="{{ url_for('strutture.config', struttura_id=current_user.struttura_id) }}">
+                                    <i class="bi bi-robot me-2"></i> Configurazione AI
                                 </a>
                             </li>
                             {% endif %}
@@ -276,12 +276,14 @@
                             <i class="bi bi-diagram-3"></i> Divisioni
                         </a>
                     </li>
+                    {% if current_user.ruolo == 'superadmin' %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.configurazione' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.configurazione') }}">
                             <i class="bi bi-gear"></i> Configurazione
                         </a>
                     </li>
+                    {% endif %}
                     {% if current_user.ruolo == 'admin' and current_user.struttura_id %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.path.startswith('/strutture') and 'config' in request.path %}active{% endif %}"
@@ -290,6 +292,7 @@
                         </a>
                     </li>
                     {% endif %}
+                    {% if current_user.ruolo == 'superadmin' %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.backup' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.backup') }}">
@@ -302,6 +305,7 @@
                             <i class="bi bi-journal-text"></i> Log Attivit&agrave;
                         </a>
                     </li>
+                    {% endif %}
                     {% endif %}
                 </ul>
             </div>
