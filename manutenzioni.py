@@ -8,7 +8,7 @@ from datetime import datetime
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, g, current_app, send_from_directory
+    flash, g, current_app, send_from_directory, abort
 )
 from werkzeug.utils import secure_filename
 
@@ -367,9 +367,12 @@ def scarica_verbale(id):
 
     uploads_path = current_app.config['UPLOADS_PATH']
     rel = manutenzione['verbale_path']
-    directory = os.path.join(uploads_path, os.path.dirname(rel))
-    filename = os.path.basename(rel)
-    return send_from_directory(directory, filename, as_attachment=True)
+    resolved = os.path.realpath(os.path.join(uploads_path, rel))
+    if not resolved.startswith(os.path.realpath(uploads_path) + os.sep):
+        abort(403)
+    return send_from_directory(os.path.dirname(resolved),
+                               os.path.basename(resolved),
+                               as_attachment=True)
 
 
 # ---------------------------------------------------------------------------

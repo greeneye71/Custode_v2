@@ -657,8 +657,12 @@ def create_app():
     @app.route('/uploads/<path:filename>')
     @auth_login_required
     def uploaded_file(filename):
-        from flask import send_from_directory
-        return send_from_directory(app.config['UPLOADS_PATH'], filename)
+        from flask import send_from_directory, abort as _abort
+        uploads_path = app.config['UPLOADS_PATH']
+        resolved = os.path.realpath(os.path.join(uploads_path, filename))
+        if not resolved.startswith(os.path.realpath(uploads_path) + os.sep):
+            _abort(403)
+        return send_from_directory(uploads_path, filename)
 
     return app
 
