@@ -125,9 +125,50 @@ _GEMINI_GENERATE_URL = (
 )
 _OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions'
 
+# Model lists (used by struttura config UI and test-ai endpoint)
+ANTHROPIC_MODELS = [
+    ('claude-opus-4-6',            'Claude Opus 4.6 — Massima potenza'),
+    ('claude-sonnet-4-6',          'Claude Sonnet 4.6 — Bilanciato (consigliato import)'),
+    ('claude-sonnet-4-20250514',   'Claude Sonnet 4 — Maggio 2025'),
+    ('claude-haiku-4-5-20251001',  'Claude Haiku 4.5 — Veloce (consigliato email)'),
+    ('claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet — Ottobre 2024'),
+    ('claude-3-haiku-20240307',    'Claude 3 Haiku — Legacy veloce'),
+]
+
+GEMINI_MODELS = [
+    ('gemini-2.5-flash-preview-04-17', 'Gemini 2.5 Flash Preview — Più recente'),
+    ('gemini-2.0-flash',               'Gemini 2.0 Flash — Veloce ($0.10/1M)'),
+    ('gemini-1.5-flash',               'Gemini 1.5 Flash — Economico ($0.075/1M)'),
+    ('gemini-1.5-flash-8b',            'Gemini 1.5 Flash-8B — Minimo ($0.037/1M)'),
+    ('gemini-1.5-pro',                 'Gemini 1.5 Pro — Qualità superiore'),
+]
+
+OPENAI_MODELS = [
+    ('gpt-4o-mini', 'GPT-4o mini — Bilanciato ($0.15/1M) — supporta PDF'),
+    ('gpt-4o',      'GPT-4o — Massima qualità ($2.50/1M) — supporta PDF'),
+]
+
+AI_PROVIDERS = [
+    ('anthropic',          'Anthropic Claude (Cloud)'),
+    ('gemini',             'Google Gemini (Cloud) — da $0.037/1M token'),
+    ('openai',             'OpenAI (Cloud) — da $0.15/1M token'),
+    ('ollama',             'Ollama (Locale)'),
+    ('lmstudio',           'LM Studio (Locale)'),
+    ('openai_compatible',  'Altro endpoint OpenAI-compatibile'),
+]
+
+AI_PROVIDER_DEFAULTS = {
+    'ollama':            'http://localhost:11434',
+    'lmstudio':          'http://localhost:1234',
+    'openai_compatible': 'http://localhost:8080',
+}
+
 
 def _get_ai_config(config=None, struttura_id=None):
-    """Get AI provider configuration. Reads from struttura_config with fallback to global."""
+    """Get AI provider configuration.
+    When struttura_id is given: reads ONLY from struttura_config (no global config fallback for AI keys).
+    When struttura_id is None: reads from global config.
+    """
     if config is None:
         from flask import current_app
         config = current_app.config.get('APP_CONFIG', {})
@@ -136,7 +177,7 @@ def _get_ai_config(config=None, struttura_id=None):
         from models import get_struttura_config as _gsc
         def _sc(key, default=''):
             val = _gsc(struttura_id, key)
-            return val if val else config.get(key, default)
+            return val if val is not None else default
     else:
         def _sc(key, default=''):
             return config.get(key, default)
@@ -397,21 +438,21 @@ def check_ai_configured(config=None, struttura_id=None):
 
     if provider == 'anthropic':
         if not ai_cfg['api_key']:
-            return False, 'Chiave API Anthropic non configurata. Vai in Configurazione.'
+            return False, 'Chiave API Anthropic non configurata. Configura l\'AI nella pagina della struttura.'
         return True, None
     elif provider == 'gemini':
         if not ai_cfg['gemini_api_key']:
-            return False, 'Chiave API Google Gemini non configurata. Vai in Configurazione.'
+            return False, 'Chiave API Google Gemini non configurata. Configura l\'AI nella pagina della struttura.'
         return True, None
     elif provider == 'openai':
         if not ai_cfg['openai_api_key']:
-            return False, 'Chiave API OpenAI non configurata. Vai in Configurazione.'
+            return False, 'Chiave API OpenAI non configurata. Configura l\'AI nella pagina della struttura.'
         return True, None
     else:
         if not ai_cfg['local_base_url']:
-            return False, 'URL del server AI locale non configurato. Vai in Configurazione.'
+            return False, 'URL del server AI locale non configurato. Configura l\'AI nella pagina della struttura.'
         if not ai_cfg['local_model']:
-            return False, 'Modello AI locale non configurato. Vai in Configurazione.'
+            return False, 'Modello AI locale non configurato. Configura l\'AI nella pagina della struttura.'
         return True, None
 
 

@@ -19,43 +19,6 @@ from models import query_one, query_all, execute, log_attivita
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
-ANTHROPIC_MODELS = [
-    ('claude-opus-4-6',            'Claude Opus 4.6 — Massima potenza'),
-    ('claude-sonnet-4-6',          'Claude Sonnet 4.6 — Bilanciato (consigliato import)'),
-    ('claude-sonnet-4-20250514',   'Claude Sonnet 4 — Maggio 2025'),
-    ('claude-haiku-4-5-20251001',  'Claude Haiku 4.5 — Veloce (consigliato email)'),
-    ('claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet — Ottobre 2024'),
-    ('claude-3-haiku-20240307',    'Claude 3 Haiku — Legacy veloce'),
-]
-
-GEMINI_MODELS = [
-    ('gemini-2.5-flash-preview-04-17', 'Gemini 2.5 Flash Preview — Più recente'),
-    ('gemini-2.0-flash',               'Gemini 2.0 Flash — Veloce ($0.10/1M)'),
-    ('gemini-1.5-flash',               'Gemini 1.5 Flash — Economico ($0.075/1M)'),
-    ('gemini-1.5-flash-8b',            'Gemini 1.5 Flash-8B — Minimo ($0.037/1M)'),
-    ('gemini-1.5-pro',                 'Gemini 1.5 Pro — Qualità superiore'),
-]
-
-OPENAI_MODELS = [
-    ('gpt-4o-mini',  'GPT-4o mini — Bilanciato ($0.15/1M) — supporta PDF'),
-    ('gpt-4o',       'GPT-4o — Massima qualità ($2.50/1M) — supporta PDF'),
-]
-
-AI_PROVIDERS = [
-    ('anthropic',          'Anthropic Claude (Cloud)'),
-    ('gemini',             'Google Gemini (Cloud) — da $0.037/1M token'),
-    ('openai',             'OpenAI (Cloud) — da $0.15/1M token'),
-    ('ollama',             'Ollama (Locale)'),
-    ('lmstudio',           'LM Studio (Locale)'),
-    ('openai_compatible',  'Altro endpoint OpenAI-compatibile'),
-]
-
-AI_PROVIDER_DEFAULTS = {
-    'ollama':            'http://localhost:11434',
-    'lmstudio':          'http://localhost:1234',
-    'openai_compatible': 'http://localhost:8080',
-}
-
 
 # ============================================================================
 # USER MANAGEMENT
