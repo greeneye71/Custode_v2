@@ -14,6 +14,7 @@ from flask import (
 from auth import superadmin_required, login_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config
+from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
 
@@ -374,9 +375,9 @@ def config(struttura_id):
                 set_struttura_config(struttura_id, 'smtp_password_encrypted', encrypted)
 
         flash('Configurazione salvata.', 'success')
+        log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
+                     'Configurazione SMTP/report salvata', request.remote_addr)
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
-
-    from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS
 
     cfg = get_struttura_config_all(struttura_id)
     return render_template('strutture/config.html',
