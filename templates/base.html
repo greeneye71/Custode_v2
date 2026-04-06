@@ -282,6 +282,14 @@
                             <i class="bi bi-gear"></i> Configurazione
                         </a>
                     </li>
+                    {% if current_user.ruolo == 'admin' and current_user.struttura_id %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.path.startswith('/strutture') and 'config' in request.path %}active{% endif %}"
+                           href="{{ url_for('strutture.config', struttura_id=current_user.struttura_id) }}">
+                            <i class="bi bi-robot"></i> Configurazione AI
+                        </a>
+                    </li>
+                    {% endif %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.backup' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.backup') }}">
