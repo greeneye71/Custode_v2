@@ -195,7 +195,10 @@ def _get_ai_config(config=None, struttura_id=None):
 
 
 def get_ai_config(struttura_id=None, config=None):
-    """Public alias for _get_ai_config — reads per-struttura config with global fallback."""
+    """Public alias for _get_ai_config.
+    When struttura_id is given: reads ONLY from struttura_config (no global fallback).
+    When struttura_id is None: reads from global config.
+    """
     return _get_ai_config(config=config, struttura_id=struttura_id)
 
 
