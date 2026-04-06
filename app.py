@@ -21,6 +21,7 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from flask import Flask, g, session, redirect, url_for, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_wtf.csrf import CSRFProtect
 
 from models import close_db, init_db, get_db, query_all
 from auth import login_required as auth_login_required
@@ -188,6 +189,12 @@ def create_app():
 
     # Flask config
     app.secret_key = config['secret_key']
+
+    # CSRF protection
+    csrf = CSRFProtect()
+    csrf.init_app(app)
+    app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 ora
+
     app.config['DATABASE_PATH'] = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         config.get('database_path', 'data/database.sqlite')

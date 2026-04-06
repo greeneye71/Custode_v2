@@ -26,6 +26,7 @@
         <td>{{ ip.ultimo }}</td>
         <td class="text-end">
           <form method="post" action="{{ url_for('admin.sblocca_ip') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="ip_address" value="{{ ip.ip_address }}">
             <button type="submit" class="btn btn-sm btn-warning">
               <i class="bi bi-unlock me-1"></i>Sblocca

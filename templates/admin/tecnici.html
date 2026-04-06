@@ -64,6 +64,7 @@
                               action="{{ url_for('admin.tecnico_elimina', id=t.id) }}"
                               class="d-inline"
                               onsubmit="return confirm('Eliminare il tecnico {{ t.nome|e }} {{ t.cognome|e }}?')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger">
                                 <i class="bi bi-trash"></i>
                             </button>

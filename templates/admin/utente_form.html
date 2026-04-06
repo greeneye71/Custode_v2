@@ -12,6 +12,7 @@
 <div class="row">
     <div class="col-lg-8">
         <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <!-- Dati anagrafici -->
             <div class="card mb-4">
                 <div class="card-header"><i class="bi bi-person me-1"></i> Dati Utente</div>
@@ -141,6 +142,7 @@
                 <p class="small text-muted mb-3">Genera una password temporanea e invalida tutte le sessioni attive.</p>
                 <form method="POST" action="{{ url_for('admin.utente_reset_password', id=utente.id) }}"
                       onsubmit="return confirm('Resettare la password di {{ utente.nome }} {{ utente.cognome }}? Tutte le sessioni attive verranno chiuse.')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-warning w-100">
                         <i class="bi bi-key me-1"></i> Reset password
                     </button>

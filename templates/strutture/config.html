@@ -115,6 +115,7 @@
 
   {% if not is_admin_only %}
   <form method="POST" action="{{ url_for('strutture.config', struttura_id=struttura.id) }}" class="col-12 p-0">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row g-4">
 
     {# ------------------------------------------------------------------ #}

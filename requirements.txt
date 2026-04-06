@@ -29,3 +29,6 @@ Pillow>=10.0
 
 # QR code generation
 qrcode[pil]>=7.4
+
+# CSRF protection
+flask-wtf>=1.2

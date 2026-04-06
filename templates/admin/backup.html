@@ -12,6 +12,7 @@
         </p>
     </div>
     <form method="POST" action="{{ url_for('admin.backup_crea') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-primary">
             <i class="bi bi-plus-circle me-1"></i> Crea Backup Ora
         </button>
@@ -83,6 +84,7 @@
                                 <form method="POST" action="{{ url_for('admin.backup_ripristina', filename=backup.filename) }}"
                                       class="d-inline"
                                       onsubmit="return confirm('ATTENZIONE: Il ripristino sovrascrivera il database attuale. Sei sicuro?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-outline-warning" title="Ripristina">
                                         <i class="bi bi-arrow-counterclockwise"></i>
                                     </button>
@@ -90,6 +92,7 @@
                                 <form method="POST" action="{{ url_for('admin.backup_elimina', filename=backup.filename) }}"
                                       class="d-inline"
                                       onsubmit="return confirm('Eliminare questo backup?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-outline-danger" title="Elimina">
                                         <i class="bi bi-trash"></i>
                                     </button>

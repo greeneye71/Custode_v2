@@ -419,6 +419,7 @@
                 {% endif %}
                 <form method="POST" action="{{ url_for('apparecchi.upload_foto', id=apparecchio.id) }}"
                       enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="input-group input-group-sm">
                         <input type="file" class="form-control" name="foto" accept="image/*">
                         <button type="submit" class="btn btn-outline-primary">
@@ -457,6 +458,7 @@
 
                 <form method="POST" action="{{ url_for('apparecchi.upload_documento', id=apparecchio.id) }}"
                       enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="mb-2">
                         <select class="form-select form-select-sm" name="tipo_documento">
                             <option value="report">Report</option>

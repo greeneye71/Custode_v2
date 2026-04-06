@@ -72,11 +72,13 @@
                                 {% if u.id != g_user_id %}
                                 <form method="POST" action="{{ url_for('admin.utente_reset_password', id=u.id) }}"
                                       class="d-inline" onsubmit="return confirm('Resettare la password di {{ u.nome }} {{ u.cognome }}?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-outline-warning btn-action" title="Reset Password">
                                         <i class="bi bi-key"></i>
                                     </button>
                                 </form>
                                 <form method="POST" action="{{ url_for('admin.utente_toggle', id=u.id) }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit"
                                             class="btn btn-outline-{% if u.attivo %}danger{% else %}success{% endif %} btn-action"
                                             title="{% if u.attivo %}Disattiva{% else %}Attiva{% endif %}">

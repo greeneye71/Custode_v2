@@ -11,6 +11,7 @@
 </div>
 
 <form method="POST" action="{{ url_for('verifiche.import_esegui', id=record.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="mb-3 d-flex gap-2">
         <button type="button" class="btn btn-sm btn-outline-secondary"
                 onclick="document.querySelectorAll('.row-check').forEach(c => c.checked = true)">

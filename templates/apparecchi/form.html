@@ -20,6 +20,7 @@
 </div>
 
 <form method="POST" class="needs-validation" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="row g-4">
         {# ---- Left column: main data ---- #}
         <div class="col-lg-8">

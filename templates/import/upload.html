@@ -12,6 +12,7 @@
         <div class="card">
             <div class="card-body p-4">
                 <form method="POST" action="{{ url_for('import.analizza') }}" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="mb-4">
                         <label class="form-label fw-medium">Divisione di destinazione</label>
                         <select class="form-select" name="divisione_id" required>
