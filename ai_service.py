@@ -782,7 +782,7 @@ def classify_email_document_type_from_pdf_document(filepath, api_key, model='cla
         result = _call_ai_with_pdf(
             "Rispondi solo con una parola: 'verifica_elettrica' se il documento riguarda verifiche di sicurezza elettrica (IEC 62353, corrente di dispersione, messa a terra), oppure 'manutenzione' negli altri casi.",
             "Classifica questo documento.",
-            filepath, api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
+            filepath, api_key, model, max_tokens=50, config=config, struttura_id=struttura_id
         )
         if 'verifica' in result.lower():
             return 'verifica_elettrica'
@@ -832,7 +832,7 @@ def classify_document_type(text, api_key, model='claude-haiku-4-5-20251001', con
     result = _call_ai(
         CLASSIFICATION_SYSTEM_PROMPT,
         f"Classifica questo documento:\n\n{text[:3000]}",
-        api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
+        api_key, model, max_tokens=50, config=config, struttura_id=struttura_id
     )
     return _parse_classification_result(result)
 
@@ -844,7 +844,7 @@ def classify_document_type_from_pdf(filepath, api_key, model='claude-haiku-4-5-2
     result = _call_ai_with_pdf(
         CLASSIFICATION_SYSTEM_PROMPT,
         "Classifica questo documento.",
-        filepath, api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
+        filepath, api_key, model, max_tokens=50, config=config, struttura_id=struttura_id
     )
     return _parse_classification_result(result)
 
