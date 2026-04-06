@@ -322,6 +322,93 @@ def modifica(struttura_id):
                            tipi_struttura=_TIPI_STRUTTURA, divisioni=divisioni)
 
 
+def _fetch_anthropic_models(api_key):
+    """Fetch available Anthropic models via /v1/models API. Falls back to hardcoded list."""
+    import httpx
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(
+                'https://api.anthropic.com/v1/models',
+                headers={'x-api-key': api_key, 'anthropic-version': '2023-06-01'}
+            )
+            r.raise_for_status()
+            data = r.json()
+            ids = [m['id'] for m in data.get('data', []) if m.get('id')]
+            return ids if ids else [m[0] for m in ANTHROPIC_MODELS]
+    except Exception:
+        return [m[0] for m in ANTHROPIC_MODELS]
+
+
+def _fetch_gemini_models(api_key):
+    """Fetch available Gemini models via /v1beta/models API. Falls back to hardcoded list."""
+    import httpx
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(
+                'https://generativelanguage.googleapis.com/v1beta/models',
+                params={'key': api_key}
+            )
+            r.raise_for_status()
+            data = r.json()
+            ids = [
+                m['name'].split('/')[-1]
+                for m in data.get('models', [])
+                if 'generateContent' in m.get('supportedGenerationMethods', [])
+            ]
+            return ids if ids else [m[0] for m in GEMINI_MODELS]
+    except Exception:
+        return [m[0] for m in GEMINI_MODELS]
+
+
+def _fetch_openai_models(api_key):
+    """Fetch available OpenAI models via /v1/models API. Falls back to hardcoded list."""
+    import httpx
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(
+                'https://api.openai.com/v1/models',
+                headers={'Authorization': f'Bearer {api_key}'}
+            )
+            r.raise_for_status()
+            data = r.json()
+            ids = [m['id'] for m in data.get('data', []) if m.get('id')]
+            gpt_ids = [m for m in ids if m.startswith('gpt-')]
+            return gpt_ids if gpt_ids else ids if ids else [m[0] for m in OPENAI_MODELS]
+    except Exception:
+        return [m[0] for m in OPENAI_MODELS]
+
+
+def _fetch_local_models(base_url):
+    """Fetch models from local OpenAI-compatible server. Raises ValueError on failure."""
+    import httpx
+    base_url = base_url.rstrip('/')
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(f"{base_url}/v1/models")
+            r.raise_for_status()
+            data = r.json()
+            models = [
+                m.get('id') or m.get('name')
+                for m in (data.get('data') or data.get('models') or [])
+            ]
+            models = [m for m in models if m]
+            if models:
+                return models
+    except Exception:
+        pass
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(f"{base_url}/api/tags")
+            r.raise_for_status()
+            data = r.json()
+            models = [m.get('name') for m in (data.get('models') or []) if m.get('name')]
+            if models:
+                return models
+    except Exception:
+        pass
+    raise ValueError('Server AI locale non raggiungibile o nessun modello trovato.')
+
+
 @strutture_bp.route('/<int:struttura_id>/config', methods=['GET', 'POST'])
 @login_required
 def config(struttura_id):
@@ -388,6 +475,86 @@ def config(struttura_id):
                            anthropic_models=ANTHROPIC_MODELS,
                            gemini_models=GEMINI_MODELS,
                            openai_models=OPENAI_MODELS)
+
+
+@strutture_bp.route('/<int:struttura_id>/config/test-ai', methods=['POST'])
+@login_required
+def test_ai_config(struttura_id):
+    """Save AI settings and test the connection. Returns JSON with model list."""
+    from flask import jsonify
+
+    ruolo = g.user['ruolo']
+    if ruolo not in ('admin', 'superadmin'):
+        return jsonify({'ok': False, 'message': 'Accesso non autorizzato'}), 403
+    if ruolo == 'admin' and g.user.get('struttura_id') != struttura_id:
+        return jsonify({'ok': False, 'message': 'Struttura non consentita'}), 403
+
+    struttura = query_one("SELECT id FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        return jsonify({'ok': False, 'message': 'Struttura non trovata'}), 404
+
+    data = request.json or {}
+    provider = (data.get('provider') or 'anthropic').strip()
+
+    fields_to_save = {
+        'ai_provider':       provider,
+        'ai_import_model':   (data.get('ai_import_model') or '').strip(),
+        'ai_email_model':    (data.get('ai_email_model') or '').strip(),
+        'ai_local_base_url': (data.get('local_base_url') or '').strip(),
+        'ai_local_model':    (data.get('local_model') or '').strip(),
+    }
+    for chiave, valore in fields_to_save.items():
+        if valore:
+            set_struttura_config(struttura_id, chiave, valore)
+        else:
+            execute(
+                "DELETE FROM strutture_config WHERE struttura_id=? AND chiave=?",
+                (struttura_id, chiave)
+            )
+
+    key_fields = {
+        'anthropic_api_key': (data.get('api_key') or '').strip(),
+        'gemini_api_key':    (data.get('gemini_api_key') or '').strip(),
+        'openai_api_key':    (data.get('openai_api_key') or '').strip(),
+    }
+    for chiave, valore in key_fields.items():
+        if valore:
+            set_struttura_config(struttura_id, chiave, valore)
+
+    from models import get_struttura_config as _gsc
+    active_anthropic_key = _gsc(struttura_id, 'anthropic_api_key') or ''
+    active_gemini_key    = _gsc(struttura_id, 'gemini_api_key') or ''
+    active_openai_key    = _gsc(struttura_id, 'openai_api_key') or ''
+    active_base_url      = _gsc(struttura_id, 'ai_local_base_url') or ''
+
+    try:
+        if provider == 'anthropic':
+            if not active_anthropic_key:
+                return jsonify({'ok': False, 'message': 'Chiave API Anthropic non configurata.', 'models': []})
+            models = _fetch_anthropic_models(active_anthropic_key)
+        elif provider == 'gemini':
+            if not active_gemini_key:
+                return jsonify({'ok': False, 'message': 'Chiave API Google Gemini non configurata.', 'models': []})
+            models = _fetch_gemini_models(active_gemini_key)
+        elif provider == 'openai':
+            if not active_openai_key:
+                return jsonify({'ok': False, 'message': 'Chiave API OpenAI non configurata.', 'models': []})
+            models = _fetch_openai_models(active_openai_key)
+        else:
+            if not active_base_url:
+                return jsonify({'ok': False, 'message': 'URL server AI non configurato.', 'models': []})
+            models = _fetch_local_models(active_base_url)
+
+        log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
+                     f'Test AI {provider}: OK, {len(models)} modelli', request.remote_addr)
+        return jsonify({
+            'ok': True,
+            'models': models,
+            'message': f'Connessione OK — {len(models)} modelli disponibili'
+        })
+
+    except Exception as e:
+        return jsonify({'ok': False, 'models': [], 'message': f'Errore: {str(e)[:200]}'})
 
 
 # ============================================================================
