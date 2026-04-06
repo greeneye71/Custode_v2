@@ -272,6 +272,20 @@ def _call_openai_compatible(system_prompt, user_message, base_url, model, max_to
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _gemini_extract_text(data):
+    """Estrae il testo dalla risposta nativa Gemini. Solleva ValueError se assente."""
+    candidate = data.get("candidates", [{}])[0]
+    content = candidate.get("content")
+    if not content:
+        finish = candidate.get("finishReason", "UNKNOWN")
+        raise ValueError(f"Gemini non ha restituito contenuto (finishReason: {finish})")
+    text = next((p["text"] for p in content.get("parts", []) if "text" in p), None)
+    if not text:
+        finish = candidate.get("finishReason", "UNKNOWN")
+        raise ValueError(f"Gemini non ha restituito testo (finishReason: {finish})")
+    return text.strip()
+
+
 def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
     """Chiama l'API nativa Google Gemini (solo testo)."""
     import httpx
@@ -290,12 +304,7 @@ def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
         response.raise_for_status()
         data = response.json()
 
-    candidate = data.get("candidates", [{}])[0]
-    content = candidate.get("content")
-    if not content:
-        finish = candidate.get("finishReason", "UNKNOWN")
-        raise ValueError(f"Gemini non ha restituito contenuto (finishReason: {finish})")
-    return content["parts"][0]["text"].strip()
+    return _gemini_extract_text(data)
 
 
 def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096):
@@ -322,12 +331,7 @@ def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, ma
         response.raise_for_status()
         data = response.json()
 
-    candidate = data.get("candidates", [{}])[0]
-    content = candidate.get("content")
-    if not content:
-        finish = candidate.get("finishReason", "UNKNOWN")
-        raise ValueError(f"Gemini non ha restituito contenuto (finishReason: {finish})")
-    return content["parts"][0]["text"].strip()
+    return _gemini_extract_text(data)
 
 
 def _call_openai(system_prompt, user_message, api_key, model, max_tokens=4096):
