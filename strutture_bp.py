@@ -4,6 +4,7 @@ MedInventory - Gestione Strutture (superadmin)
 
 import base64
 import hashlib
+import httpx
 import re
 
 from cryptography.fernet import Fernet
@@ -503,6 +504,10 @@ def test_ai_config(struttura_id):
     data = request.json or {}
     provider = (data.get('provider') or 'anthropic').strip()
 
+    valid_providers = [p[0] for p in AI_PROVIDERS]
+    if provider not in valid_providers:
+        return jsonify({'ok': False, 'message': f'Provider non valido: {provider}', 'models': []}), 400
+
     fields_to_save = {
         'ai_provider':       provider,
         'ai_import_model':   (data.get('ai_import_model') or '').strip(),
@@ -552,13 +557,17 @@ def test_ai_config(struttura_id):
             models = _fetch_local_models(active_base_url)
 
         log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
-                     f'Test AI {provider}: OK, {len(models)} modelli', request.remote_addr)
+                     f'Test AI {provider}: OK, {len(models)} modelli', request.remote_addr,
+                     struttura_id=struttura_id)
         return jsonify({
             'ok': True,
             'models': models,
             'message': f'Connessione OK — {len(models)} modelli disponibili'
         })
 
+    except httpx.HTTPStatusError as e:
+        return jsonify({'ok': False, 'models': [],
+                        'message': f'Errore HTTP {e.response.status_code}: chiave API non valida o accesso negato.'})
     except Exception as e:
         return jsonify({'ok': False, 'models': [], 'message': f'Errore: {str(e)[:200]}'})
 
