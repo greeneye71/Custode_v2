@@ -294,7 +294,12 @@ def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
         response.raise_for_status()
         data = response.json()
 
-    return data["choices"][0]["message"]["content"].strip()
+    choice = data.get("choices", [{}])[0]
+    content = choice.get("message", {}).get("content")
+    if not content:
+        finish = choice.get("finish_reason", "UNKNOWN")
+        raise ValueError(f"Gemini non ha restituito contenuto (finish_reason: {finish})")
+    return content.strip()
 
 
 def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096):
