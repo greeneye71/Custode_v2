@@ -98,7 +98,8 @@ def analizza():
     # Check AI config before saving file
     config = current_app.config['APP_CONFIG']
     from ai_service import check_ai_configured
-    ai_ok, ai_error = check_ai_configured(config)
+    _struttura_id_check = getattr(g, 'struttura_id', None)
+    ai_ok, ai_error = check_ai_configured(config=config, struttura_id=_struttura_id_check)
     if not ai_ok:
         flash(ai_error, 'danger')
         return redirect(url_for('import.upload'))
@@ -206,16 +207,16 @@ def _run_import_async(app, import_id, filepath, ext, orig_name, safe_name,
             ai_cfg = get_ai_config(struttura_id=struttura_id, config=config)
             classify_model = ai_cfg['model_email']
             if is_scanned and ext == 'pdf':
-                if not is_anthropic_provider(config):
+                if not is_anthropic_provider(config=config, struttura_id=struttura_id):
                     execute(
                         "UPDATE import_history SET stato='failed', errori_dettaglio=? WHERE id=?",
                         ('PDF scansionato non supportato con provider AI locale.', import_id))
                     return
                 doc_type = classify_document_type_from_pdf(
-                    filepath, api_key, classify_model, config=config)
+                    filepath, api_key, classify_model, config=config, struttura_id=struttura_id)
             else:
                 doc_type = classify_document_type(
-                    text, api_key, classify_model, config=config)
+                    text, api_key, classify_model, config=config, struttura_id=struttura_id)
 
             if doc_type not in ('inventario', 'verbale_manutenzione', 'verifica_elettrica'):
                 execute(
@@ -265,10 +266,10 @@ def _run_inventario(import_id, filepath, ext, text, is_scanned,
 
     if is_scanned and ext == 'pdf':
         items, ai_response = analyze_inventory_from_pdf_document(
-            filepath, api_key, model, config=config)
+            filepath, api_key, model, config=config, struttura_id=struttura_id)
         text_summary = f"[PDF scansionato — analisi diretta AI ({len(ai_response)} chars)]"
     else:
-        items, ai_response = analyze_inventory_with_ai(text, api_key, model, config=config)
+        items, ai_response = analyze_inventory_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
         text_summary = f"[System prompt + extracted text ({len(text)} chars)]"
 
     if not items:
@@ -324,10 +325,10 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
                 try:
                     if page_is_scanned:
                         items, _ = parse_verbale_from_pdf_document(
-                            page_path, api_key, model, config=config)
+                            page_path, api_key, model, config=config, struttura_id=struttura_id)
                     else:
                         items, _ = parse_verbale_with_ai(
-                            page_text, api_key, model, config=config)
+                            page_text, api_key, model, config=config, struttura_id=struttura_id)
                     for item in items:
                         item['_pagina'] = i + 1
                         item['_page_file'] = os.path.relpath(page_path, uploads_path)
@@ -343,15 +344,15 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
         else:
             if is_scanned:
                 items, _ = parse_verbale_from_pdf_document(
-                    filepath, api_key, model, config=config)
+                    filepath, api_key, model, config=config, struttura_id=struttura_id)
             else:
-                items, _ = parse_verbale_with_ai(text, api_key, model, config=config)
+                items, _ = parse_verbale_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
             for item in items:
                 item['_pagina'] = 1
                 item['_page_file'] = f"import/{safe_name}"
             all_items = items
     else:
-        items, _ = parse_verbale_with_ai(text, api_key, model, config=config)
+        items, _ = parse_verbale_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
         for item in items:
             item['_pagina'] = 0
         all_items = items
@@ -412,10 +413,10 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
                 try:
                     if page_is_scanned:
                         items, _ = analyze_verifiche_from_pdf_document(
-                            page_path, api_key, model, config=config)
+                            page_path, api_key, model, config=config, struttura_id=struttura_id)
                     else:
                         items, _ = analyze_verifiche_with_ai(
-                            page_text, api_key, model, config=config)
+                            page_text, api_key, model, config=config, struttura_id=struttura_id)
                     for item in items:
                         item['_pagina'] = i + 1
                         item['_page_file'] = os.path.relpath(page_path, uploads_path)
@@ -431,15 +432,15 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
         else:
             if is_scanned:
                 items, _ = analyze_verifiche_from_pdf_document(
-                    filepath, api_key, model, config=config)
+                    filepath, api_key, model, config=config, struttura_id=struttura_id)
             else:
-                items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config)
+                items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
             for item in items:
                 item['_pagina'] = 1
                 item['_page_file'] = f"import/{safe_name}"
             all_items = items
     else:
-        items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config)
+        items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
         for item in items:
             item['_pagina'] = 0
         all_items = items

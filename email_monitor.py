@@ -197,18 +197,18 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
             # Classifica tipo documento
             if scanned_pdf:
                 from ai_service import classify_email_document_type_from_pdf_document
-                doc_type = classify_email_document_type_from_pdf_document(pdf_path, api_key, ai_model, config=app_config)
+                doc_type = classify_email_document_type_from_pdf_document(pdf_path, api_key, ai_model, config=app_config, struttura_id=struttura_id)
             else:
-                doc_type = classify_email_document_type(pdf_text, api_key, ai_model, config=app_config)
+                doc_type = classify_email_document_type(pdf_text, api_key, ai_model, config=app_config, struttura_id=struttura_id)
             logger.info(f"Tipo documento rilevato: {doc_type} per {att['filename']}")
 
             if doc_type == 'verifica_elettrica':
                 # Branch verifiche di sicurezza elettrica
                 if scanned_pdf:
                     from ai_service import analyze_verifiche_from_pdf_document
-                    items, ai_response = analyze_verifiche_from_pdf_document(pdf_path, api_key, ai_model, config=app_config)
+                    items, ai_response = analyze_verifiche_from_pdf_document(pdf_path, api_key, ai_model, config=app_config, struttura_id=struttura_id)
                 else:
-                    items, ai_response = analyze_verifiche_with_ai(pdf_text, api_key, ai_model, config=app_config)
+                    items, ai_response = analyze_verifiche_with_ai(pdf_text, api_key, ai_model, config=app_config, struttura_id=struttura_id)
                 auto_imported = False
                 apparecchio_id = None
                 tipo_import_value = 'verifica_elettrica'
@@ -268,9 +268,9 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 tipo_import_value = 'verbale_email'
                 if scanned_pdf:
                     from ai_service import parse_verbale_from_pdf_document
-                    parsed_items, ai_response = parse_verbale_from_pdf_document(pdf_path, api_key, ai_model, config=app_config)
+                    parsed_items, ai_response = parse_verbale_from_pdf_document(pdf_path, api_key, ai_model, config=app_config, struttura_id=struttura_id)
                 else:
-                    parsed_items, ai_response = parse_verbale_with_ai(pdf_text, api_key, ai_model, config=app_config)
+                    parsed_items, ai_response = parse_verbale_with_ai(pdf_text, api_key, ai_model, config=app_config, struttura_id=struttura_id)
 
                 imported_count = 0
                 last_apparecchio_id = None

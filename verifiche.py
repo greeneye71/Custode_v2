@@ -412,18 +412,21 @@ def import_analizza():
         return redirect(url_for('verifiche.import_upload'))
 
     config = current_app.config['APP_CONFIG']
-    api_key = config.get('anthropic_api_key', '')
+    struttura_id = getattr(g, 'struttura_id', None)
 
-    from ai_service import check_ai_configured
-    ai_ok, ai_error = check_ai_configured(config)
+    from ai_service import check_ai_configured, get_ai_config
+    ai_ok, ai_error = check_ai_configured(config=config, struttura_id=struttura_id)
     if not ai_ok:
         flash(ai_error, 'danger')
         return redirect(url_for('verifiche.import_upload'))
 
-    model = config.get('ai_verifiche_model', config.get('ai_email_model', 'claude-haiku-4-5-20251001'))
+    ai_cfg = get_ai_config(struttura_id=struttura_id, config=config)
+    api_key = ai_cfg['api_key']
+    model = ai_cfg['model_email']
 
     try:
-        items, ai_response = analyze_verifiche_with_ai(text, api_key, model, config=config)
+        items, ai_response = analyze_verifiche_with_ai(
+            text, api_key, model, config=config, struttura_id=struttura_id)
     except Exception as e:
         flash(f'Errore analisi AI: {e}', 'danger')
         return redirect(url_for('verifiche.import_upload'))
