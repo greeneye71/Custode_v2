@@ -16,6 +16,7 @@ from werkzeug.security import generate_password_hash
 
 from auth import admin_required, superadmin_required, modalita_avanzata_required
 from models import query_one, query_all, execute, log_attivita
+from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
