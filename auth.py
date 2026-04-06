@@ -299,21 +299,39 @@ def login():
         flash('Inserisci email e password.', 'danger')
         return render_template('login.html', email=email)
 
-    # Rate limiting
+    import time as _time
     ip = request.remote_addr
-    blocco_limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
-    tentativi = query_one(
+
+    # Blocco per IP: 5 falliti negli ultimi 15 minuti
+    blocco_ip_limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+    tentativi_ip = query_one(
         """SELECT COUNT(*) as cnt FROM login_attempts
            WHERE ip_address = ? AND esito = 'fallito'
              AND created_at > ?""",
-        (ip, blocco_limite)
+        (ip, blocco_ip_limite)
     )
-    if tentativi and tentativi['cnt'] > 5:
+    if tentativi_ip and tentativi_ip['cnt'] >= 5:
         execute(
             "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'bloccato')",
             (ip, email)
         )
         flash('Troppi tentativi falliti. Riprova tra 15 minuti.', 'danger')
+        return render_template('login.html', email=email), 429
+
+    # Blocco per email: 10 falliti da qualsiasi IP negli ultimi 30 minuti
+    blocco_email_limite = (datetime.now() - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
+    tentativi_email = query_one(
+        """SELECT COUNT(*) as cnt FROM login_attempts
+           WHERE email = ? AND esito = 'fallito'
+             AND created_at > ?""",
+        (email, blocco_email_limite)
+    )
+    if tentativi_email and tentativi_email['cnt'] >= 10:
+        execute(
+            "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'bloccato')",
+            (ip, email)
+        )
+        flash('Account temporaneamente bloccato per troppi tentativi. Riprova tra 30 minuti.', 'danger')
         return render_template('login.html', email=email), 429
 
     # Find user
@@ -327,6 +345,7 @@ def login():
             "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'fallito')",
             (ip, email)
         )
+        _time.sleep(1)  # Rallenta il brute force: 1 tentativo/sec per IP
         flash('Credenziali non valide.', 'danger')
         return render_template('login.html', email=email)
 
