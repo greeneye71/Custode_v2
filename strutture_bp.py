@@ -12,7 +12,6 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     flash, g, current_app, jsonify
 )
-from flask_wtf.csrf import csrf_exempt
 from auth import superadmin_required, login_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config
@@ -489,7 +488,6 @@ def config(struttura_id):
 
 
 @strutture_bp.route('/<int:struttura_id>/config/test-ai', methods=['POST'])
-@csrf_exempt
 @login_required
 def test_ai_config(struttura_id):
     """Save AI settings and test the connection. Returns JSON with model list."""
