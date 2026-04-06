@@ -273,33 +273,29 @@ def _call_openai_compatible(system_prompt, user_message, base_url, model, max_to
 
 
 def _call_gemini(system_prompt, user_message, api_key, model, max_tokens=4096):
-    """Chiama l'API Google Gemini tramite endpoint OpenAI-compatibile (solo testo)."""
+    """Chiama l'API nativa Google Gemini (solo testo)."""
     import httpx
 
+    url = _GEMINI_GENERATE_URL.format(model=model)
     payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_message},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.1,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type":  "application/json",
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"parts": [{"text": user_message}]}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.1,
+        },
     }
     with httpx.Client(timeout=300.0) as client:
-        response = client.post(_GEMINI_COMPLETIONS_URL, json=payload, headers=headers)
+        response = client.post(url, json=payload, params={"key": api_key})
         response.raise_for_status()
         data = response.json()
 
-    choice = data.get("choices", [{}])[0]
-    content = choice.get("message", {}).get("content")
+    candidate = data.get("candidates", [{}])[0]
+    content = candidate.get("content")
     if not content:
-        finish = choice.get("finish_reason", "UNKNOWN")
-        raise ValueError(f"Gemini non ha restituito contenuto (finish_reason: {finish})")
-    return content.strip()
+        finish = candidate.get("finishReason", "UNKNOWN")
+        raise ValueError(f"Gemini non ha restituito contenuto (finishReason: {finish})")
+    return content["parts"][0]["text"].strip()
 
 
 def _call_gemini_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096):
