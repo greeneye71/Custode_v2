@@ -636,12 +636,12 @@ def _parse_classification_result(result):
 # Inventory analysis
 # ---------------------------------------------------------------------------
 
-def analyze_inventory_with_ai(text, api_key, model='claude-sonnet-4-20250514', config=None):
+def analyze_inventory_with_ai(text, api_key, model='claude-sonnet-4-20250514', config=None, struttura_id=None):
     """Send extracted text to AI for structured parsing."""
     response_text = _call_ai(
         INVENTORY_SYSTEM_PROMPT,
         f"Analizza il seguente inventario ed estrai i dati degli apparecchi:\n\n{text[:15000]}",
-        api_key, model, max_tokens=8192, config=config
+        api_key, model, max_tokens=8192, config=config, struttura_id=struttura_id
     )
     items = _parse_json_response(response_text, array=True)
     if not isinstance(items, list):
@@ -649,12 +649,12 @@ def analyze_inventory_with_ai(text, api_key, model='claude-sonnet-4-20250514', c
     return items, response_text
 
 
-def analyze_inventory_from_pdf_document(filepath, api_key, model='claude-sonnet-4-20250514', config=None):
+def analyze_inventory_from_pdf_document(filepath, api_key, model='claude-sonnet-4-20250514', config=None, struttura_id=None):
     """Analyze a scanned PDF inventory document."""
     response_text = _call_ai_with_pdf(
         INVENTORY_SYSTEM_PROMPT,
         "Analizza questo inventario ed estrai i dati degli apparecchi.",
-        filepath, api_key, model, max_tokens=8192, config=config
+        filepath, api_key, model, max_tokens=8192, config=config, struttura_id=struttura_id
     )
     items = _parse_json_response(response_text, array=True)
     if not isinstance(items, list):
@@ -666,12 +666,12 @@ def analyze_inventory_from_pdf_document(filepath, api_key, model='claude-sonnet-
 # Verbale (maintenance report) parsing
 # ---------------------------------------------------------------------------
 
-def parse_verbale_with_ai(pdf_text, api_key, model='claude-haiku-4-5-20251001', config=None):
+def parse_verbale_with_ai(pdf_text, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Parse maintenance data from text."""
     response_text = _call_ai(
         VERBALE_SYSTEM_PROMPT,
         f"Analizza il seguente verbale di manutenzione:\n\n{pdf_text[:15000]}",
-        api_key, model, max_tokens=4096, config=config
+        api_key, model, max_tokens=4096, config=config, struttura_id=struttura_id
     )
     items = _parse_json_response(response_text, array=True)
     if not isinstance(items, list):
@@ -679,12 +679,12 @@ def parse_verbale_with_ai(pdf_text, api_key, model='claude-haiku-4-5-20251001', 
     return items, response_text
 
 
-def parse_verbale_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None):
+def parse_verbale_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Parse a scanned PDF maintenance report."""
     response_text = _call_ai_with_pdf(
         VERBALE_SYSTEM_PROMPT,
         "Analizza questo verbale di manutenzione ed estrai tutti gli interventi presenti.",
-        filepath, api_key, model, max_tokens=4096, config=config
+        filepath, api_key, model, max_tokens=4096, config=config, struttura_id=struttura_id
     )
     items = _parse_json_response(response_text, array=True)
     if not isinstance(items, list):
@@ -696,12 +696,12 @@ def parse_verbale_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-2
 # Verifiche (electrical safety) parsing
 # ---------------------------------------------------------------------------
 
-def analyze_verifiche_with_ai(text, api_key, model='claude-haiku-4-5-20251001', config=None):
+def analyze_verifiche_with_ai(text, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Extract electrical safety verifications from text."""
     response_text = _call_ai(
         VERIFICA_BATCH_SYSTEM_PROMPT,
         f"Analizza il seguente documento ed estrai i dati delle verifiche di sicurezza elettrica:\n\n{text[:15000]}",
-        api_key, model, max_tokens=4096, config=config
+        api_key, model, max_tokens=4096, config=config, struttura_id=struttura_id
     )
     items = _parse_json_response(response_text, array=True)
     if not isinstance(items, list):
@@ -709,12 +709,12 @@ def analyze_verifiche_with_ai(text, api_key, model='claude-haiku-4-5-20251001', 
     return items, response_text
 
 
-def analyze_verifiche_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None):
+def analyze_verifiche_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Analyze a scanned PDF electrical safety report."""
     response_text = _call_ai_with_pdf(
         VERIFICA_BATCH_SYSTEM_PROMPT,
         "Analizza questo rapporto ed estrai i dati delle verifiche di sicurezza elettrica.",
-        filepath, api_key, model, max_tokens=4096, config=config
+        filepath, api_key, model, max_tokens=4096, config=config, struttura_id=struttura_id
     )
     items = _parse_json_response(response_text, array=True)
     if not isinstance(items, list):
@@ -726,7 +726,7 @@ def analyze_verifiche_from_pdf_document(filepath, api_key, model='claude-haiku-4
 # Email document classification
 # ---------------------------------------------------------------------------
 
-def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-20251001', config=None):
+def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type from PDF text.
     Returns: 'verifica_elettrica' | 'manutenzione'
     """
@@ -755,7 +755,7 @@ def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-2025
         result = _call_ai(
             "Rispondi solo con una parola: 'verifica_elettrica' se il documento riguarda verifiche di sicurezza elettrica (IEC 62353, corrente di dispersione, messa a terra), oppure 'manutenzione' negli altri casi.",
             f"Classifica questo documento:\n\n{pdf_text[:2000]}",
-            api_key, model, max_tokens=20, config=config
+            api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
         )
         if 'verifica' in result.lower():
             return 'verifica_elettrica'
@@ -764,7 +764,7 @@ def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-2025
     return 'manutenzione'
 
 
-def classify_email_document_type_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None):
+def classify_email_document_type_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type for a scanned PDF.
     Returns: 'verifica_elettrica' | 'manutenzione'
     """
@@ -772,7 +772,7 @@ def classify_email_document_type_from_pdf_document(filepath, api_key, model='cla
         result = _call_ai_with_pdf(
             "Rispondi solo con una parola: 'verifica_elettrica' se il documento riguarda verifiche di sicurezza elettrica (IEC 62353, corrente di dispersione, messa a terra), oppure 'manutenzione' negli altri casi.",
             "Classifica questo documento.",
-            filepath, api_key, model, max_tokens=20, config=config
+            filepath, api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
         )
         if 'verifica' in result.lower():
             return 'verifica_elettrica'
@@ -785,7 +785,7 @@ def classify_email_document_type_from_pdf_document(filepath, api_key, model='cla
 # Unified document classification (import)
 # ---------------------------------------------------------------------------
 
-def classify_document_type(text, api_key, model='claude-haiku-4-5-20251001', config=None):
+def classify_document_type(text, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type from extracted text.
     Returns: 'inventario' | 'verbale_manutenzione' | 'verifica_elettrica'
     """
@@ -822,19 +822,19 @@ def classify_document_type(text, api_key, model='claude-haiku-4-5-20251001', con
     result = _call_ai(
         CLASSIFICATION_SYSTEM_PROMPT,
         f"Classifica questo documento:\n\n{text[:3000]}",
-        api_key, model, max_tokens=20, config=config
+        api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
     )
     return _parse_classification_result(result)
 
 
-def classify_document_type_from_pdf(filepath, api_key, model='claude-haiku-4-5-20251001', config=None):
+def classify_document_type_from_pdf(filepath, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type from a scanned PDF.
     Returns: 'inventario' | 'verbale_manutenzione' | 'verifica_elettrica'
     """
     result = _call_ai_with_pdf(
         CLASSIFICATION_SYSTEM_PROMPT,
         "Classifica questo documento.",
-        filepath, api_key, model, max_tokens=20, config=config
+        filepath, api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
     )
     return _parse_classification_result(result)
 
