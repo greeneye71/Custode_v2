@@ -6,89 +6,116 @@
   <h2>
     <i class="bi bi-gear me-2"></i>Configurazione — {{ struttura.nome }}
   </h2>
+  {% if not is_admin_only %}
   <a href="{{ url_for('strutture.index') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left me-1"></i>Torna alle strutture
   </a>
+  {% else %}
+  <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i>Dashboard
+  </a>
+  {% endif %}
 </div>
 
-<form method="POST" action="{{ url_for('strutture.config', struttura_id=struttura.id) }}">
-  <div class="row g-4">
+<div class="row g-4">
 
-    {# ------------------------------------------------------------------ #}
-    {# Sezione: Intelligenza Artificiale                                   #}
-    {# ------------------------------------------------------------------ #}
-    <div class="col-12">
-      <div class="card">
-        <div class="card-header">
-          <i class="bi bi-robot me-1"></i> Intelligenza Artificiale
-        </div>
-        <div class="card-body">
-          <div class="row g-3">
+  {# ------------------------------------------------------------------ #}
+  {# Sezione: Intelligenza Artificiale (AJAX, fuori dal form principale) #}
+  {# ------------------------------------------------------------------ #}
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-robot me-1"></i> Intelligenza Artificiale</span>
+        <span id="ai_status_badge"></span>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
 
-            <div class="col-md-4">
-              <label class="form-label">Provider AI</label>
-              <select class="form-select" name="ai_provider" id="struttura_ai_provider"
-                      onchange="toggleStrutturaAIFields()">
-                <option value="" {% if not cfg.get('ai_provider') %}selected{% endif %}>— usa default globale —</option>
-                <option value="anthropic"        {% if cfg.get('ai_provider') == 'anthropic' %}selected{% endif %}>Anthropic Claude</option>
-                <option value="gemini"           {% if cfg.get('ai_provider') == 'gemini' %}selected{% endif %}>Google Gemini</option>
-                <option value="openai"           {% if cfg.get('ai_provider') == 'openai' %}selected{% endif %}>OpenAI</option>
-                <option value="ollama"           {% if cfg.get('ai_provider') == 'ollama' %}selected{% endif %}>Ollama (locale)</option>
-                <option value="lmstudio"         {% if cfg.get('ai_provider') == 'lmstudio' %}selected{% endif %}>LM Studio (locale)</option>
-                <option value="openai_compatible" {% if cfg.get('ai_provider') == 'openai_compatible' %}selected{% endif %}>OpenAI-compatible</option>
-              </select>
-            </div>
-
-            <div class="col-md-8" id="struttura_anthropic_key">
-              <label class="form-label">Anthropic API Key</label>
-              <input type="password" class="form-control" name="anthropic_api_key"
-                     placeholder="{% if cfg.get('anthropic_api_key') %}Configurata — lascia vuoto per non modificare{% else %}Non configurata{% endif %}">
-            </div>
-
-            <div class="col-md-8" id="struttura_gemini_key" style="display:none;">
-              <label class="form-label">Google Gemini API Key</label>
-              <input type="password" class="form-control" name="gemini_api_key"
-                     placeholder="{% if cfg.get('gemini_api_key') %}Configurata — lascia vuoto per non modificare{% else %}AIza...{% endif %}">
-            </div>
-
-            <div class="col-md-8" id="struttura_openai_key" style="display:none;">
-              <label class="form-label">OpenAI API Key</label>
-              <input type="password" class="form-control" name="openai_api_key"
-                     placeholder="{% if cfg.get('openai_api_key') %}Configurata — lascia vuoto per non modificare{% else %}sk-...{% endif %}">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Modello import AI</label>
-              <input type="text" class="form-control" name="ai_import_model"
-                     value="{{ cfg.get('ai_import_model', '') }}"
-                     placeholder="Es. claude-sonnet-4-20250514">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Modello email AI</label>
-              <input type="text" class="form-control" name="ai_email_model"
-                     value="{{ cfg.get('ai_email_model', '') }}"
-                     placeholder="Es. claude-haiku-4-5-20251001">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">URL server AI locale</label>
-              <input type="text" class="form-control" name="ai_local_base_url"
-                     value="{{ cfg.get('ai_local_base_url', '') }}"
-                     placeholder="http://localhost:11434">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Modello AI locale</label>
-              <input type="text" class="form-control" name="ai_local_model"
-                     value="{{ cfg.get('ai_local_model', '') }}"
-                     placeholder="Es. llama3.2">
-            </div>
-
+          <div class="col-md-4">
+            <label class="form-label">Provider AI</label>
+            <select class="form-select" id="struttura_ai_provider" onchange="toggleStrutturaAIFields()">
+              {% for prov_id, prov_label in ai_providers %}
+              <option value="{{ prov_id }}"
+                      {% if cfg.get('ai_provider', 'anthropic') == prov_id %}selected{% endif %}>
+                {{ prov_label }}
+              </option>
+              {% endfor %}
+            </select>
           </div>
+
+          <div class="col-md-8" id="struttura_anthropic_key">
+            <label class="form-label">Anthropic API Key</label>
+            <input type="password" class="form-control" id="ai_api_key"
+                   placeholder="{% if cfg.get('anthropic_api_key') %}Configurata — lascia vuoto per non modificare{% else %}sk-ant-api...{% endif %}">
+          </div>
+
+          <div class="col-md-8" id="struttura_gemini_key" style="display:none;">
+            <label class="form-label">Google Gemini API Key</label>
+            <input type="password" class="form-control" id="ai_gemini_key"
+                   placeholder="{% if cfg.get('gemini_api_key') %}Configurata — lascia vuoto per non modificare{% else %}AIza...{% endif %}">
+          </div>
+
+          <div class="col-md-8" id="struttura_openai_key" style="display:none;">
+            <label class="form-label">OpenAI API Key</label>
+            <input type="password" class="form-control" id="ai_openai_key"
+                   placeholder="{% if cfg.get('openai_api_key') %}Configurata — lascia vuoto per non modificare{% else %}sk-...{% endif %}">
+          </div>
+
+          <div class="col-md-6" id="struttura_local_url" style="display:none;">
+            <label class="form-label">URL Server AI</label>
+            <input type="text" class="form-control" id="ai_local_base_url"
+                   value="{{ cfg.get('ai_local_base_url', '') }}"
+                   placeholder="http://localhost:11434">
+            <div class="form-text">Senza <code>/v1</code> finale</div>
+          </div>
+
+          <div class="col-md-6" id="struttura_local_model" style="display:none;">
+            <label class="form-label">Modello AI locale</label>
+            <input type="text" class="form-control" id="ai_local_model"
+                   value="{{ cfg.get('ai_local_model', '') }}"
+                   placeholder="Es. llama3.2">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Modello Import Inventario</label>
+            <select class="form-select" id="ai_import_model">
+              {% if cfg.get('ai_import_model') %}
+              <option value="{{ cfg.get('ai_import_model') }}" selected>{{ cfg.get('ai_import_model') }}</option>
+              {% else %}
+              <option value="">— esegui il test per vedere i modelli disponibili —</option>
+              {% endif %}
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Modello Email e Verifiche</label>
+            <select class="form-select" id="ai_email_model">
+              {% if cfg.get('ai_email_model') %}
+              <option value="{{ cfg.get('ai_email_model') }}" selected>{{ cfg.get('ai_email_model') }}</option>
+              {% else %}
+              <option value="">— esegui il test per vedere i modelli disponibili —</option>
+              {% endif %}
+            </select>
+          </div>
+
+          <div class="col-12" id="ai_test_result" style="display:none;"></div>
+
+          <div class="col-12">
+            <button type="button" class="btn btn-primary" onclick="testSalvaAI()" id="btn_test_salva">
+              <span class="spinner-border spinner-border-sm me-1" role="status" style="display:none;" id="ai_spinner" aria-hidden="true"></span>
+              <i class="bi bi-lightning-charge me-1" id="ai_btn_icon"></i>
+              Test &amp; Salva configurazione AI
+            </button>
+          </div>
+
         </div>
       </div>
     </div>
+  </div>
+
+  {% if not is_admin_only %}
+  <form method="POST" action="{{ url_for('strutture.config', struttura_id=struttura.id) }}" class="col-12 p-0">
+  <div class="row g-4">
 
     {# ------------------------------------------------------------------ #}
     {# Sezione: SMTP / Notifiche                                           #}
@@ -200,16 +227,20 @@
     </div>
 
   </div>
-</form>
+  </form>
+  {% endif %}
+
+</div>
 
 <script>
+var _testAiUrl = "{{ url_for('strutture.test_ai_config', struttura_id=struttura.id) }}";
+
 function toggleStrutturaAIFields() {
     var provider = document.getElementById('struttura_ai_provider').value;
-    var isAnthropic = (provider === 'anthropic');
-    var isGemini    = (provider === 'gemini');
-    var isOpenAI    = (provider === 'openai');
+    var isCloud = ['anthropic', 'gemini', 'openai'].includes(provider);
+    var isLocal = !isCloud;
 
-    function setField(id, show) {
+    function setVis(id, show) {
         var el = document.getElementById(id);
         if (!el) return;
         el.style.display = show ? '' : 'none';
@@ -219,10 +250,93 @@ function toggleStrutturaAIFields() {
         });
     }
 
-    setField('struttura_anthropic_key', isAnthropic);
-    setField('struttura_gemini_key',    isGemini);
-    setField('struttura_openai_key',    isOpenAI);
+    setVis('struttura_anthropic_key', provider === 'anthropic');
+    setVis('struttura_gemini_key',    provider === 'gemini');
+    setVis('struttura_openai_key',    provider === 'openai');
+    setVis('struttura_local_url',     isLocal);
+    setVis('struttura_local_model',   isLocal);
 }
+
+function testSalvaAI() {
+    var provider = document.getElementById('struttura_ai_provider').value;
+    var payload = {
+        provider:        provider,
+        api_key:         (document.getElementById('ai_api_key') || {}).value || '',
+        gemini_api_key:  (document.getElementById('ai_gemini_key') || {}).value || '',
+        openai_api_key:  (document.getElementById('ai_openai_key') || {}).value || '',
+        local_base_url:  (document.getElementById('ai_local_base_url') || {}).value || '',
+        local_model:     (document.getElementById('ai_local_model') || {}).value || '',
+        ai_import_model: document.getElementById('ai_import_model').value || '',
+        ai_email_model:  document.getElementById('ai_email_model').value || '',
+    };
+
+    document.getElementById('ai_spinner').style.display  = '';
+    document.getElementById('ai_btn_icon').style.display = 'none';
+    document.getElementById('btn_test_salva').disabled   = true;
+    document.getElementById('ai_test_result').style.display = 'none';
+
+    fetch(_testAiUrl, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+        document.getElementById('ai_spinner').style.display  = 'none';
+        document.getElementById('ai_btn_icon').style.display = '';
+        document.getElementById('btn_test_salva').disabled   = false;
+
+        var div = document.getElementById('ai_test_result');
+        div.style.display = '';
+        if (result.ok) {
+            div.innerHTML = '<div class="alert alert-success py-2 mb-0"><i class="bi bi-check-circle me-1"></i>' + result.message + '</div>';
+            if (result.models && result.models.length > 0) {
+                populateModelSelect('ai_import_model', result.models, payload.ai_import_model);
+                populateModelSelect('ai_email_model',  result.models, payload.ai_email_model);
+            }
+        } else {
+            div.innerHTML = '<div class="alert alert-danger py-2 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>' + result.message + '</div>';
+        }
+    })
+    .catch(function(err) {
+        document.getElementById('ai_spinner').style.display  = 'none';
+        document.getElementById('ai_btn_icon').style.display = '';
+        document.getElementById('btn_test_salva').disabled   = false;
+        var div = document.getElementById('ai_test_result');
+        div.style.display = '';
+        div.innerHTML = '<div class="alert alert-danger py-2 mb-0">Errore di rete: ' + err + '</div>';
+    });
+}
+
+function populateModelSelect(selectId, models, currentValue) {
+    var select = document.getElementById(selectId);
+    var prev = currentValue || select.value;
+    select.innerHTML = '';
+    if (!prev) {
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = '— seleziona modello —';
+        select.appendChild(placeholder);
+    }
+    models.forEach(function(m) {
+        var opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === prev) opt.selected = true;
+        select.appendChild(opt);
+    });
+    if (prev && !models.includes(prev)) {
+        var custom = document.createElement('option');
+        custom.value = prev;
+        custom.textContent = prev + ' (personalizzato)';
+        custom.selected = true;
+        select.insertBefore(custom, select.firstChild);
+    }
+    if (!select.value && models.length > 0) {
+        select.value = models[0];
+    }
+}
+
 document.addEventListener('DOMContentLoaded', toggleStrutturaAIFields);
 </script>
 {% endblock %}
