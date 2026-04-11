@@ -190,7 +190,7 @@ class BackgroundScheduler:
                 self._invia_digest(struttura, scadenze, global_cfg)
 
     def _send_scheduled_reports(self):
-        """Invia report periodici PDF alle strutture con report_schedulato_attivo=1."""
+        """Invia report periodici PDF alle strutture con report_pdf_attivo=1."""
         with self.app.app_context():
             from models import query_all, get_struttura_config
             strutture = query_all("SELECT * FROM strutture WHERE attiva=1")
@@ -198,7 +198,7 @@ class BackgroundScheduler:
 
             for struttura in strutture:
                 sid = struttura['id']
-                if get_struttura_config(sid, 'report_schedulato_attivo', '0') != '1':
+                if get_struttura_config(sid, 'report_pdf_attivo', '0') != '1':
                     continue
                 frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
                 if not self._is_digest_due(frequenza):
