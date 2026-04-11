@@ -858,21 +858,58 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                 errors += 1
                 continue
 
-            app_override = request.form.get(f'apparecchio_id_{row_id}')
-            if app_override:
-                try:
-                    apparecchio_id = int(app_override)
-                except (ValueError, TypeError):
-                    apparecchio_id = None
-                # Bug I: validate override is within accessible divisions
-                if apparecchio_id and g.user['ruolo'] != 'admin':
-                    accessible_ids = [d['id'] for d in g.divisioni]
-                    app_rec = query_one(
-                        "SELECT divisione_id FROM apparecchi WHERE id = ?", (apparecchio_id,))
-                    if not app_rec or app_rec['divisione_id'] not in accessible_ids:
-                        apparecchio_id = None
+            # Risoluzione apparecchio: crea nuovo, override manuale, o match AI
+            crea_nuovo = request.form.get(f'crea_nuovo_{row_id}') == '1'
+
+            if crea_nuovo:
+                n_marca = request.form.get(f'nuovo_marca_{row_id}', '').strip()
+                n_modello = request.form.get(f'nuovo_modello_{row_id}', '').strip()
+                n_matricola = request.form.get(f'nuovo_matricola_{row_id}', '').strip()
+                n_descrizione = request.form.get(f'nuovo_descrizione_{row_id}', '').strip()
+                n_divisione_id = request.form.get(f'nuovo_divisione_id_{row_id}', type=int)
+
+                if not (n_marca and n_modello and n_matricola and n_divisione_id):
+                    raise ValueError(
+                        "Marca, modello, matricola e divisione sono obbligatori "
+                        "per creare un nuovo apparecchio"
+                    )
+
+                struttura_id_user = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
+                div_check = query_one(
+                    "SELECT struttura_id FROM divisioni WHERE id=? AND attiva=1",
+                    (n_divisione_id,)
+                )
+                if not div_check or (struttura_id_user and div_check['struttura_id'] != struttura_id_user):
+                    raise ValueError("Divisione non accessibile")
+
+                cur = execute(
+                    """INSERT INTO apparecchi
+                       (divisione_id, struttura_id, matricola, marca, modello, descrizione, created_by)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (n_divisione_id, div_check['struttura_id'],
+                     n_matricola, n_marca, n_modello, n_descrizione or None, g.user['id'])
+                )
+                apparecchio_id = cur.lastrowid
+                log_attivita(g.user['id'], 'creazione', 'apparecchi', apparecchio_id,
+                             f"Creato da import verifica: {n_marca} {n_modello} ({n_matricola})",
+                             request.remote_addr,
+                             struttura_id=div_check['struttura_id'])
             else:
-                apparecchio_id = row['apparecchio_match_id']
+                app_override = request.form.get(f'apparecchio_id_{row_id}')
+                if app_override:
+                    try:
+                        apparecchio_id = int(app_override)
+                    except (ValueError, TypeError):
+                        apparecchio_id = None
+                    # validate override is within accessible divisions
+                    if apparecchio_id and g.user['ruolo'] not in ('admin', 'superadmin'):
+                        accessible_ids = [d['id'] for d in g.divisioni]
+                        app_rec = query_one(
+                            "SELECT divisione_id FROM apparecchi WHERE id = ?", (apparecchio_id,))
+                        if not app_rec or app_rec['divisione_id'] not in accessible_ids:
+                            apparecchio_id = None
+                else:
+                    apparecchio_id = row['apparecchio_match_id']
 
             if not apparecchio_id:
                 execute("UPDATE import_preview SET stato = 'rejected', "
