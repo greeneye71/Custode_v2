@@ -1110,7 +1110,7 @@ def email_conferma(id):
                 return redirect(url_for('import.email_queue'))
 
     # FIX 7: validazione tipo manutenzione
-    TIPI_VALIDI = ('preventiva', 'correttiva', 'straordinaria', 'verifica_elettrica', 'collaudo')
+    TIPI_VALIDI = ('preventiva', 'correttiva', 'verifica', 'calibrazione')
     tipo = request.form.get('tipo', 'preventiva')
     if tipo not in TIPI_VALIDI:
         tipo = 'preventiva'
