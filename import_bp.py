@@ -533,6 +533,7 @@ def preview(id):
 
     # For verbali/verifiche: provide apparecchi list for manual selection
     apparecchi_list = []
+    divisioni_list = []
     tipo = import_rec['tipo_import']
     if tipo in ('verbale_manutenzione', 'verifica_elettrica'):
         div = getattr(g, 'divisione_attiva', None)
@@ -566,13 +567,37 @@ def preview(id):
                     ids
                 )
 
+        # Divisioni accessibili per il form "crea nuovo apparecchio"
+        if tipo == 'verifica_elettrica':
+            struttura_id = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
+            if not struttura_id and import_rec.get('divisione_id'):
+                div_row = query_one(
+                    "SELECT struttura_id FROM divisioni WHERE id=?",
+                    (import_rec['divisione_id'],)
+                )
+                if div_row:
+                    struttura_id = div_row['struttura_id']
+            if struttura_id:
+                divisioni_list = query_all(
+                    "SELECT id, nome, colore FROM divisioni WHERE attiva=1 AND struttura_id=? ORDER BY nome",
+                    (struttura_id,)
+                )
+
     tipo_label = DOC_TYPE_LABELS.get(tipo, tipo)
+
+    # Divisione attiva corrente (per preselezionare nel form "crea nuovo")
+    divisione_attiva_id = None
+    div_attiva = getattr(g, 'divisione_attiva', None)
+    if div_attiva and div_attiva.get('id') != 'tutte':
+        divisione_attiva_id = div_attiva.get('id')
 
     return render_template('import/preview.html',
                            import_rec=import_rec, rows=rows,
                            nuovi=nuovi, trovati=trovati,
                            tipo_label=tipo_label,
-                           apparecchi_list=apparecchi_list)
+                           apparecchi_list=apparecchi_list,
+                           divisioni_list=divisioni_list,
+                           divisione_attiva_id=divisione_attiva_id)
 
 
 @import_bp.route('/import/<int:id>/esegui', methods=['POST'])
