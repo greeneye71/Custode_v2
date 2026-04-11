@@ -162,13 +162,87 @@
                                 </span>
                                 <br><small class="text-muted">{{ row.match_matricola }}</small>
                                 {% else %}
-                                <select class="form-select form-select-sm" name="apparecchio_id_{{ row.id }}"
-                                        style="min-width: 200px; font-size: 0.75rem;">
-                                    <option value="">-- Seleziona --</option>
-                                    {% for a in apparecchi_list %}
-                                    <option value="{{ a.id }}">{{ a.matricola }} - {{ a.marca }} {{ a.modello }}</option>
-                                    {% endfor %}
-                                </select>
+                                <div class="mb-1">
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input apparecchio-mode"
+                                               type="radio"
+                                               name="modo_apparecchio_{{ row.id }}"
+                                               id="sel_exist_{{ row.id }}"
+                                               value="seleziona"
+                                               checked
+                                               onchange="toggleApparecchioMode({{ row.id }})">
+                                        <label class="form-check-label small" for="sel_exist_{{ row.id }}">
+                                            Seleziona esistente
+                                        </label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input apparecchio-mode"
+                                               type="radio"
+                                               name="modo_apparecchio_{{ row.id }}"
+                                               id="crea_new_{{ row.id }}"
+                                               value="crea"
+                                               onchange="toggleApparecchioMode({{ row.id }})">
+                                        <label class="form-check-label small" for="crea_new_{{ row.id }}">
+                                            Crea nuovo
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {# Sezione: seleziona esistente #}
+                                <div id="sect_exist_{{ row.id }}">
+                                    <select class="form-select form-select-sm"
+                                            name="apparecchio_id_{{ row.id }}"
+                                            style="min-width: 200px; font-size: 0.75rem;">
+                                        <option value="">-- Seleziona --</option>
+                                        {% for a in apparecchi_list %}
+                                        <option value="{{ a.id }}">{{ a.matricola }} - {{ a.marca }} {{ a.modello }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+
+                                {# Sezione: crea nuovo apparecchio #}
+                                <div id="sect_crea_{{ row.id }}" style="display:none;">
+                                    <input type="hidden" name="crea_nuovo_{{ row.id }}" value="0"
+                                           id="flag_crea_{{ row.id }}">
+                                    <div class="row g-1 mt-1" style="min-width: 260px;">
+                                        <div class="col-6">
+                                            <input type="text" class="form-control form-control-sm"
+                                                   name="nuovo_marca_{{ row.id }}"
+                                                   placeholder="Marca *"
+                                                   value="{{ d.get('marca', '') }}">
+                                        </div>
+                                        <div class="col-6">
+                                            <input type="text" class="form-control form-control-sm"
+                                                   name="nuovo_modello_{{ row.id }}"
+                                                   placeholder="Modello *"
+                                                   value="{{ d.get('modello', '') }}">
+                                        </div>
+                                        <div class="col-6">
+                                            <input type="text" class="form-control form-control-sm"
+                                                   name="nuovo_matricola_{{ row.id }}"
+                                                   placeholder="Matricola *"
+                                                   value="{{ d.get('matricola', '') }}">
+                                        </div>
+                                        <div class="col-6">
+                                            <input type="text" class="form-control form-control-sm"
+                                                   name="nuovo_descrizione_{{ row.id }}"
+                                                   placeholder="Descrizione"
+                                                   value="{{ d.get('descrizione', '') }}">
+                                        </div>
+                                        <div class="col-12">
+                                            <select class="form-select form-select-sm"
+                                                    name="nuovo_divisione_id_{{ row.id }}">
+                                                <option value="">-- Divisione * --</option>
+                                                {% for div in divisioni_list %}
+                                                <option value="{{ div.id }}"
+                                                    {% if divisione_attiva_id and div.id == divisione_attiva_id %}selected{% endif %}>
+                                                    {{ div.nome }}
+                                                </option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
                                 {% endif %}
                             </td>
                             {% endif %}
@@ -194,6 +268,13 @@
 function toggleAll(checked) {
     document.querySelectorAll('.row-check:not(:disabled)').forEach(cb => cb.checked = checked);
     document.getElementById('selectAll').checked = checked;
+}
+
+function toggleApparecchioMode(rowId) {
+    const isCrea = document.getElementById('crea_new_' + rowId).checked;
+    document.getElementById('sect_exist_' + rowId).style.display = isCrea ? 'none' : '';
+    document.getElementById('sect_crea_' + rowId).style.display = isCrea ? '' : 'none';
+    document.getElementById('flag_crea_' + rowId).value = isCrea ? '1' : '0';
 }
 </script>
 {% endblock %}
