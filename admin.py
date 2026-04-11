@@ -835,23 +835,37 @@ def reset_database():
         init_db()
         apply_schema_updates()
 
-        # 5. Seed: 2 divisioni + utente admin predefinito
+        # 5. Seed: struttura di default + 2 divisioni + utente admin predefinito
         c = db_execute(
-            "INSERT INTO divisioni (nome, codice, colore, descrizione) VALUES (?,?,?,?)",
-            ('Divisione 1', 'DIV1', '#0ea5e9', 'Prima divisione (rinominare da pannello admin)')
+            """INSERT INTO strutture (nome, codice, descrizione, modalita, attiva)
+               VALUES (?,?,?,?,?)""",
+            ('Struttura Principale', 'DEFAULT',
+             'Struttura predefinita (rinominare da Amministrazione → Strutture)',
+             'avanzata', 1)
+        )
+        struttura_id = c.lastrowid
+
+        c = db_execute(
+            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+               VALUES (?,?,?,?,?)""",
+            ('Divisione 1', 'DIV1', '#0ea5e9',
+             'Prima divisione (rinominare da pannello admin)', struttura_id)
         )
         div1_id = c.lastrowid
         c = db_execute(
-            "INSERT INTO divisioni (nome, codice, colore, descrizione) VALUES (?,?,?,?)",
-            ('Divisione 2', 'DIV2', '#10b981', 'Seconda divisione (rinominare da pannello admin)')
+            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+               VALUES (?,?,?,?,?)""",
+            ('Divisione 2', 'DIV2', '#10b981',
+             'Seconda divisione (rinominare da pannello admin)', struttura_id)
         )
         div2_id = c.lastrowid
 
         password_hash = generate_password_hash('admin123')
         c = db_execute(
-            """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, primo_accesso)
-               VALUES (?,?,?,?,?,1)""",
-            ('admin@medinventory.local', password_hash, 'Amministratore', 'Sistema', 'admin')
+            """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
+               VALUES (?,?,?,?,?,?,1)""",
+            ('admin@medinventory.local', password_hash, 'Amministratore', 'Sistema', 'admin',
+             struttura_id)
         )
         admin_id = c.lastrowid
 
