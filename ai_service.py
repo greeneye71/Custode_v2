@@ -102,6 +102,9 @@ Devi estrarre i dati e restituire un array JSON. Ogni elemento dell'array rappre
 - esito (uno tra: positivo, negativo, con_riserva - obbligatorio)
 - tecnico_ditta (nome del tecnico e/o ditta che ha eseguito la verifica - opzionale)
 - note (osservazioni o note del rapporto - opzionale)
+- marca (produttore dell'apparecchio verificato - opzionale, se presente nel documento)
+- modello (modello dell'apparecchio verificato - opzionale, se presente nel documento)
+- descrizione (tipo/descrizione apparecchio, es. "Elettrobisturi", "Monitor multiparametrico" - opzionale, se presente nel documento)
 
 REGOLE:
 - Restituisci SOLO un array JSON valido, senza altro testo
@@ -109,6 +112,7 @@ REGOLE:
 - La matricola è il campo più importante per identificare l'apparecchio
 - Per l'esito: "pass", "OK", "conforme", "idoneo" → positivo; "fail", "KO", "non conforme", "non idoneo" → negativo; "con riserva", "condizionale" → con_riserva
 - Se la data non è in formato standard, convertila in YYYY-MM-DD
+- Se il documento contiene informazioni sull'apparecchio (marca, modello, tipo/descrizione), includile nei campi opzionali marca/modello/descrizione
 - Keywords che identificano verifiche elettriche: sicurezza elettrica, corrente di dispersione, IEC 62353, messa a terra, CEI, VSE
 """
 
