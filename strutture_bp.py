@@ -12,7 +12,7 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     flash, g, current_app, jsonify
 )
-from auth import superadmin_required, login_required
+from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
@@ -67,20 +67,35 @@ def _codice_univoco_divisione(db, nome, struttura_id, esclude_id=None):
 
 
 @strutture_bp.route('/')
-@superadmin_required
+@tecnico_o_superadmin_required
 def index():
-    strutture = query_all("""
-        SELECT s.*,
-               COUNT(DISTINCT d.id) as num_divisioni,
-               COUNT(DISTINCT u.id) as num_utenti,
-               COUNT(DISTINCT a.id) as num_apparecchi
-        FROM strutture s
-        LEFT JOIN divisioni d ON d.struttura_id = s.id AND d.attiva = 1
-        LEFT JOIN utenti u ON u.struttura_id = s.id AND u.attivo = 1
-        LEFT JOIN apparecchi a ON a.struttura_id = s.id AND a.stato != 'dismesso'
-        GROUP BY s.id
-        ORDER BY s.nome
-    """)
+    if g.user['ruolo'] == 'tecnico':
+        strutture = query_all("""
+            SELECT s.*,
+                   COUNT(DISTINCT d.id) as num_divisioni,
+                   COUNT(DISTINCT u.id) as num_utenti,
+                   COUNT(DISTINCT a.id) as num_apparecchi
+            FROM strutture s
+            JOIN tecnici_strutture ts ON ts.struttura_id = s.id AND ts.tecnico_id = ?
+            LEFT JOIN divisioni d ON d.struttura_id = s.id AND d.attiva = 1
+            LEFT JOIN utenti u ON u.struttura_id = s.id AND u.attivo = 1
+            LEFT JOIN apparecchi a ON a.struttura_id = s.id AND a.stato != 'dismesso'
+            GROUP BY s.id
+            ORDER BY s.nome
+        """, (g.user['id'],))
+    else:
+        strutture = query_all("""
+            SELECT s.*,
+                   COUNT(DISTINCT d.id) as num_divisioni,
+                   COUNT(DISTINCT u.id) as num_utenti,
+                   COUNT(DISTINCT a.id) as num_apparecchi
+            FROM strutture s
+            LEFT JOIN divisioni d ON d.struttura_id = s.id AND d.attiva = 1
+            LEFT JOIN utenti u ON u.struttura_id = s.id AND u.attivo = 1
+            LEFT JOIN apparecchi a ON a.struttura_id = s.id AND a.stato != 'dismesso'
+            GROUP BY s.id
+            ORDER BY s.nome
+        """)
     return render_template('strutture/index.html', strutture=strutture)
 
 
@@ -204,7 +219,7 @@ def _leggi_form_struttura(form):
 
 
 @strutture_bp.route('/nuova', methods=['GET', 'POST'])
-@superadmin_required
+@tecnico_o_superadmin_required
 def nuova():
     if request.method == 'POST':
         dati = _leggi_form_struttura(request.form)
@@ -231,7 +246,19 @@ def nuova():
             )
             struttura_id = cur.lastrowid
             divisione_id = _crea_divisione_predefinita(db, struttura_id, dati['nome'])
+            # Se tecnico, auto-assegna alla nuova struttura
+            if g.user['ruolo'] == 'tecnico':
+                db.execute(
+                    "INSERT OR IGNORE INTO tecnici_strutture (tecnico_id, struttura_id) VALUES (?, ?)",
+                    (g.user['id'], struttura_id)
+                )
             db.commit()
+            # Seed AI provider di default dalla config globale
+            from app import load_config as _load_config
+            _cfg = _load_config()
+            _default_provider = _cfg.get('default_ai_provider')
+            if _default_provider:
+                set_struttura_config(struttura_id, 'ai_provider', _default_provider)
             log_attivita(g.user['id'], 'crea', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" creata')
             log_attivita(g.user['id'], 'creazione', 'divisioni', divisione_id,

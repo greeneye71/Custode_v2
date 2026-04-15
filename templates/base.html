@@ -249,17 +249,19 @@
                     </li>
 
                     {# Admin section #}
-                    {% if current_user is defined and current_user.ruolo in ('admin', 'superadmin') %}
+                    {% if current_user is defined and current_user.ruolo in ('admin', 'superadmin', 'tecnico') %}
                     <li class="nav-item mt-3">
                         <small class="nav-section-title">AMMINISTRAZIONE</small>
                     </li>
-                    {% if current_user.ruolo == 'superadmin' and not single_struttura %}
+                    {% if current_user.ruolo in ('superadmin', 'tecnico') and not single_struttura %}
                     <li class="nav-item">
-                        <a class="nav-link {% if request.path.startswith('/strutture') %}active{% endif %}"
+                        <a class="nav-link {% if request.path.startswith('/strutture') and 'config' not in request.path %}active{% endif %}"
                            href="{{ url_for('strutture.index') }}">
                             <i class="bi bi-building me-1"></i>Strutture
                         </a>
                     </li>
+                    {% endif %}
+                    {% if current_user.ruolo == 'superadmin' and not single_struttura %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.tecnic' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.tecnici') }}">
@@ -267,12 +269,14 @@
                         </a>
                     </li>
                     {% endif %}
+                    {% if current_user.ruolo in ('admin', 'superadmin') %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.utent' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.utenti') }}">
                             <i class="bi bi-people"></i> Utenti
                         </a>
                     </li>
+                    {% endif %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'admin.divisioni' in request.endpoint|default('') %}active{% endif %}"
                            href="{{ url_for('admin.divisioni') }}">

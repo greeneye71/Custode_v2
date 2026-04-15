@@ -88,6 +88,30 @@ def superadmin_required(f):
     return decorated_function
 
 
+def tecnico_o_superadmin_required(f):
+    """Decorator: richiede ruolo superadmin o tecnico."""
+    @wraps(f)
+    @login_required
+    def decorated_function(*args, **kwargs):
+        if g.user['ruolo'] not in ('superadmin', 'tecnico'):
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def tecnico_o_admin_required(f):
+    """Decorator: richiede ruolo admin, superadmin o tecnico."""
+    @wraps(f)
+    @login_required
+    def decorated_function(*args, **kwargs):
+        if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+            flash('Accesso non autorizzato.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 def admin_struttura_required(f):
     """Decorator: richiede ruolo admin (della struttura) o superadmin che stia impersonando."""
     @wraps(f)

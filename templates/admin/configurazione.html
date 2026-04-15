@@ -174,6 +174,32 @@
                     </div>
                 </div>
             </div>
+            {# AI Provider Default #}
+            <div class="card mb-4">
+                <div class="card-header"><i class="bi bi-robot me-1"></i> Intelligenza Artificiale — Default Nuove Strutture</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label class="form-label">Provider AI predefinito</label>
+                            <select class="form-select" name="default_ai_provider">
+                                <option value="">— Nessuno (non configurare) —</option>
+                                {% for pid, plabel in ai_providers %}
+                                <option value="{{ pid }}"
+                                    {% if config.get('default_ai_provider') == pid %}selected{% endif %}>
+                                    {{ plabel }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">
+                                Il provider selezionato viene impostato automaticamente come
+                                <code>ai_provider</code> nella configurazione di ogni nuova struttura creata.
+                                Le chiavi API vanno inserite poi nella configurazione della singola struttura.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             {# Zona Pericolosa #}
             <div class="card mb-4 border-danger">
                 <div class="card-header bg-danger text-white">
@@ -220,7 +246,7 @@
                 <div class="card-header"><i class="bi bi-info-circle me-1"></i> Info</div>
                 <div class="card-body small text-muted">
                     <p class="mb-1">Le modifiche a porta e host richiedono il riavvio del server.</p>
-                    <p class="mb-0">La configurazione AI è gestita per ogni struttura nella pagina Strutture → Configurazione.</p>
+                    <p class="mb-0">Il provider AI di default viene applicato alle nuove strutture. La configurazione dettagliata (chiavi API, modelli) si imposta in Strutture → Configurazione.</p>
                 </div>
             </div>
         </div>

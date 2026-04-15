@@ -14,8 +14,9 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash
 
-from auth import admin_required, superadmin_required, modalita_avanzata_required
+from auth import admin_required, superadmin_required, modalita_avanzata_required, tecnico_o_admin_required
 from models import query_one, query_all, execute, log_attivita
+from ai_service import AI_PROVIDERS
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -330,7 +331,8 @@ def _get_struttura_divisioni_admin():
     """Restituisce la struttura corrente nel pannello divisioni."""
     if g.user['ruolo'] == 'superadmin':
         return request.args.get('struttura_id', type=int)
-    return _get_mia_struttura_id()
+    # admin e tecnico: usa la struttura attiva (dalla sessione per tecnico)
+    return getattr(g, 'struttura_id', None) or _get_mia_struttura_id()
 
 
 def _get_divisione_in_scope(divisione_id):
@@ -344,7 +346,7 @@ def _get_divisione_in_scope(divisione_id):
             (divisione_id,)
         )
 
-    struttura_id = _get_mia_struttura_id()
+    struttura_id = getattr(g, 'struttura_id', None) or _get_mia_struttura_id()
     return query_one(
         """SELECT d.*, s.nome AS struttura_nome
            FROM divisioni d
@@ -355,7 +357,7 @@ def _get_divisione_in_scope(divisione_id):
 
 
 @admin_bp.route('/divisioni')
-@admin_required
+@tecnico_o_admin_required
 def divisioni():
     """List all divisions scoped by structure."""
     is_superadmin = g.user['ruolo'] == 'superadmin'
@@ -371,7 +373,7 @@ def divisioni():
             where = "WHERE d.struttura_id = ?"
             params = [struttura_id]
     else:
-        struttura_id = _get_mia_struttura_id()
+        struttura_id = getattr(g, 'struttura_id', None) or _get_mia_struttura_id()
         strutture = []
         where = "WHERE d.struttura_id = ?"
         params = [struttura_id]
@@ -396,7 +398,7 @@ def divisioni():
 
 
 @admin_bp.route('/divisioni/nuova', methods=['POST'])
-@admin_required
+@tecnico_o_admin_required
 def divisione_nuova():
     """Create a new division in the selected structure."""
     from strutture_bp import _codice_univoco_divisione
@@ -407,7 +409,7 @@ def divisione_nuova():
     descrizione = request.form.get('descrizione', '').strip()
     struttura_id = (request.form.get('struttura_id', type=int)
                     if g.user['ruolo'] == 'superadmin'
-                    else _get_mia_struttura_id())
+                    else getattr(g, 'struttura_id', None) or _get_mia_struttura_id())
 
     if not nome or not struttura_id:
         flash('Nome e struttura sono obbligatori.', 'danger')
@@ -434,7 +436,7 @@ def divisione_nuova():
 
 
 @admin_bp.route('/divisioni/<int:id>/modifica', methods=['POST'])
-@admin_required
+@tecnico_o_admin_required
 def divisione_modifica(id):
     """Edit a division within the current scope."""
     div = _get_divisione_in_scope(id)
@@ -494,7 +496,7 @@ def divisione_modifica(id):
 
 
 @admin_bp.route('/divisioni/<int:id>/toggle', methods=['POST'])
-@admin_required
+@tecnico_o_admin_required
 def divisione_toggle(id):
     """Toggle division active/inactive within the current scope."""
     div = _get_divisione_in_scope(id)
@@ -557,6 +559,14 @@ def configurazione():
         except ValueError:
             pass
 
+        # AI provider di default per nuove strutture
+        default_provider = request.form.get('default_ai_provider', '').strip()
+        valid_providers = [p[0] for p in AI_PROVIDERS]
+        if default_provider in valid_providers:
+            config['default_ai_provider'] = default_provider
+        else:
+            config.pop('default_ai_provider', None)
+
         # IMAP email monitoring
         config['imap_enabled'] = bool(request.form.get('imap_enabled'))
         config['imap_account'] = request.form.get('imap_account', '').strip()
@@ -599,7 +609,8 @@ def configurazione():
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
 
-    return render_template('admin/configurazione.html', config=display_config)
+    return render_template('admin/configurazione.html', config=display_config,
+                           ai_providers=AI_PROVIDERS)
 
 
 # ============================================================================
