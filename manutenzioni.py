@@ -333,10 +333,8 @@ def elimina(id):
         return redirect(url_for('manutenzioni.lista'))
 
     if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if manutenzione['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('manutenzioni.lista'))
+        flash('Non autorizzato a eliminare manutenzioni.', 'danger')
+        return redirect(url_for('manutenzioni.lista'))
 
     # Delete associated verbale file if present
     if manutenzione.get('verbale_path'):
