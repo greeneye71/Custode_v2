@@ -729,7 +729,7 @@ def nuovo_token(struttura_id):
 @superadmin_required
 def revoca_token(struttura_id, token_id):
     cur = execute(
-        "UPDATE api_tokens SET attivo=0 WHERE id=? AND struttura_id=?",
+        "DELETE FROM api_tokens WHERE id=? AND struttura_id=?",
         (token_id, struttura_id)
     )
     if cur.rowcount == 0:

@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS divisioni (
   struttura_id INTEGER NOT NULL,
   UNIQUE(struttura_id, nome),
   UNIQUE(struttura_id, codice),
-  FOREIGN KEY (struttura_id) REFERENCES strutture(id)
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_divisioni_codice ON divisioni(codice);
@@ -127,8 +127,8 @@ CREATE TABLE IF NOT EXISTS utenti (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   struttura_id INTEGER,   -- NULL per superadmin
-  FOREIGN KEY (struttura_id) REFERENCES strutture(id),
-  FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id)
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE SET NULL,
+  FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_utenti_email ON utenti(email);
@@ -378,7 +378,7 @@ CREATE TABLE IF NOT EXISTS email_config (
   ultima_verifica DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (divisione_id) REFERENCES divisioni(id)
+  FOREIGN KEY (divisione_id) REFERENCES divisioni(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_email_config_divisione ON email_config(divisione_id);

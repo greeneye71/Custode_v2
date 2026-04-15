@@ -1019,6 +1019,124 @@ def _apply_v2_2(conn, config):
     conn.commit()
 
 
+# ============================================================================
+# v2.3 — FK ON DELETE CASCADE/SET NULL su divisioni, utenti, email_config
+# ============================================================================
+
+def _applied_v2_3(conn):
+    div_sql   = table_sql(conn, 'divisioni')   or ''
+    utenti_sql = table_sql(conn, 'utenti')     or ''
+    email_sql  = table_sql(conn, 'email_config') or ''
+    return (
+        'ON DELETE CASCADE'  in div_sql   and
+        'ON DELETE SET NULL' in utenti_sql and
+        'ON DELETE SET NULL' in email_sql
+    )
+
+
+def _apply_v2_3(conn, config):
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA journal_mode = WAL")
+
+    # DIVISIONI — struttura_id ON DELETE CASCADE
+    div_sql = table_sql(conn, 'divisioni') or ''
+    if 'ON DELETE CASCADE' not in div_sql:
+        conn.execute("ALTER TABLE divisioni RENAME TO divisioni_old")
+        conn.execute("""
+            CREATE TABLE divisioni (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              nome TEXT NOT NULL, codice TEXT NOT NULL,
+              colore TEXT DEFAULT '#0ea5e9', descrizione TEXT,
+              attiva INTEGER DEFAULT 1,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              struttura_id INTEGER NOT NULL,
+              UNIQUE(struttura_id, nome),
+              UNIQUE(struttura_id, codice),
+              FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("""
+            INSERT INTO divisioni
+            SELECT id, nome, codice, colore, descrizione, attiva,
+                   created_at, updated_at, struttura_id
+            FROM divisioni_old
+        """)
+        conn.execute("DROP TABLE divisioni_old")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_divisioni_codice ON divisioni(codice)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_divisioni_attiva ON divisioni(attiva)")
+        conn.commit()
+        ok('  divisioni: struttura_id ON DELETE CASCADE aggiunto')
+    else:
+        skip('  divisioni: FK CASCADE già presente')
+
+    # UTENTI — struttura_id + divisione_default_id ON DELETE SET NULL
+    utenti_sql = table_sql(conn, 'utenti') or ''
+    if 'ON DELETE SET NULL' not in utenti_sql:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(utenti)").fetchall()]
+        col_list = ', '.join(cols)
+        conn.execute("ALTER TABLE utenti RENAME TO utenti_old")
+        conn.execute("""
+            CREATE TABLE utenti (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
+              nome TEXT NOT NULL, cognome TEXT NOT NULL,
+              ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin','admin','utente','tecnico')),
+              divisione_default_id INTEGER,
+              attivo INTEGER DEFAULT 1, primo_accesso INTEGER DEFAULT 1,
+              ultimo_accesso DATETIME,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              struttura_id INTEGER,
+              FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE SET NULL,
+              FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
+            )
+        """)
+        conn.execute(f"INSERT INTO utenti SELECT {col_list} FROM utenti_old")
+        conn.execute("DROP TABLE utenti_old")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_utenti_email ON utenti(email)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_utenti_ruolo ON utenti(ruolo)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_utenti_attivo ON utenti(attivo)")
+        conn.commit()
+        ok('  utenti: struttura_id/divisione_default_id ON DELETE SET NULL aggiunto')
+    else:
+        skip('  utenti: FK SET NULL già presente')
+
+    # EMAIL_CONFIG — divisione_id ON DELETE SET NULL
+    email_sql = table_sql(conn, 'email_config') or ''
+    if 'ON DELETE SET NULL' not in email_sql:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(email_config)").fetchall()]
+        col_list = ', '.join(cols)
+        conn.execute("ALTER TABLE email_config RENAME TO email_config_old")
+        conn.execute("""
+            CREATE TABLE email_config (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              divisione_id INTEGER,
+              email_account TEXT NOT NULL,
+              email_password_encrypted TEXT NOT NULL,
+              imap_server TEXT NOT NULL,
+              imap_port INTEGER DEFAULT 993,
+              check_interval_minutes INTEGER DEFAULT 15,
+              attivo INTEGER DEFAULT 1,
+              ultima_verifica DATETIME,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (divisione_id) REFERENCES divisioni(id) ON DELETE SET NULL
+            )
+        """)
+        conn.execute(f"INSERT INTO email_config SELECT {col_list} FROM email_config_old")
+        conn.execute("DROP TABLE email_config_old")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_config_divisione ON email_config(divisione_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_config_attivo ON email_config(attivo)")
+        conn.commit()
+        ok('  email_config: divisione_id ON DELETE SET NULL aggiunto')
+    else:
+        skip('  email_config: FK SET NULL già presente')
+
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Registro migrazioni in ordine
 # ---------------------------------------------------------------------------
@@ -1032,6 +1150,7 @@ MIGRATIONS = [
     Migration('v2.0',   200, 'Multi-struttura: strutture, strutture_config, struttura_id in tutte le tabelle', _applied_v2_0, _apply_v2_0),
     Migration('v2.1',   210, 'divisioni e apparecchi: struttura_id NOT NULL, schema corretto',             _applied_v2_1,   _apply_v2_1),
     Migration('v2.2',   220, "Ruolo 'tecnico' e tabella tecnici_strutture",                                _applied_v2_2,   _apply_v2_2),
+    Migration('v2.3',   230, 'FK ON DELETE CASCADE/SET NULL su divisioni, utenti, email_config',          _applied_v2_3,   _apply_v2_3),
 ]
 
 # ---------------------------------------------------------------------------
@@ -1044,8 +1163,10 @@ def describe_version(conn):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
 
     if 'strutture' in tables and uv >= 200:
+        if _applied_v2_3(conn):
+            return 'v2.3 (ultima)', uv
         if _applied_v2_2(conn) and _applied_v2_1(conn):
-            return 'v2.2 (ultima)', uv
+            return 'v2.2', uv
         if _applied_v2_1(conn):
             return 'v2.1', uv
         return 'v2.0', uv
