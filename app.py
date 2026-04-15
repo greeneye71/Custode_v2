@@ -75,14 +75,15 @@ LOCAL_CONFIG_KEYS = frozenset({
     'host', 'port', 'debug',
     'secret_key', 'encryption_key',
     'session_lifetime_hours', 'backup_retention',
-    'ai_provider', 'anthropic_api_key',
+    'ai_provider', 'anthropic_api_key', 'gemini_api_key', 'openai_api_key',
     'ai_import_model', 'ai_email_model', 'ai_verifiche_model',
     'ai_local_base_url', 'ai_local_model',
+    'default_ai_provider',
     'email_check_interval_minutes',
     'imap_enabled', 'imap_account', 'imap_password', 'imap_server', 'imap_port', 'imap_ssl',
     'alert_email_enabled', 'alert_email_to',
     'smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_use_tls',
-    'single_struttura',
+    'single_struttura', 'force_https', 'cloudflare_mode',
 })
 
 
@@ -664,11 +665,21 @@ def create_app():
     @app.route('/uploads/<path:filename>')
     @auth_login_required
     def uploaded_file(filename):
+        import re
         from flask import send_from_directory, abort as _abort
         uploads_path = app.config['UPLOADS_PATH']
         resolved = os.path.realpath(os.path.join(uploads_path, filename))
         if not resolved.startswith(os.path.realpath(uploads_path) + os.sep):
             _abort(403)
+        # Multi-tenant: verify caller has access to the struttura owning this file
+        m = re.match(r'^strutture/(\d+)/', filename)
+        if m:
+            file_struttura_id = int(m.group(1))
+            ruolo = g.user.get('ruolo')
+            if ruolo != 'superadmin':
+                user_struttura_id = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
+                if user_struttura_id != file_struttura_id:
+                    _abort(403)
         return send_from_directory(uploads_path, filename)
 
     return app
