@@ -813,7 +813,7 @@ def backup_ripristina(filename):
 
 
 @admin_bp.route('/backup/<filename>/elimina', methods=['POST'])
-@admin_required
+@superadmin_required
 def backup_elimina(filename):
     """Delete a backup file."""
     from backup_service import delete_backup
@@ -942,6 +942,9 @@ def reset_parziale():
         # Le tabelle figlie vengono svuotate prima delle tabelle padre.
         # I nomi tabella sono costanti hardcoded, non input utente.
         db = get_db()
+        # Log prima di cancellare — dopo il DELETE FROM log_attivita la voce sarebbe persa
+        log_attivita(g.user['id'], 'reset_parziale', 'database', None,
+                     f"Reset parziale DB. Backup: {backup_result['filename']}", request.remote_addr)
         db.execute("DELETE FROM import_preview")
         db.execute("DELETE FROM import_history")
         db.execute("DELETE FROM documenti")
@@ -951,9 +954,6 @@ def reset_parziale():
         db.execute("DELETE FROM email_config")
         db.execute("DELETE FROM log_attivita")
         db.commit()
-
-        log_attivita(g.user['id'], 'reset_parziale', 'database', None,
-                     f"Reset parziale DB. Backup: {backup_result['filename']}", request.remote_addr)
 
         flash(
             f'Reset parziale completato. Backup salvato: <strong>{backup_result["filename"]}</strong>. '
@@ -1321,9 +1321,11 @@ def tecnico_elimina(id):
     for tbl, col in [
         ('log_attivita',   'utente_id'),
         ('apparecchi',     'created_by'),
+        ('apparecchi',     'updated_by'),
         ('manutenzioni',   'created_by'),
         ('manutenzioni',   'updated_by'),
         ('verifiche',      'created_by'),
+        ('verifiche',      'updated_by'),
         ('documenti',      'uploaded_by'),
         ('accessori',      'created_by'),
         ('import_history', 'imported_by'),
