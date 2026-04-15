@@ -606,6 +606,9 @@ def modifica(id):
 @login_required
 def dismetti(id):
     """Soft-delete: set stato to 'dismesso'."""
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        flash('Non autorizzato a dismettere apparecchi.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
     struttura_id = getattr(g, 'struttura_id', None)
     apparecchio = query_one(
         "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",

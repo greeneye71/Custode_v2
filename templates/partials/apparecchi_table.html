@@ -73,7 +73,7 @@
                class="btn btn-outline-secondary btn-action" title="Modifica">
                 <i class="bi bi-pencil"></i>
             </a>
-            {% if a.stato != 'dismesso' %}
+            {% if a.stato != 'dismesso' and current_user.ruolo in ('admin', 'superadmin', 'tecnico') %}
             <button type="button" class="btn btn-outline-danger btn-action"
                     data-bs-toggle="modal" data-bs-target="#dismissModal"
                     data-name="{{ a.marca }} {{ a.modello }} ({{ a.matricola }})"
