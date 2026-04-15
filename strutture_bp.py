@@ -329,11 +329,18 @@ def modifica(struttura_id):
                  dati['note'], dati['modalita'], attiva, struttura_id)
             )
             _sync_divisioni_struttura(db, struttura_id, request.form)
-            # Invalida sessioni degli utenti se la struttura viene disattivata
+            # Cascade quando la struttura viene disattivata
             if not attiva:
+                # Invalida sessioni degli utenti della struttura
                 db.execute(
                     "DELETE FROM sessioni WHERE utente_id IN "
                     "(SELECT id FROM utenti WHERE struttura_id=?)",
+                    (struttura_id,)
+                )
+                # Disabilita email_config delle divisioni della struttura
+                db.execute(
+                    "UPDATE email_config SET attivo=0 WHERE divisione_id IN "
+                    "(SELECT id FROM divisioni WHERE struttura_id=?)",
                     (struttura_id,)
                 )
             db.commit()

@@ -47,13 +47,17 @@ def _check_utente_scope(utente):
 
 
 def _divisioni_per_struttura(struttura_id=None):
-    """Restituisce le divisioni attive. Se struttura_id fornito, filtra per struttura."""
+    """Restituisce le divisioni attive di strutture attive."""
     if struttura_id:
         return query_all(
             "SELECT * FROM divisioni WHERE attiva=1 AND struttura_id=? ORDER BY nome",
             (struttura_id,)
         )
-    return query_all("SELECT * FROM divisioni WHERE attiva=1 ORDER BY struttura_id, nome")
+    return query_all("""
+        SELECT d.* FROM divisioni d
+        JOIN strutture s ON s.id = d.struttura_id AND s.attiva = 1
+        WHERE d.attiva = 1 ORDER BY d.struttura_id, d.nome
+    """)
 
 
 def _assegna_divisioni(utente_id, divisioni_sel, struttura_id, ruolo):
