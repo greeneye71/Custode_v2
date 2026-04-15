@@ -567,6 +567,21 @@ def configurazione():
         else:
             config.pop('default_ai_provider', None)
 
+        # Chiavi API e parametri AI di default
+        for key in ('default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key'):
+            val = request.form.get(key, '').strip()
+            if val and val != '••••••••':
+                config[key] = val
+            elif not val:
+                config.pop(key, None)
+        for key in ('default_ai_local_base_url', 'default_ai_local_model',
+                    'default_ai_import_model', 'default_ai_email_model'):
+            val = request.form.get(key, '').strip()
+            if val:
+                config[key] = val
+            else:
+                config.pop(key, None)
+
         # IMAP email monitoring
         config['imap_enabled'] = bool(request.form.get('imap_enabled'))
         config['imap_account'] = request.form.get('imap_account', '').strip()
@@ -608,6 +623,8 @@ def configurazione():
     display_config = dict(config)
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
+    for _k in ('default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key'):
+        display_config[_k + '_set'] = bool(display_config.get(_k))
 
     return render_template('admin/configurazione.html', config=display_config,
                            ai_providers=AI_PROVIDERS)

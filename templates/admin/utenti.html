@@ -38,6 +38,8 @@
                             <span class="badge bg-danger">Superadmin</span>
                             {% elif u.ruolo == 'admin' %}
                             <span class="badge bg-primary">Admin</span>
+                            {% elif u.ruolo == 'tecnico' %}
+                            <span class="badge bg-info text-dark">Tecnico</span>
                             {% else %}
                             <span class="badge bg-secondary">Utente</span>
                             {% endif %}

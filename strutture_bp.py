@@ -253,12 +253,23 @@ def nuova():
                     (g.user['id'], struttura_id)
                 )
             db.commit()
-            # Seed AI provider di default dalla config globale
+            # Seed AI config di default dalla config globale
             from app import load_config as _load_config
             _cfg = _load_config()
-            _default_provider = _cfg.get('default_ai_provider')
-            if _default_provider:
-                set_struttura_config(struttura_id, 'ai_provider', _default_provider)
+            _ai_defaults_map = {
+                'default_ai_provider':       'ai_provider',
+                'default_anthropic_api_key': 'anthropic_api_key',
+                'default_gemini_api_key':    'gemini_api_key',
+                'default_openai_api_key':    'openai_api_key',
+                'default_ai_local_base_url': 'ai_local_base_url',
+                'default_ai_local_model':    'ai_local_model',
+                'default_ai_import_model':   'ai_import_model',
+                'default_ai_email_model':    'ai_email_model',
+            }
+            for _cfg_key, _struttura_key in _ai_defaults_map.items():
+                _val = _cfg.get(_cfg_key)
+                if _val:
+                    set_struttura_config(struttura_id, _struttura_key, _val)
             log_attivita(g.user['id'], 'crea', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" creata')
             log_attivita(g.user['id'], 'creazione', 'divisioni', divisione_id,

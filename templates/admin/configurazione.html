@@ -179,9 +179,10 @@
                 <div class="card-header"><i class="bi bi-robot me-1"></i> Intelligenza Artificiale — Default Nuove Strutture</div>
                 <div class="card-body">
                     <div class="row g-3">
-                        <div class="col-md-8">
+                        <div class="col-md-4">
                             <label class="form-label">Provider AI predefinito</label>
-                            <select class="form-select" name="default_ai_provider">
+                            <select class="form-select" name="default_ai_provider" id="default_ai_provider"
+                                    onchange="toggleDefaultAIFields()">
                                 <option value="">— Nessuno (non configurare) —</option>
                                 {% for pid, plabel in ai_providers %}
                                 <option value="{{ pid }}"
@@ -191,10 +192,55 @@
                                 {% endfor %}
                             </select>
                             <div class="form-text">
-                                Il provider selezionato viene impostato automaticamente come
-                                <code>ai_provider</code> nella configurazione di ogni nuova struttura creata.
-                                Le chiavi API vanno inserite poi nella configurazione della singola struttura.
+                                Applicato automaticamente ad ogni nuova struttura creata.
                             </div>
+                        </div>
+
+                        <div class="col-md-8" id="def_anthropic_key">
+                            <label class="form-label">Anthropic API Key</label>
+                            <input type="password" class="form-control" name="default_anthropic_api_key"
+                                   placeholder="{% if config.get('default_anthropic_api_key_set') %}Configurata — lascia vuoto per non modificare{% else %}sk-ant-api...{% endif %}">
+                        </div>
+
+                        <div class="col-md-8" id="def_gemini_key" style="display:none;">
+                            <label class="form-label">Google Gemini API Key</label>
+                            <input type="password" class="form-control" name="default_gemini_api_key"
+                                   placeholder="{% if config.get('default_gemini_api_key_set') %}Configurata — lascia vuoto per non modificare{% else %}AIza...{% endif %}">
+                        </div>
+
+                        <div class="col-md-8" id="def_openai_key" style="display:none;">
+                            <label class="form-label">OpenAI API Key</label>
+                            <input type="password" class="form-control" name="default_openai_api_key"
+                                   placeholder="{% if config.get('default_openai_api_key_set') %}Configurata — lascia vuoto per non modificare{% else %}sk-...{% endif %}">
+                        </div>
+
+                        <div class="col-md-6" id="def_local_url" style="display:none;">
+                            <label class="form-label">URL Server AI locale</label>
+                            <input type="text" class="form-control" name="default_ai_local_base_url"
+                                   value="{{ config.get('default_ai_local_base_url', '') }}"
+                                   placeholder="http://localhost:11434">
+                            <div class="form-text">Senza <code>/v1</code> finale</div>
+                        </div>
+
+                        <div class="col-md-6" id="def_local_model" style="display:none;">
+                            <label class="form-label">Modello AI locale</label>
+                            <input type="text" class="form-control" name="default_ai_local_model"
+                                   value="{{ config.get('default_ai_local_model', '') }}"
+                                   placeholder="Es. llama3.2">
+                        </div>
+
+                        <div class="col-md-6" id="def_import_model" style="display:none;">
+                            <label class="form-label">Modello Import Inventario</label>
+                            <input type="text" class="form-control" name="default_ai_import_model"
+                                   value="{{ config.get('default_ai_import_model', '') }}"
+                                   placeholder="Es. claude-sonnet-4-20250514">
+                        </div>
+
+                        <div class="col-md-6" id="def_email_model" style="display:none;">
+                            <label class="form-label">Modello Email e Verifiche</label>
+                            <input type="text" class="form-control" name="default_ai_email_model"
+                                   value="{{ config.get('default_ai_email_model', '') }}"
+                                   placeholder="Es. claude-haiku-4-5-20251001">
                         </div>
                     </div>
                 </div>
@@ -338,6 +384,26 @@
       action="{{ url_for('admin.reset_database') }}" style="display:none"></form>
 
 <script>
+function toggleDefaultAIFields() {
+    var p = document.getElementById('default_ai_provider').value;
+    var isCloud = ['anthropic','gemini','openai'].includes(p);
+    var isLocal = ['ollama','lmstudio','openai_compatible'].includes(p);
+    var show = function(id, v) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = v ? '' : 'none';
+    };
+    show('def_anthropic_key', p === 'anthropic');
+    show('def_gemini_key',    p === 'gemini');
+    show('def_openai_key',    p === 'openai');
+    show('def_local_url',     isLocal);
+    show('def_local_model',   isLocal);
+    show('def_import_model',  p !== '');
+    show('def_email_model',   p !== '');
+}
+(function () {
+    toggleDefaultAIFields();
+}());
+
 (function () {
     function wireModal(modalId, inputId, btnId, formId) {
         var input = document.getElementById(inputId);
