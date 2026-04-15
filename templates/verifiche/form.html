@@ -146,7 +146,7 @@
                 <a href="{{ url_for('verifiche.lista') }}" class="btn btn-outline-secondary">
                     <i class="bi bi-x-lg me-1"></i> Annulla
                 </a>
-                {% if verifica %}
+                {% if verifica and current_user.ruolo in ('admin', 'superadmin', 'tecnico') %}
                 <form method="POST" action="{{ url_for('verifiche.elimina', id=verifica.id) }}"
                       class="ms-auto"
                       onsubmit="return confirm('Eliminare questa verifica?')">

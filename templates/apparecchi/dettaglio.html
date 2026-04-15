@@ -375,6 +375,7 @@
                                            class="btn btn-sm btn-outline-secondary" title="Modifica">
                                             <i class="bi bi-pencil"></i>
                                         </a>
+                                        {% if current_user.ruolo in ('admin', 'superadmin', 'tecnico') %}
                                         <button type="button" class="btn btn-sm btn-outline-danger"
                                                 title="Elimina"
                                                 data-bs-toggle="modal"
@@ -383,6 +384,7 @@
                                                 data-verifica-data="{{ v.data_verifica }}">
                                             <i class="bi bi-trash"></i>
                                         </button>
+                                        {% endif %}
                                     </div>
                                 </td>
                             </tr>

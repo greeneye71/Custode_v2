@@ -330,10 +330,8 @@ def elimina(id):
         return redirect(url_for('verifiche.lista'))
 
     if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if verifica['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('verifiche.lista'))
+        flash('Non autorizzato a eliminare verifiche.', 'danger')
+        return redirect(url_for('verifiche.lista'))
 
     # Delete associated document file if present
     if verifica['documento_path']:
