@@ -84,6 +84,15 @@ def _validate_apparecchio(form_data, edit_id=None):
     else:
         try:
             data['divisione_id'] = int(data['divisione_id'])
+            # Verifica che la divisione appartenga alla struttura corrente
+            struttura_id = getattr(g, 'struttura_id', None)
+            if struttura_id is not None:
+                div_ok = query_one(
+                    "SELECT id FROM divisioni WHERE id = ? AND struttura_id = ?",
+                    (data['divisione_id'], struttura_id)
+                )
+                if not div_ok:
+                    errors['divisione_id'] = 'Divisione non valida.'
         except ValueError:
             errors['divisione_id'] = 'Divisione non valida.'
 

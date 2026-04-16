@@ -54,7 +54,14 @@ def _validate_manutenzione(form_data):
     else:
         try:
             data['apparecchio_id'] = int(data['apparecchio_id'])
-            app = query_one("SELECT id FROM apparecchi WHERE id = ?", (data['apparecchio_id'],))
+            struttura_id = getattr(g, 'struttura_id', None)
+            if struttura_id is not None:
+                app = query_one(
+                    "SELECT id FROM apparecchi WHERE id = ? AND struttura_id = ?",
+                    (data['apparecchio_id'], struttura_id)
+                )
+            else:
+                app = query_one("SELECT id FROM apparecchi WHERE id = ?", (data['apparecchio_id'],))
             if not app:
                 errors['apparecchio_id'] = "Apparecchio non trovato."
         except ValueError:

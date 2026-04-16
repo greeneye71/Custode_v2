@@ -682,13 +682,14 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                      data.get('note'), g.user['id'], row['apparecchio_match_id'])
                 )
             else:
-                # Deriva struttura_id dalla divisione selezionata
-                div_row = query_one(
-                    "SELECT struttura_id FROM divisioni WHERE id=?",
-                    (import_rec['divisione_id'],)
-                )
-                imp_struttura_id = (div_row['struttura_id'] if div_row
-                                    else getattr(g, 'struttura_id', None))
+                # struttura_id dalla sessione (authoritative); fallback query solo per superadmin
+                imp_struttura_id = getattr(g, 'struttura_id', None)
+                if imp_struttura_id is None:
+                    div_row = query_one(
+                        "SELECT struttura_id FROM divisioni WHERE id=?",
+                        (import_rec['divisione_id'],)
+                    )
+                    imp_struttura_id = div_row['struttura_id'] if div_row else None
                 execute(
                     """INSERT INTO apparecchi
                        (divisione_id, struttura_id, matricola, descrizione, numero_inventario,
