@@ -7,6 +7,104 @@
     <p class="text-muted mb-0">Impostazioni generali dell'applicazione</p>
 </div>
 
+{# ================================================================ #}
+{# Sezione AI — AJAX (fuori dal form principale)                  #}
+{# ================================================================ #}
+<div class="row g-4 mb-2">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-robot me-1"></i> Intelligenza Artificiale — Default Nuove Strutture</span>
+        <span id="def_ai_status_badge"></span>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+
+          <div class="col-md-4">
+            <label class="form-label">Provider AI predefinito</label>
+            <select class="form-select" id="default_ai_provider" onchange="toggleDefaultAIFields()">
+              <option value="">— Nessuno —</option>
+              {% for pid, plabel in ai_providers %}
+              <option value="{{ pid }}"
+                {% if config.get('default_ai_provider') == pid %}selected{% endif %}>
+                {{ plabel }}
+              </option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Applicato a ogni nuova struttura creata.</div>
+          </div>
+
+          <div class="col-md-8" id="def_anthropic_key">
+            <label class="form-label">Anthropic API Key</label>
+            <input type="password" class="form-control" id="def_api_key"
+                   placeholder="{{ 'Configurata — lascia vuoto per non modificare' if config.get('default_anthropic_api_key_set') else 'sk-ant-api...' }}">
+          </div>
+
+          <div class="col-md-8" id="def_gemini_key" style="display:none;">
+            <label class="form-label">Google Gemini API Key</label>
+            <input type="password" class="form-control" id="def_gemini_api_key"
+                   placeholder="{{ 'Configurata — lascia vuoto per non modificare' if config.get('default_gemini_api_key_set') else 'AIza...' }}">
+          </div>
+
+          <div class="col-md-8" id="def_openai_key" style="display:none;">
+            <label class="form-label">OpenAI API Key</label>
+            <input type="password" class="form-control" id="def_openai_api_key"
+                   placeholder="{{ 'Configurata — lascia vuoto per non modificare' if config.get('default_openai_api_key_set') else 'sk-...' }}">
+          </div>
+
+          <div class="col-md-6" id="def_local_url" style="display:none;">
+            <label class="form-label">URL Server AI locale</label>
+            <input type="text" class="form-control" id="def_local_base_url"
+                   value="{{ config.get('default_ai_local_base_url', '') }}"
+                   placeholder="http://localhost:11434">
+            <div class="form-text">Senza <code>/v1</code> finale</div>
+          </div>
+
+          <div class="col-md-6" id="def_local_model" style="display:none;">
+            <label class="form-label">Modello AI locale</label>
+            <input type="text" class="form-control" id="def_local_model_input"
+                   value="{{ config.get('default_ai_local_model', '') }}"
+                   placeholder="Es. llama3.2">
+          </div>
+
+          <div class="col-md-6" id="def_import_model_wrap" style="display:none;">
+            <label class="form-label">Modello Import Inventario</label>
+            <select class="form-select" id="def_import_model">
+              {% if config.get('default_ai_import_model') %}
+              <option value="{{ config.get('default_ai_import_model') }}" selected>{{ config.get('default_ai_import_model') }}</option>
+              {% else %}
+              <option value="">— esegui il test per vedere i modelli disponibili —</option>
+              {% endif %}
+            </select>
+          </div>
+
+          <div class="col-md-6" id="def_email_model_wrap" style="display:none;">
+            <label class="form-label">Modello Email e Verifiche</label>
+            <select class="form-select" id="def_email_model">
+              {% if config.get('default_ai_email_model') %}
+              <option value="{{ config.get('default_ai_email_model') }}" selected>{{ config.get('default_ai_email_model') }}</option>
+              {% else %}
+              <option value="">— esegui il test per vedere i modelli disponibili —</option>
+              {% endif %}
+            </select>
+          </div>
+
+          <div class="col-12" id="def_ai_test_result" style="display:none;"></div>
+
+          <div class="col-12" id="def_ai_actions" style="display:none;">
+            <button type="button" class="btn btn-primary" onclick="testSalvaDefaultAI()" id="btn_def_test_salva">
+              <span class="spinner-border spinner-border-sm me-1" role="status" style="display:none;" id="def_ai_spinner" aria-hidden="true"></span>
+              <i class="bi bi-lightning-charge me-1" id="def_ai_btn_icon"></i>
+              Test &amp; Salva configurazione AI
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <form method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="row g-4">
@@ -174,78 +272,6 @@
                     </div>
                 </div>
             </div>
-            {# AI Provider Default #}
-            <div class="card mb-4">
-                <div class="card-header"><i class="bi bi-robot me-1"></i> Intelligenza Artificiale — Default Nuove Strutture</div>
-                <div class="card-body">
-                    <div class="row g-3">
-                        <div class="col-md-4">
-                            <label class="form-label">Provider AI predefinito</label>
-                            <select class="form-select" name="default_ai_provider" id="default_ai_provider"
-                                    onchange="toggleDefaultAIFields()">
-                                <option value="">— Nessuno (non configurare) —</option>
-                                {% for pid, plabel in ai_providers %}
-                                <option value="{{ pid }}"
-                                    {% if config.get('default_ai_provider') == pid %}selected{% endif %}>
-                                    {{ plabel }}
-                                </option>
-                                {% endfor %}
-                            </select>
-                            <div class="form-text">
-                                Applicato automaticamente ad ogni nuova struttura creata.
-                            </div>
-                        </div>
-
-                        <div class="col-md-8" id="def_anthropic_key">
-                            <label class="form-label">Anthropic API Key</label>
-                            <input type="password" class="form-control" name="default_anthropic_api_key"
-                                   placeholder="{% if config.get('default_anthropic_api_key_set') %}Configurata — lascia vuoto per non modificare{% else %}sk-ant-api...{% endif %}">
-                        </div>
-
-                        <div class="col-md-8" id="def_gemini_key" style="display:none;">
-                            <label class="form-label">Google Gemini API Key</label>
-                            <input type="password" class="form-control" name="default_gemini_api_key"
-                                   placeholder="{% if config.get('default_gemini_api_key_set') %}Configurata — lascia vuoto per non modificare{% else %}AIza...{% endif %}">
-                        </div>
-
-                        <div class="col-md-8" id="def_openai_key" style="display:none;">
-                            <label class="form-label">OpenAI API Key</label>
-                            <input type="password" class="form-control" name="default_openai_api_key"
-                                   placeholder="{% if config.get('default_openai_api_key_set') %}Configurata — lascia vuoto per non modificare{% else %}sk-...{% endif %}">
-                        </div>
-
-                        <div class="col-md-6" id="def_local_url" style="display:none;">
-                            <label class="form-label">URL Server AI locale</label>
-                            <input type="text" class="form-control" name="default_ai_local_base_url"
-                                   value="{{ config.get('default_ai_local_base_url', '') }}"
-                                   placeholder="http://localhost:11434">
-                            <div class="form-text">Senza <code>/v1</code> finale</div>
-                        </div>
-
-                        <div class="col-md-6" id="def_local_model" style="display:none;">
-                            <label class="form-label">Modello AI locale</label>
-                            <input type="text" class="form-control" name="default_ai_local_model"
-                                   value="{{ config.get('default_ai_local_model', '') }}"
-                                   placeholder="Es. llama3.2">
-                        </div>
-
-                        <div class="col-md-6" id="def_import_model" style="display:none;">
-                            <label class="form-label">Modello Import Inventario</label>
-                            <input type="text" class="form-control" name="default_ai_import_model"
-                                   value="{{ config.get('default_ai_import_model', '') }}"
-                                   placeholder="Es. claude-sonnet-4-20250514">
-                        </div>
-
-                        <div class="col-md-6" id="def_email_model" style="display:none;">
-                            <label class="form-label">Modello Email e Verifiche</label>
-                            <input type="text" class="form-control" name="default_ai_email_model"
-                                   value="{{ config.get('default_ai_email_model', '') }}"
-                                   placeholder="Es. claude-haiku-4-5-20251001">
-                        </div>
-                    </div>
-                </div>
-            </div>
-
             {# Zona Pericolosa #}
             <div class="card mb-4 border-danger">
                 <div class="card-header bg-danger text-white">
@@ -384,25 +410,106 @@
       action="{{ url_for('admin.reset_database') }}" style="display:none"></form>
 
 <script>
+var _defTestAiUrl = "{{ url_for('admin.test_default_ai') }}";
+
 function toggleDefaultAIFields() {
     var p = document.getElementById('default_ai_provider').value;
     var isCloud = ['anthropic','gemini','openai'].includes(p);
     var isLocal = ['ollama','lmstudio','openai_compatible'].includes(p);
-    var show = function(id, v) {
+    function show(id, v) {
         var el = document.getElementById(id);
-        if (el) el.style.display = v ? '' : 'none';
-    };
-    show('def_anthropic_key', p === 'anthropic');
-    show('def_gemini_key',    p === 'gemini');
-    show('def_openai_key',    p === 'openai');
-    show('def_local_url',     isLocal);
-    show('def_local_model',   isLocal);
-    show('def_import_model',  p !== '');
-    show('def_email_model',   p !== '');
+        if (!el) return;
+        el.style.display = v ? '' : 'none';
+    }
+    show('def_anthropic_key',      p === 'anthropic');
+    show('def_gemini_key',         p === 'gemini');
+    show('def_openai_key',         p === 'openai');
+    show('def_local_url',          isLocal);
+    show('def_local_model',        isLocal);
+    show('def_import_model_wrap',  p !== '');
+    show('def_email_model_wrap',   p !== '');
+    show('def_ai_actions',         p !== '');
 }
-(function () {
-    toggleDefaultAIFields();
-}());
+
+function testSalvaDefaultAI() {
+    var provider = document.getElementById('default_ai_provider').value;
+    var payload = {
+        provider:        provider,
+        api_key:         (document.getElementById('def_api_key')          || {}).value || '',
+        gemini_api_key:  (document.getElementById('def_gemini_api_key')   || {}).value || '',
+        openai_api_key:  (document.getElementById('def_openai_api_key')   || {}).value || '',
+        local_base_url:  (document.getElementById('def_local_base_url')   || {}).value || '',
+        local_model:     (document.getElementById('def_local_model_input')|| {}).value || '',
+        ai_import_model: (document.getElementById('def_import_model')     || {}).value || '',
+        ai_email_model:  (document.getElementById('def_email_model')      || {}).value || '',
+    };
+
+    document.getElementById('def_ai_spinner').style.display  = '';
+    document.getElementById('def_ai_btn_icon').style.display = 'none';
+    document.getElementById('btn_def_test_salva').disabled   = true;
+    document.getElementById('def_ai_test_result').style.display = 'none';
+
+    fetch(_defTestAiUrl, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+        document.getElementById('def_ai_spinner').style.display  = 'none';
+        document.getElementById('def_ai_btn_icon').style.display = '';
+        document.getElementById('btn_def_test_salva').disabled   = false;
+
+        var div = document.getElementById('def_ai_test_result');
+        div.style.display = '';
+        if (result.ok) {
+            div.innerHTML = '<div class="alert alert-success py-2 mb-0"><i class="bi bi-check-circle me-1"></i>' + result.message + '</div>';
+            if (result.models && result.models.length > 0) {
+                populateDefModelSelect('def_import_model', result.models, payload.ai_import_model);
+                populateDefModelSelect('def_email_model',  result.models, payload.ai_email_model);
+            }
+        } else {
+            div.innerHTML = '<div class="alert alert-danger py-2 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>' + result.message + '</div>';
+        }
+    })
+    .catch(function(err) {
+        document.getElementById('def_ai_spinner').style.display  = 'none';
+        document.getElementById('def_ai_btn_icon').style.display = '';
+        document.getElementById('btn_def_test_salva').disabled   = false;
+        var div = document.getElementById('def_ai_test_result');
+        div.style.display = '';
+        div.innerHTML = '<div class="alert alert-danger py-2 mb-0">Errore di rete: ' + err + '</div>';
+    });
+}
+
+function populateDefModelSelect(selectId, models, currentValue) {
+    var select = document.getElementById(selectId);
+    var prev = currentValue || select.value;
+    select.innerHTML = '';
+    if (!prev) {
+        var ph = document.createElement('option');
+        ph.value = '';
+        ph.textContent = '— seleziona modello —';
+        select.appendChild(ph);
+    }
+    models.forEach(function(m) {
+        var opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        if (m === prev) opt.selected = true;
+        select.appendChild(opt);
+    });
+    if (prev && !models.includes(prev)) {
+        var custom = document.createElement('option');
+        custom.value = prev;
+        custom.textContent = prev + ' (personalizzato)';
+        custom.selected = true;
+        select.insertBefore(custom, select.firstChild);
+    }
+    if (!select.value && models.length > 0) select.value = models[0];
+}
+
+document.addEventListener('DOMContentLoaded', toggleDefaultAIFields);
 
 (function () {
     function wireModal(modalId, inputId, btnId, formId) {

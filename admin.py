@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, g, current_app, session as flask_session
+    flash, g, current_app, session as flask_session, jsonify
 )
 from werkzeug.security import generate_password_hash
 
@@ -632,6 +632,91 @@ def configurazione():
 
     return render_template('admin/configurazione.html', config=display_config,
                            ai_providers=AI_PROVIDERS)
+
+
+@admin_bp.route('/configurazione/test-ai', methods=['POST'])
+@admin_required
+def test_default_ai():
+    """Test the global default AI configuration. Saves AI fields and returns JSON with model list."""
+    import httpx
+    from app import load_config, save_config
+    from strutture_bp import (_fetch_anthropic_models, _fetch_gemini_models,
+                              _fetch_openai_models, _fetch_local_models)
+
+    data = request.json or {}
+    provider = (data.get('provider') or '').strip()
+
+    valid_providers = [p[0] for p in AI_PROVIDERS]
+    if provider not in valid_providers:
+        return jsonify({'ok': False, 'message': f'Provider non valido: {provider}', 'models': []}), 400
+
+    config = load_config()
+
+    # Salva provider
+    config['default_ai_provider'] = provider
+
+    # Modelli e URL locale
+    for cfg_key, payload_field in (
+        ('default_ai_import_model',   'ai_import_model'),
+        ('default_ai_email_model',    'ai_email_model'),
+        ('default_ai_local_base_url', 'local_base_url'),
+        ('default_ai_local_model',    'local_model'),
+    ):
+        val = (data.get(payload_field) or '').strip()
+        if val:
+            config[cfg_key] = val
+        else:
+            config.pop(cfg_key, None)
+
+    # Chiavi API (solo se fornite — non sovrascrivere se vuote)
+    for cfg_key, payload_field in (
+        ('default_anthropic_api_key', 'api_key'),
+        ('default_gemini_api_key',    'gemini_api_key'),
+        ('default_openai_api_key',    'openai_api_key'),
+    ):
+        val = (data.get(payload_field) or '').strip()
+        if val:
+            config[cfg_key] = val
+
+    save_config(config)
+
+    # Recupera chiavi attive (appena salvate o già presenti)
+    anthropic_key = config.get('default_anthropic_api_key', '')
+    gemini_key    = config.get('default_gemini_api_key', '')
+    openai_key    = config.get('default_openai_api_key', '')
+    base_url      = config.get('default_ai_local_base_url', '')
+
+    try:
+        if provider == 'anthropic':
+            if not anthropic_key:
+                return jsonify({'ok': False, 'message': 'Chiave API Anthropic non configurata.', 'models': []})
+            models = _fetch_anthropic_models(anthropic_key)
+        elif provider == 'gemini':
+            if not gemini_key:
+                return jsonify({'ok': False, 'message': 'Chiave API Google Gemini non configurata.', 'models': []})
+            models = _fetch_gemini_models(gemini_key)
+        elif provider == 'openai':
+            if not openai_key:
+                return jsonify({'ok': False, 'message': 'Chiave API OpenAI non configurata.', 'models': []})
+            models = _fetch_openai_models(openai_key)
+        else:
+            if not base_url:
+                return jsonify({'ok': False, 'message': 'URL server AI non configurato.', 'models': []})
+            models = _fetch_local_models(base_url)
+
+        log_attivita(g.user['id'], 'modifica', 'configurazione', None,
+                     f'Test AI default {provider}: OK, {len(models)} modelli', request.remote_addr)
+        return jsonify({
+            'ok': True,
+            'models': models,
+            'message': f'Connessione OK — {len(models)} modelli disponibili',
+        })
+
+    except httpx.HTTPStatusError as e:
+        return jsonify({'ok': False, 'models': [],
+                        'message': f'Errore HTTP {e.response.status_code}: chiave API non valida o accesso negato.'})
+    except Exception as e:
+        return jsonify({'ok': False, 'models': [], 'message': f'Errore: {str(e)[:200]}'})
 
 
 # ============================================================================
