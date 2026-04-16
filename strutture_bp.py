@@ -193,9 +193,7 @@ def _sync_divisioni_struttura(db, struttura_id, form):
 
 def _leggi_form_struttura(form):
     """Estrae e normalizza tutti i campi struttura dal form POST."""
-    modalita = form.get('modalita', 'standard')
-    if modalita not in ('standard', 'avanzata'):
-        modalita = 'standard'
+    modalita = 'avanzata'  # tutte le strutture sono sempre avanzate
     tipo = form.get('tipo', 'altro')
     if tipo not in _TIPI_STRUTTURA:
         tipo = 'altro'

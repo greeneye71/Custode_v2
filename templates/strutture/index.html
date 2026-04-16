@@ -12,7 +12,7 @@
     <table class="table table-hover mb-0">
       <thead class="table-light">
         <tr>
-          <th>Nome</th><th>Codice</th><th>Modalità</th>
+          <th>Nome</th><th>Codice</th>
           <th class="text-center">Divisioni</th>
           <th class="text-center">Utenti</th>
           <th class="text-center">Apparecchi</th>
@@ -25,13 +25,6 @@
         <tr>
           <td>{{ s.nome }}</td>
           <td><code>{{ s.codice }}</code></td>
-          <td>
-            {% if s.modalita == 'avanzata' %}
-              <span class="badge bg-primary">Avanzata</span>
-            {% else %}
-              <span class="badge bg-secondary">Standard</span>
-            {% endif %}
-          </td>
           <td class="text-center">{{ s.num_divisioni }}</td>
           <td class="text-center">{{ s.num_utenti }}</td>
           <td class="text-center">{{ s.num_apparecchi }}</td>

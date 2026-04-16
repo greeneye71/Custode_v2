@@ -52,15 +52,6 @@
               <textarea class="form-control" name="descrizione" rows="2" placeholder="Descrizione opzionale">{{ struttura.get('descrizione', '') if struttura else '' }}</textarea>
             </div>
 
-            <div class="col-md-6">
-              <label class="form-label">Modalità operativa</label>
-              <select class="form-select" name="modalita">
-                <option value="standard" {% if not struttura or struttura.get('modalita', 'standard') == 'standard' %}selected{% endif %}>Standard</option>
-                <option value="avanzata" {% if struttura and struttura.get('modalita') == 'avanzata' %}selected{% endif %}>Avanzata</option>
-              </select>
-              <div class="form-text"><strong>Avanzata</strong>: abilita QR code, log attività, verifiche elettriche e API.</div>
-            </div>
-
             {% if struttura and struttura.get('id') %}
             <div class="col-md-6 d-flex align-items-end pb-1">
               <div class="form-check">

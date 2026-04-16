@@ -213,7 +213,7 @@ def _load_user_from_session():
     g.struttura = struttura
     g.struttura_id = struttura['id'] if struttura else None
     g.struttura_nome = struttura['nome'] if struttura else None
-    g.struttura_modalita = struttura['modalita'] if struttura else 'standard'
+    g.struttura_modalita = 'avanzata'  # tutte le strutture sono sempre avanzate
     g.is_superadmin_impersonating = (
         g.user['ruolo'] == 'superadmin' and struttura is not None
     )
