@@ -537,7 +537,6 @@ def configurazione():
         # Update config from form
         config['app_name'] = request.form.get('app_name', 'MedInventory').strip()
         config['organization'] = request.form.get('organization', 'Studio Bergamaschi').strip()
-        config['structure_name'] = request.form.get('structure_name', '').strip()
 
         port = request.form.get('port', '5000').strip()
         try:
@@ -562,29 +561,6 @@ def configurazione():
             config['backup_retention'] = int(retention)
         except ValueError:
             pass
-
-        # AI provider di default per nuove strutture
-        default_provider = request.form.get('default_ai_provider', '').strip()
-        valid_providers = [p[0] for p in AI_PROVIDERS]
-        if default_provider in valid_providers:
-            config['default_ai_provider'] = default_provider
-        else:
-            config.pop('default_ai_provider', None)
-
-        # Chiavi API e parametri AI di default
-        for key in ('default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key'):
-            val = request.form.get(key, '').strip()
-            if val and val != '••••••••':
-                config[key] = val
-            elif not val:
-                config.pop(key, None)
-        for key in ('default_ai_local_base_url', 'default_ai_local_model',
-                    'default_ai_import_model', 'default_ai_email_model'):
-            val = request.form.get(key, '').strip()
-            if val:
-                config[key] = val
-            else:
-                config.pop(key, None)
 
         # IMAP email monitoring
         config['imap_enabled'] = bool(request.form.get('imap_enabled'))
