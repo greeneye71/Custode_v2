@@ -462,7 +462,7 @@ def logout_ovunque():
     """Revoca tutte le sessioni di tutti gli utenti della struttura corrente (struttura-wide)."""
     if not g.struttura_id:
         flash('Nessuna struttura attiva.', 'warning')
-        return redirect(url_for('auth.index'))
+        return redirect(url_for('index'))
     execute(
         "DELETE FROM sessioni WHERE utente_id IN (SELECT id FROM utenti WHERE struttura_id = ?)",
         (g.struttura_id,)
