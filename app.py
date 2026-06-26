@@ -376,6 +376,10 @@ def create_app():
 
     from api_bp import api_bp
     app.register_blueprint(api_bp)
+    # API REST: autenticazione via Bearer token (non cookie), quindi non
+    # soggetta a CSRF. Senza questa esenzione i POST a /api/v1/* verrebbero
+    # rifiutati da CSRFProtect con 400 (token mancante).
+    csrf.exempt(api_bp)
 
     # ---------------------------------------------------------------------------
     # Root route -> Dashboard
