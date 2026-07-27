@@ -371,6 +371,9 @@ def create_app():
     from export_bp import export_bp
     app.register_blueprint(export_bp)
 
+    from stampe_bp import stampe_bp
+    app.register_blueprint(stampe_bp)
+
     from verifiche import verifiche_bp
     app.register_blueprint(verifiche_bp)
 
