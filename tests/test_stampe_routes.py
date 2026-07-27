@@ -3,6 +3,7 @@ import io
 from datetime import date, timedelta
 
 import pytest
+from openpyxl import load_workbook
 from pypdf import PdfReader
 from werkzeug.security import generate_password_hash
 
@@ -299,3 +300,93 @@ def test_scadute_e_in_scadenza_sono_complementari_intorno_a_oggi(client, app, da
     # essere finita proprio fra le scadute e quella di oggi proprio fra le
     # in scadenza, non entrambe nella stessa sezione per un altro bug.
     assert 'Totale: 1 scadute, 1 in scadenza' in testo
+
+
+FOGLIO = ('application/vnd.openxmlformats-officedocument'
+          '.spreadsheetml.sheet')
+
+
+def test_inventario_in_excel(client, dati):
+    entra(client, 'admin@a.it')
+    risposta = client.get('/stampe/inventario?divisione_id=tutte&formato=excel')
+    assert risposta.status_code == 200
+    assert risposta.mimetype == FOGLIO
+    assert risposta.data[:2] == b'PK'   # xlsx e' un archivio zip
+
+
+def test_scadenze_in_excel(client, dati):
+    entra(client, 'admin@a.it')
+    risposta = client.get('/stampe/scadenze/manutenzioni'
+                          '?divisione_id=tutte&periodo=30g&formato=excel')
+    assert risposta.mimetype == FOGLIO
+    assert risposta.data[:2] == b'PK'
+
+
+def test_lo_scope_vale_anche_per_excel(client, dati):
+    entra(client, 'utente@a.it')
+    risposta = client.get(f"/stampe/inventario?divisione_id={dati['d2']}&formato=excel")
+    assert risposta.data[:2] != b'PK'
+
+
+def _valori_foglio(dati_xlsx):
+    """Tutti i valori delle celle del foglio attivo, appiattiti in un insieme
+    di stringhe: comodo per verificare presenza/assenza di una matricola
+    senza dover conoscere l'esatta cella in cui finisce."""
+    wb = load_workbook(io.BytesIO(dati_xlsx))
+    ws = wb.active
+    return {str(cella.value) for riga in ws.iter_rows() for cella in riga
+            if cella.value is not None}
+
+
+def test_excel_inventario_contiene_solo_le_righe_in_ambito(client, dati):
+    """Stessa garanzia di test_utente_vede_solo_la_propria_divisione_nell_inventario_generale,
+    ma sul foglio Excel: leggere davvero il contenuto, non fermarsi al
+    formato del file (b'PK' dimostra solo che e' uno zip)."""
+    entra(client, 'utente@a.it')
+    risposta = client.get('/stampe/inventario?divisione_id=tutte&formato=excel')
+    assert risposta.status_code == 200
+    valori = _valori_foglio(risposta.data)
+    assert 'OCU-1' in valori
+    assert 'CAR-1' not in valori
+    assert 'DIS-DIV-1' not in valori
+
+
+def test_excel_inventario_admin_vede_tutta_la_struttura(client, dati):
+    """Simmetrico al precedente: per admin l'ambito 'tutte' e' l'intera
+    struttura (comprese le divisioni disattivate), non oltre."""
+    entra(client, 'admin@a.it')
+    risposta = client.get('/stampe/inventario?divisione_id=tutte&formato=excel')
+    valori = _valori_foglio(risposta.data)
+    assert 'OCU-1' in valori
+    assert 'CAR-1' in valori
+    assert 'DIS-DIV-1' in valori
+    assert 'ALT-1' not in valori
+
+
+def test_excel_scadenze_separa_scadute_e_in_scadenza(client, app, dati):
+    """Il foglio delle scadenze ha una colonna 'Stato': verifica che le
+    scadute e le in-scadenza finiscano davvero nella riga giusta, non solo
+    che compaiano da qualche parte nel file."""
+    from models import execute
+    oggi = date.today()
+    ieri = oggi - timedelta(days=1)
+    with app.app_context():
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='OCU-1'),"
+            "'preventiva', date('now','-1 year'), ?)", (ieri.isoformat(),))
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='CAR-1'),"
+            "'preventiva', date('now','-1 year'), ?)", (oggi.isoformat(),))
+    entra(client, 'admin@a.it')
+
+    risposta = client.get('/stampe/scadenze/manutenzioni'
+                          '?divisione_id=tutte&periodo=30g&formato=excel')
+    assert risposta.status_code == 200
+    wb = load_workbook(io.BytesIO(risposta.data))
+    ws = wb.active
+    righe = list(ws.iter_rows(min_row=4, values_only=True))
+    mappa_stato = {riga[3]: riga[0] for riga in righe}  # Matricola -> Stato
+    assert mappa_stato['OCU-1'] == 'Scaduta'
+    assert mappa_stato['CAR-1'] == 'In scadenza'

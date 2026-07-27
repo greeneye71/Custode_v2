@@ -101,6 +101,13 @@ def _pdf(contenuto, nome_file):
                      as_attachment=True, download_name=f'{nome_file}.pdf')
 
 
+def _excel(buffer, nome_file):
+    return send_file(
+        buffer,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True, download_name=f'{nome_file}.xlsx')
+
+
 @stampe_bp.route('', strict_slashes=False)
 @login_required
 def index():
@@ -153,8 +160,12 @@ def inventario():
 
     contesto = _contesto_base('Inventario apparecchi elettromedicali', ambito,
                               raggruppa=raggruppa)
-    return _pdf(stampa_inventario(righe, contesto),
-                _nome_file('inventario', nome_divisione))
+    nome = _nome_file('inventario', nome_divisione)
+    if request.args.get('formato') == 'excel':
+        from export_service import stampa_inventario_excel
+        titolo = 'Inventario apparecchi elettromedicali'
+        return _excel(stampa_inventario_excel(righe, titolo), nome)
+    return _pdf(stampa_inventario(righe, contesto), nome)
 
 
 TIPI_SCADENZA = {
@@ -259,5 +270,8 @@ def scadenze(tipo):
         titolo, ambito,
         fine_periodo=datetime.strptime(fine, '%Y-%m-%d').strftime('%d/%m/%Y'),
         mostra_spunta=request.args.get('spunta') == '1')
-    return _pdf(stampa_scadenze(scadute, in_scadenza, contesto),
-                _nome_file(f'scadenze-{tipo}', nome_divisione))
+    nome = _nome_file(f'scadenze-{tipo}', nome_divisione)
+    if request.args.get('formato') == 'excel':
+        from export_service import stampa_scadenze_excel
+        return _excel(stampa_scadenze_excel(scadute, in_scadenza, titolo), nome)
+    return _pdf(stampa_scadenze(scadute, in_scadenza, contesto), nome)

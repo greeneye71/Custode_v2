@@ -407,6 +407,69 @@ def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_na
     return buffer
 
 
+def _foglio_semplice(titolo, intestazioni, righe_valori):
+    """Foglio piano con intestazione formattata e colonne dimensionate.
+
+    Niente raggruppamenti: in Excel si filtra e si ordina da soli, quindi la
+    divisione e' una colonna e non una sezione.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = titolo[:31]
+
+    ws.cell(row=1, column=1, value=titolo).font = Font(bold=True, size=13)
+
+    for colonna, etichetta in enumerate(intestazioni, start=1):
+        cella = ws.cell(row=3, column=colonna, value=etichetta)
+        cella.font = Font(bold=True, color='FFFFFF')
+        cella.fill = PatternFill(start_color='0EA5E9', end_color='0EA5E9',
+                                 fill_type='solid')
+        cella.alignment = Alignment(horizontal='center')
+
+    for indice, valori in enumerate(righe_valori, start=4):
+        for colonna, valore in enumerate(valori, start=1):
+            ws.cell(row=indice, column=colonna, value=valore)
+
+    for colonna, etichetta in enumerate(intestazioni, start=1):
+        larghezza = max([len(str(etichetta))] +
+                        [len(str(v[colonna - 1] or '')) for v in righe_valori] or [10])
+        ws.column_dimensions[ws.cell(row=3, column=colonna).column_letter].width = \
+            min(max(larghezza + 2, 12), 40)
+
+    ws.auto_filter.ref = f"A3:{ws.cell(row=3, column=len(intestazioni)).column_letter}" \
+                         f"{max(3, len(righe_valori) + 3)}"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def stampa_inventario_excel(righe, titolo):
+    """Foglio con lo stesso inventario del PDF: stesse righe, stesso ordine."""
+    intestazioni = ['Marca', 'Modello', 'Matricola', 'Ubicazione', 'Divisione']
+    valori = [[r.get('marca'), r.get('modello'), r.get('matricola'),
+               r.get('ubicazione'), r.get('divisione_nome')] for r in righe]
+    return _foglio_semplice(titolo, intestazioni, valori)
+
+
+def stampa_scadenze_excel(scadute, in_scadenza, titolo):
+    """Foglio con le stesse scadenze del PDF: prima le scadute, poi le altre."""
+    intestazioni = ['Stato', 'Marca', 'Modello', 'Matricola', 'Ubicazione',
+                    'Divisione', 'Scadenza', 'Giorni']
+    valori = []
+    for stato, gruppo in (('Scaduta', scadute), ('In scadenza', in_scadenza)):
+        for r in gruppo:
+            valori.append([stato, r.get('marca'), r.get('modello'),
+                           r.get('matricola'), r.get('ubicazione'),
+                           r.get('divisione_nome'), r.get('prossima_scadenza'),
+                           r.get('giorni_rimasti')])
+    return _foglio_semplice(titolo, intestazioni, valori)
+
+
 def genera_report_scadenze_pdf(struttura_id, output_path):
     """Genera un PDF con lo scadenzario per struttura e lo salva in output_path."""
     from models import query_all, query_one
