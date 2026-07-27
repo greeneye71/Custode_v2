@@ -26,13 +26,20 @@ def _assert_rifiuto_pulito(client, url, messaggio):
 
 @pytest.fixture
 def dati(app):
-    """Due strutture, due divisioni nella prima, un utente assegnato a una sola."""
+    """Due strutture, tre divisioni nella prima (una disattivata), un utente
+    assegnato a una sola. Serve a coprire due confini distinti del filtro
+    'tutte le divisioni' per admin/tecnico/superadmin (a.struttura_id = ?):
+    che non sconfini nella struttura B (dx/ALT-1) e che includa anche le
+    divisioni disattivate della propria struttura (d3/DIS-DIV-1), che
+    restano fuori da g.divisioni ma sono comunque nell'ambito della
+    struttura."""
     from models import execute
     with app.app_context():
         s1 = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica A','A',1)").lastrowid
         s2 = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica B','B',1)").lastrowid
         d1 = execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Oculistica','OCU',?)", (s1,)).lastrowid
         d2 = execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Cardiologia','CAR',?)", (s1,)).lastrowid
+        d3 = execute("INSERT INTO divisioni (nome,codice,struttura_id,attiva) VALUES ('Dismessa','DIS',?,0)", (s1,)).lastrowid
         dx = execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Altrui','ALT',?)", (s2,)).lastrowid
         hash_pw = generate_password_hash('Passw0rd!')
         execute(
@@ -47,7 +54,11 @@ def dati(app):
                 "VALUES (?,?,'OCU-1','REXXAM','OZY','funzionante','Sala 1')", (d1, s1))
         execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
                 "VALUES (?,?,'CAR-1','GE','B40','funzionante','Sala 2')", (d2, s1))
-    return {'s1': s1, 's2': s2, 'd1': d1, 'd2': d2, 'dx': dx}
+        execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
+                "VALUES (?,?,'DIS-DIV-1','DRAGER','X1','funzionante','Magazzino')", (d3, s1))
+        execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
+                "VALUES (?,?,'ALT-1','SIEMENS','Y1','funzionante','Sala X')", (dx, s2))
+    return {'s1': s1, 's2': s2, 'd1': d1, 'd2': d2, 'd3': d3, 'dx': dx}
 
 
 def entra(client, email):
@@ -93,24 +104,33 @@ def test_divisione_inesistente_non_produce_un_pdf(client, dati):
 
 def test_utente_vede_solo_la_propria_divisione_nell_inventario_generale(client, dati):
     """Garanzia centrale: per il ruolo 'utente', 'tutte le divisioni' significa
-    solo le sue, non l'intera struttura."""
+    solo le sue, non l'intera struttura ne', a maggior ragione, una divisione
+    disattivata a cui non e' assegnato."""
     entra(client, 'utente@a.it')
     risposta = client.get('/stampe/inventario?divisione_id=tutte')
     assert risposta.status_code == 200
     testo = testo_di(risposta.data)
     assert 'OCU-1' in testo
     assert 'CAR-1' not in testo
+    assert 'DIS-DIV-1' not in testo
 
 
 def test_admin_vede_tutte_le_divisioni_nell_inventario_generale(client, dati):
     """Simmetrico al precedente: per admin/tecnico/superadmin 'tutte le
-    divisioni' significa l'intera struttura."""
+    divisioni' significa l'intera struttura (a.struttura_id = ?), non
+    l'elenco di g.divisioni. Percio' deve includere anche una divisione
+    disattivata della propria struttura (DIS-DIV-1, che non compare in
+    g.divisioni ma resta nell'ambito 'struttura'), e deve fermarsi al
+    confine della struttura: un apparecchio di un'altra struttura (ALT-1)
+    non deve mai comparire."""
     entra(client, 'admin@a.it')
     risposta = client.get('/stampe/inventario?divisione_id=tutte')
     assert risposta.status_code == 200
     testo = testo_di(risposta.data)
     assert 'OCU-1' in testo
     assert 'CAR-1' in testo
+    assert 'DIS-DIV-1' in testo
+    assert 'ALT-1' not in testo
 
 
 def test_superadmin_senza_struttura_riceve_una_spiegazione(client, app, dati):

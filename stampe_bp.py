@@ -43,13 +43,19 @@ def _divisione_in_scope(divisione_id):
 def _filtro_tutte_le_divisioni():
     """Clausola SQL e parametri per l'ambito 'tutte le divisioni'.
 
-    Allineato al criterio di apparecchi._get_divisione_filter(): per i ruoli
-    con visibilita' su tutta la struttura (admin, tecnico, superadmin) filtra
-    per struttura_id, cosi' l'inventario stampato include anche le divisioni
-    disattivate (che restano fuori da g.divisioni ma sono comunque visibili a
-    video). Per l'utente 'tutte le divisioni' resta l'elenco di quelle
-    assegnate. struttura_id viene sempre da g.struttura_id, mai da un
-    parametro dell'URL: l'isolamento fra strutture resta invariato.
+    Segue la tabella di ambito della specifica: per admin, tecnico e
+    superadmin 'tutte le divisioni' significa l'intera struttura, quindi
+    filtra per struttura_id; per l'utente resta l'elenco delle sole
+    divisioni assegnate. Il filtro per struttura_id include anche le
+    divisioni disattivate della struttura (che restano fuori da g.divisioni
+    ma sono comunque nell'ambito 'struttura'), cosi' l'inventario stampato
+    non perde apparecchi che invece compaiono a video. struttura_id viene
+    sempre da g.struttura_id, mai da un parametro dell'URL: l'isolamento fra
+    strutture resta invariato.
+
+    Nota: questo non e' lo stesso criterio di apparecchi._get_divisione_filter(),
+    che onora prima g.divisione_attiva e mette il superadmin nel ramo delle
+    divisioni anziche' in quello della struttura.
 
     Restituisce (None, []) se non c'e' alcun ambito su cui stampare.
     """
