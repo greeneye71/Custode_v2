@@ -120,9 +120,44 @@ def test_inventario_raggruppato_apre_una_sezione_per_divisione():
     testo = testo_di(pdf)
     assert 'Oculistica' in testo
     assert 'Cardiologia' in testo
-    # Due apparecchi in Oculistica, uno in Cardiologia
-    assert 'Totale divisione: 2' in testo
-    assert 'Totale divisione: 1' in testo
+
+    # Non basta che i due conteggi compaiano da qualche parte nel testo:
+    # devono comparire nella sezione della divisione giusta. Le sezioni sono
+    # ordinate alfabeticamente, quindi 'Cardiologia' precede 'Oculistica' nel
+    # testo estratto: isoliamo i due segmenti e controlliamo il conteggio
+    # dentro ciascuno, cosi' uno scambio fra le due divisioni fa fallire
+    # il test invece di passare inosservato.
+    posizione_cardiologia = testo.index('Cardiologia')
+    posizione_oculistica = testo.index('Oculistica')
+    assert posizione_cardiologia < posizione_oculistica
+
+    segmento_cardiologia = testo[posizione_cardiologia:posizione_oculistica]
+    segmento_oculistica = testo[posizione_oculistica:]
+
+    # Un apparecchio in Cardiologia, due in Oculistica (vedi righe_inventario)
+    assert 'Totale divisione: 1' in segmento_cardiologia
+    assert 'Totale divisione: 2' in segmento_oculistica
+    assert 'Totale divisione: 2' not in segmento_cardiologia
+    assert 'Totale divisione: 1' not in segmento_oculistica
+
+
+def test_inventario_raggruppato_gestisce_la_sezione_senza_divisione():
+    """Le righe prive di divisione_nome (assente o stringa vuota) devono
+    confluire nella sezione 'Senza divisione' (vedi il fallback in
+    stampa_inventario) senza far fallire la generazione del PDF."""
+    righe = righe_inventario() + [
+        {'marca': 'ACME', 'modello': 'Z1', 'matricola': 'Z-001',
+         'ubicazione': 'Magazzino', 'divisione_nome': ''},
+    ]
+    pdf = stampa_inventario(righe, contesto_minimo(raggruppa=True))
+    testo = testo_di(pdf)
+    assert 'Senza divisione' in testo
+
+    # 'Senza divisione' e' alfabeticamente successiva alle altre sezioni:
+    # il suo conteggio deve comparire dopo il titolo della sezione stessa.
+    posizione_senza_divisione = testo.index('Senza divisione')
+    segmento = testo[posizione_senza_divisione:]
+    assert 'Totale divisione: 1' in segmento
 
 
 def test_inventario_vuoto_produce_il_foglio_nessun_dato():
