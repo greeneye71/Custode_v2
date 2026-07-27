@@ -1,6 +1,7 @@
 # Configurazione (contiene chiavi crittografiche e credenziali)
 config.json
 config.local.json
+config.json.bak_*
 
 # Virtual environment
 venv/

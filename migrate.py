@@ -1281,6 +1281,12 @@ def apply_all(conn, db_path, config, pending):
             print(f'\n  Migrazione {m.id}: {m.desc}')
         try:
             m.apply(conn, config)
+            # Ogni migrazione porta il proprio codice (v2.3 → 230), ma solo v1.4
+            # e v2.0 lo scrivevano: un database portato a v2.3 continuava a
+            # dichiararsi 200. Allineiamo user_version alla migrazione applicata.
+            if get_user_version(conn) < m.version:
+                conn.execute(f"PRAGMA user_version = {m.version}")
+                conn.commit()
             ok(f'  Migrazione {m.id} completata')
         except Exception as e:
             err(f'  Migrazione {m.id} FALLITA: {e}')

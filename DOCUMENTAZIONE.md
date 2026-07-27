@@ -1,7 +1,7 @@
 # MedInventory - Documentazione
 
 **Gestione Apparecchi Elettromedicali**
-*Versione 1.4.3 - by Studio Bergamaschi*
+*Versione 2.4.0 - by Studio Bergamaschi*
 
 ---
 

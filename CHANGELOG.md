@@ -6,6 +6,120 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.4.0] - 2026-07-27
+
+Release dedicata all'isolamento fra strutture, alla migrazione da installazioni
+v1.x e a una serie di funzioni che risultavano rotte in esercizio. Tutte le
+correzioni sono state verificate eseguendo l'applicazione, non solo per lettura
+del codice.
+
+### Aggiunto
+
+- **`importa_installazione.py`** — strumento da riga di comando che assorbe
+  un'altra installazione MedInventory in questa, come nuova struttura, allegati
+  compresi. Pensato per far confluire un'installazione monostruttura già in
+  esercizio dentro un deployment multi-struttura.
+  - La sorgente non viene mai modificata: si legge uno snapshot preso con
+    `sqlite3.backup()` da connessione read-only, coerente anche a installazione
+    accesa.
+  - Regge sorgenti di **versioni diverse**: le colonne si risolvono per
+    introspezione più una mappa di rinomini noti (`codice_interno` →
+    `descrizione`), le assenti prendono un default, le sconosciute vengono
+    segnalate, i valori fuori dai vincoli `CHECK` normalizzati ed elencati.
+  - `--dry-run` mostra il piano senza scrivere; backup automatico del database
+    di destinazione prima della prima scrittura; import in transazione unica,
+    con rimozione dei file copiati in caso di rollback.
+  - Idempotente: ogni entità ha una chiave naturale, quindi una seconda
+    esecuzione con `--in-struttura` non duplica nulla. Creare una struttura con
+    un nome già esistente viene rifiutato, indicando le alternative.
+  - Opzioni: `--struttura-nome`, `--in-struttura`, `--con-log`, `--con-config`,
+    `--con-import-history`, `--senza-file`, `--senza-utenti`,
+    `--reset-password`, `--se-esiste`, `--report`, `--target`, `--db`,
+    `--uploads`.
+- **`models.apparecchio_accessibile()`** — verifica in un punto solo struttura e
+  divisione di un apparecchio, da usare prima di servire o scrivere qualsiasi
+  cosa a esso collegata.
+- **`auth.operazione_globale_required`** — decoratore per le operazioni che
+  agiscono sull'intero database. Le installazioni a struttura singola mantengono
+  l'accesso da parte dell'admin.
+- **`import_history.struttura_id`** — colonna esplicita per l'isolamento degli
+  import (migrazione idempotente con backfill).
+
+### Sicurezza — isolamento fra strutture
+
+- **Download accessibili da altre strutture**: documenti apparecchio, verbali di
+  manutenzione, documenti di verifica e QR code venivano serviti conoscendo il
+  solo id. Ora passano tutti da `apparecchio_accessibile()`. Il download dei
+  documenti di verifica era anche privo del controllo di path traversal.
+- **Import leggibili ed eseguibili da altre strutture**: le rotte di anteprima,
+  stato, esecuzione e coda email non verificavano la proprietà del record. Ora
+  passano da `get_import_in_scope()`. L'isolamento non poteva basarsi su
+  `divisione_id`, che è NULL per gli import da email: da qui la nuova colonna
+  `struttura_id`.
+- **Elenchi non filtrati**: divisioni nell'import verifiche, abbinamento per
+  matricola, e la tendina apparecchi mostrata all'admin includevano dati di
+  tutte le strutture.
+- **Override dal form non validati** per admin e superadmin: l'`apparecchio_id`
+  scelto a mano ora viene verificato per ogni ruolo.
+- **Operazioni globali esposte all'admin di struttura**: backup, download del
+  backup, ripristino, azzeramento totale e parziale, configurazione globale e
+  chiavi AI di default erano dietro `@admin_required`. Un admin di una struttura
+  poteva scaricare o cancellare i dati di tutti gli altri.
+- **Scritture fuori dalle divisioni assegnate**: un utente poteva creare o
+  spostare record in reparti a cui non aveva accesso.
+- **Allegati fuori dall'area isolata**: gli upload di import, verbali e verifiche
+  generati dall'AI finivano in cartelle non scoped, mentre `/uploads/<path>` sa
+  isolare solo il prefisso `strutture/<id>/`.
+
+### Corretto
+
+- **Migrazione v1.x → v2 che rendeva l'applicazione inutilizzabile.** SQLite
+  ≥ 3.26 riscrive le foreign key delle tabelle figlie quando si rinomina il
+  padre. Le migrazioni v2.1, v2.2 e v2.3 non usavano
+  `PRAGMA legacy_alter_table`, così 12 riferimenti su 9 tabelle finivano a
+  puntare a `utenti_old` / `divisioni_old`, eliminate subito dopo. Con
+  `foreign_keys=ON` ogni INSERT falliva e il login restituiva 500
+  (`no such table: main.utenti_old`). Aggiunta la protezione mancante e, in
+  `models._ripara_fk_orfane()`, la riparazione automatica all'avvio per i
+  database già migrati.
+- **Statistiche mensili della dashboard che contavano tutto lo storico.** In una
+  f-string il doppio segno di percentuale non viene consumato e arriva a SQLite
+  come formato letterale, rendendo il confronto sempre vero: un mese con un solo
+  intervento da 100 € riportava 1.099 €, e il grafico dei costi collassava in
+  un'unica barra.
+- **Cinque form che restituivano 400** per assenza del token CSRF: azzeramento
+  totale e parziale del database, eliminazione manutenzione, eliminazione
+  verifica, eliminazione divisione.
+- **Digest scadenze mai inviato**: il task girava ogni 86400 secondi mentre la
+  condizione richiede le 7:00, quindi si allineava all'ora di avvio
+  dell'applicazione senza mai centrare la finestra.
+- **Coda email invisibile in multi-struttura**: i verbali importati via IMAP
+  venivano salvati senza struttura e non comparivano a nessuno.
+- **Script da riga di comando in crash su Windows**: stampavano accenti e
+  caratteri di riquadro senza forzare UTF-8 su stdout, con `UnicodeEncodeError`
+  sotto cp1252 appena l'output veniva rediretto su file o log.
+- **Struttura predefinita creata senza nome** dalla migrazione: le
+  configurazioni reali contengono `structure_name` valorizzato a stringa vuota, e
+  `config.get(chiave, default)` non ricade sul default in quel caso.
+- **`PRAGMA user_version` fermo a 200** anche su database portati a v2.3: ora
+  ogni migrazione allinea il proprio codice.
+- **Filtro divisioni negli export** esteso a `tecnico` e `superadmin`.
+- **`prossima_scadenza`** ora validata come data anche nel form manutenzioni.
+
+### Modificato
+
+- `requirements.txt` dichiara `httpx`, usato da `strutture_bp` e `admin` ma
+  presente solo come dipendenza indiretta di `anthropic`.
+- Rimosso `modalita_avanzata_required`, diventato inefficace da quando tutte le
+  strutture sono in modalità avanzata.
+- `.gitignore` esclude l'intera cartella `.claude/`.
+- `CLAUDE.md` e `AGENTS.md` riscritti sullo stato reale del progetto: blueprint
+  mancanti, i quattro ruoli, la separazione fra `config.json` e
+  `config.local.json`, le regole di isolamento e il funzionamento dello
+  strumento di importazione.
+
+---
+
 ## [2.0.0] - 2026-04-03
 
 ### Aggiunto — Architettura multi-struttura (multi-tenant)

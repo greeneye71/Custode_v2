@@ -1,4 +1,4 @@
-# MedInventory v2.0.0
+# MedInventory v2.4.0
 
 **Gestione Apparecchi Elettromedicali** — applicazione web per strutture sanitarie
 by Studio Bergamaschi
@@ -369,7 +369,22 @@ Lo script esegue le seguenti operazioni:
 
 In caso di errore: lo script ripristina automaticamente il database dal backup.
 
-### Migrazioni precedenti
+### `migrate.py` — strumento unificato (consigliato)
+
+Analizza il database, elenca le migrazioni mancanti e le applica tutte nell'ordine corretto.
+Da preferire ai singoli script: un'installazione v1.x ha in genere **più** migrazioni pendenti,
+non solo la v2.0.
+
+```bash
+python migrate.py --check    # solo analisi, non modifica nulla
+python migrate.py            # applica, chiedendo conferma
+python migrate.py --yes      # applica senza conferma
+python migrate.py --db PATH  # database esplicito
+```
+
+Crea un backup prima di scrivere e, se una migrazione fallisce, ripristina automaticamente.
+
+### Migrazioni precedenti (singoli script)
 
 Per installazioni che partono da una versione precedente alla v1.4, applicare le migrazioni in ordine:
 
@@ -381,6 +396,53 @@ python migrate_v1_3_2.py # v1.3 → v1.3.2
 python migrate_v1_4.py   # v1.3.x → v1.4 (aggiunge verifiche elettriche)
 python migrate_v2_0.py   # v1.4.x → v2.0 (multi-struttura)
 ```
+
+---
+
+## Importare un'altra installazione
+
+`importa_installazione.py` fa confluire un'altra installazione MedInventory in questa, come nuova
+struttura, allegati compresi. Serve soprattutto ad assorbire un'installazione monostruttura già in
+esercizio dentro un deployment multi-struttura.
+
+L'installazione di origine **non viene mai modificata**: se ne legge uno snapshot coerente, quindi
+si può usare anche mentre è in funzione.
+
+```bash
+# 1. analisi preliminare: mostra cosa verrebbe importato, senza scrivere nulla
+python importa_installazione.py "C:\MedInventory_Ospedale" --dry-run
+
+# 2. importazione vera
+python importa_installazione.py "C:\MedInventory_Ospedale" --struttura-nome "Ospedale San Rocco" --con-config --con-log
+```
+
+| Opzione | Effetto |
+|---|---|
+| `--dry-run` | Analizza e mostra il piano, senza scrivere |
+| `--struttura-nome NOME` | Nome della struttura da creare |
+| `--in-struttura ID` | Importa dentro una struttura esistente |
+| `--con-config` | Copia provider e chiavi AI, impostazioni SMTP |
+| `--con-log` | Importa anche il registro attività |
+| `--con-import-history` | Importa lo storico degli import AI |
+| `--senza-file` | Non copiare gli allegati |
+| `--senza-utenti` | Non importare gli utenti |
+| `--reset-password` | Forza il cambio password al primo accesso |
+| `--se-esiste salta\|duplica` | Record già presenti (default: `salta`) |
+| `--report FILE.json` | Report dettagliato in JSON |
+| `--target DIR` | Installazione di destinazione (default: questa) |
+| `--db` / `--uploads` | Percorsi sorgente espliciti |
+
+Note:
+
+- La sorgente può essere di una **versione diversa**: le colonne vengono riconosciute per
+  introspezione, quelle assenti prendono un default e i valori non più ammessi vengono
+  normalizzati e segnalati.
+- L'operazione è **ripetibile**: una seconda esecuzione con `--in-struttura` non duplica nulla.
+- Un apparecchio con uno **stato non riconosciuto** (es. `rottamato`) viene importato come
+  `funzionante`, quindi risulta attivo e genera scadenze. Lo strumento lo segnala prima e dopo
+  l'importazione, elencando le matricole coinvolte.
+- Non vengono importati sessioni, tentativi di login, token API e configurazioni email: sono
+  legati all'installazione di origine.
 
 ---
 
@@ -432,6 +494,8 @@ MedInventory/
 ├── migrate_v1_3_2.py       # Migrazione v1.3 → v1.3.2
 ├── migrate_v1_4.py         # Migrazione v1.3.x → v1.4
 ├── migrate_v2_0.py         # Migrazione v1.4.x → v2.0
+├── migrate.py              # Strumento unificato di migrazione (consigliato)
+├── importa_installazione.py # Importa un'altra installazione come nuova struttura
 ├── toggle_modalita.py      # Cambia modalità single ↔ multi-struttura
 ├── crea_superadmin.py      # Crea o reimposta il superadmin
 │
@@ -462,4 +526,4 @@ Vedere il file [LICENSE](LICENSE) per i termini di licenza.
 
 ---
 
-*MedInventory v2.0.0 — by Studio Bergamaschi*
+*MedInventory v2.4.0 — by Studio Bergamaschi*
