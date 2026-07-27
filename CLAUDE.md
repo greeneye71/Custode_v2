@@ -26,9 +26,38 @@ python crea_superadmin.py
 
 # Switch between single- and multi-struttura mode
 python toggle_modalita.py --status
+
+# Import another installation's data as a new struttura (see below)
+python importa_installazione.py <source-install-dir> --dry-run
 ```
 
 No build step needed. No test suite exists.
+
+## Importing another installation
+
+`importa_installazione.py` absorbs a separate MedInventory installation — typically
+a single-facility one already in service — into this deployment as a new struttura,
+attachments included. The source is never modified: the tool reads a consistent
+snapshot taken with `sqlite3.backup()`, so it works even against a running install.
+
+The source may be on an older schema. Columns are resolved by introspection plus a
+map of known renames (`RINOMINI`), missing columns get defaults, unknown ones are
+reported and ignored; values outside the target's CHECK constraints are normalized
+and listed. Add new renames to `RINOMINI` rather than writing per-version readers.
+
+Behaviour worth knowing before changing it:
+- `--dry-run` reports everything and writes nothing. The target DB is backed up
+  automatically before any write, and the whole import is one transaction — files
+  copied during a failed run are removed on rollback.
+- Re-running is safe: each entity has a natural key (`apparecchi` by
+  struttura+modello+matricola, `manutenzioni` by apparecchio+tipo+data, …) and a
+  second run with `--in-struttura` skips everything. Creating a struttura whose
+  name already exists is refused, with instructions.
+- `utenti.email` is globally UNIQUE, so an already-present user is skipped and its
+  references are remapped onto the existing account. A source `superadmin` is
+  imported as `admin` of the new struttura — it must not gain global powers here.
+- Not imported: `sessioni`, `login_attempts`, `api_tokens`, `email_config`,
+  `import_preview`. They belong to the source deployment or are transient.
 
 ## Configuration
 
