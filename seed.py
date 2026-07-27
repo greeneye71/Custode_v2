@@ -36,6 +36,14 @@ from app import create_app
 from models import query_one, query_all, execute
 from werkzeug.security import generate_password_hash
 
+# Su Windows la console non è UTF-8: senza questo, stampare accenti o
+# caratteri di riquadro fa fallire lo script con UnicodeEncodeError
+# (succede appena l'output viene rediretto su file o log).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 
 def seed_database():
     """Populate the database with initial data."""

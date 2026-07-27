@@ -212,6 +212,77 @@ def _fix_import_tables():
             pass
 
 
+def _ripara_fk_orfane():
+    """Ripara le FK che puntano a tabelle '<nome>_old' non più esistenti.
+
+    SQLite >= 3.26 riscrive i riferimenti FK delle tabelle figlie quando si
+    rinomina la tabella padre. Le migrazioni che rinominavano utenti/divisioni
+    senza 'PRAGMA legacy_alter_table = ON' lasciavano quindi sessioni,
+    utenti_divisioni, log_attivita e apparecchi a puntare a utenti_old /
+    divisioni_old, subito dopo eliminate. Con foreign_keys=ON ogni INSERT su
+    quelle tabelle fallisce con "no such table: main.utenti_old": il login
+    diventa impossibile e l'applicazione inutilizzabile.
+
+    Qui si corregge solo il testo della clausola REFERENCES: nessun dato viene
+    spostato e gli indici restano al loro posto.
+    """
+    import re
+    db = get_db()
+    tabelle = {r[0] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+
+    riparazioni = []   # (tabella, nome_errato, nome_corretto)
+    for nome, sql in db.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL"):
+        for riferita in set(re.findall(r'REFERENCES\s+"?(\w+)"?', sql, re.I)):
+            if riferita in tabelle:
+                continue
+            m = re.match(r'^_?(?P<base>.+?)_old(?:_\w+)?$', riferita)
+            if m and m.group('base') in tabelle:
+                riparazioni.append((nome, riferita, m.group('base')))
+
+    if not riparazioni:
+        return
+
+    for tabella, errato, corretto in riparazioni:
+        logger.warning(
+            f"FK danneggiata: {tabella} -> {errato} (inesistente), correggo in {corretto}")
+
+    try:
+        versione = db.execute("PRAGMA schema_version").fetchone()[0]
+        db.execute("PRAGMA writable_schema = ON")
+        for tabella, errato, corretto in riparazioni:
+            for vecchio, nuovo in ((f'"{errato}"', f'"{corretto}"'),
+                                   (f'REFERENCES {errato}', f'REFERENCES {corretto}')):
+                db.execute(
+                    "UPDATE sqlite_master SET sql = replace(sql, ?, ?) "
+                    "WHERE type = 'table' AND name = ?",
+                    (vecchio, nuovo, tabella))
+        db.execute(f"PRAGMA schema_version = {versione + 1}")
+        db.execute("PRAGMA writable_schema = OFF")
+        db.commit()
+    except Exception as e:
+        logger.error(f"Riparazione FK fallita: {e}")
+        try:
+            db.execute("PRAGMA writable_schema = OFF")
+        except Exception:
+            pass
+        return
+
+    # Lo schema riscritto è visibile solo a una connessione nuova.
+    try:
+        db.close()
+    except Exception:
+        pass
+    g.pop('db', None)
+    nuovo_db = get_db()
+    problemi = nuovo_db.execute("PRAGMA integrity_check").fetchone()[0]
+    if problemi != 'ok':
+        logger.error(f"integrity_check dopo la riparazione FK: {problemi}")
+    else:
+        logger.info(f"Riparate {len(riparazioni)} FK orfane; integrità del database confermata.")
+
+
 def get_schema_version():
     """Ritorna la versione dello schema DB (PRAGMA user_version).
     Convenzione: major*100 + minor*10 + patch  →  v1.4.3 = 143.
@@ -236,6 +307,7 @@ def _matricola_unique_solo(db):
 def apply_schema_updates():
     """Applica aggiornamenti incrementali allo schema (idempotente) all'avvio."""
     _fix_import_tables()
+    _ripara_fk_orfane()
     db = get_db()
     # Mark any import jobs left in 'processing' state by a previous server run as failed.
     # Background threads are killed on shutdown, so 'processing' records are stale.

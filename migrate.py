@@ -20,6 +20,14 @@ import sqlite3
 import sys
 from datetime import datetime
 
+# Su Windows la console non è UTF-8: senza questo, stampare accenti o
+# caratteri di riquadro fa fallire lo script con UnicodeEncodeError
+# (succede appena l'output viene rediretto su file o log).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
@@ -363,6 +371,7 @@ def _apply_v1_2(conn, config):
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_accessori_apparecchio ON accessori(apparecchio_id)")
 
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
     ok(f'  {total} apparecchi migrati (codice_interno → descrizione)')
@@ -572,6 +581,7 @@ WHERE a.stato != 'dismesso' AND v.prossima_scadenza IS NOT NULL
 ORDER BY prossima_scadenza ASC;
     """)
 
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA user_version = 143")
     conn.commit()
@@ -649,7 +659,12 @@ def _apply_v2_0(conn, config):
     conn.commit()
 
     # Struttura di default
-    struttura_nome = config.get('structure_name', config.get('app_name', 'Struttura Principale'))
+    # structure_name esiste quasi sempre nei config reali, ma vuoto: con
+    # config.get(chiave, fallback) il fallback non scatterebbe mai e la
+    # struttura verrebbe creata senza nome.
+    struttura_nome = ((config.get('structure_name') or '').strip()
+                      or (config.get('app_name') or '').strip()
+                      or 'Struttura Principale')
     if not conn.execute("SELECT id FROM strutture LIMIT 1").fetchone():
         conn.execute(
             "INSERT INTO strutture (nome, codice, modalita) VALUES (?, ?, 'avanzata')",
@@ -864,6 +879,7 @@ def _apply_v2_0(conn, config):
                            'upgraded_at': datetime.now().strftime('%d/%m/%Y %H:%M')}, f)
 
     conn.execute("PRAGMA user_version = 200")
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.commit()
@@ -880,6 +896,11 @@ def _applied_v2_1(conn):
 
 def _apply_v2_1(conn, config):
     conn.execute("PRAGMA foreign_keys = OFF")
+    # legacy_alter_table=ON: senza questo SQLite 3.26+ riscrive le FK delle
+    # tabelle figlie quando si rinomina un padre, facendole puntare a
+    # <tabella>_old; dopo il DROP restano FK verso una tabella inesistente
+    # e ogni INSERT fallisce con "no such table".
+    conn.execute("PRAGMA legacy_alter_table = ON")
     conn.execute("PRAGMA journal_mode = WAL")
 
     # DIVISIONI
@@ -951,6 +972,7 @@ def _apply_v2_1(conn, config):
     else:
         skip('  apparecchi: schema già aggiornato')
 
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
 
@@ -965,6 +987,11 @@ def _applied_v2_2(conn):
 
 def _apply_v2_2(conn, config):
     conn.execute("PRAGMA foreign_keys = OFF")
+    # legacy_alter_table=ON: senza questo SQLite 3.26+ riscrive le FK delle
+    # tabelle figlie quando si rinomina un padre, facendole puntare a
+    # <tabella>_old; dopo il DROP restano FK verso una tabella inesistente
+    # e ogni INSERT fallisce con "no such table".
+    conn.execute("PRAGMA legacy_alter_table = ON")
     conn.execute("PRAGMA journal_mode = WAL")
 
     # Aggiorna CHECK ruolo utenti per aggiungere 'tecnico'
@@ -1015,6 +1042,7 @@ def _apply_v2_2(conn, config):
     else:
         skip('  tecnici_strutture già esistente')
 
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
 
@@ -1036,6 +1064,11 @@ def _applied_v2_3(conn):
 
 def _apply_v2_3(conn, config):
     conn.execute("PRAGMA foreign_keys = OFF")
+    # legacy_alter_table=ON: senza questo SQLite 3.26+ riscrive le FK delle
+    # tabelle figlie quando si rinomina un padre, facendole puntare a
+    # <tabella>_old; dopo il DROP restano FK verso una tabella inesistente
+    # e ogni INSERT fallisce con "no such table".
+    conn.execute("PRAGMA legacy_alter_table = ON")
     conn.execute("PRAGMA journal_mode = WAL")
 
     # DIVISIONI — struttura_id ON DELETE CASCADE
@@ -1133,6 +1166,7 @@ def _apply_v2_3(conn, config):
     else:
         skip('  email_config: FK SET NULL già presente')
 
+    conn.execute("PRAGMA legacy_alter_table = OFF")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.commit()
 

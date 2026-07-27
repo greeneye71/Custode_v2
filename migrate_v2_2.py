@@ -11,6 +11,14 @@ import sqlite3
 import sys
 import os
 
+# Su Windows la console non è UTF-8: senza questo, stampare accenti o
+# caratteri di riquadro fa fallire lo script con UnicodeEncodeError
+# (succede appena l'output viene rediretto su file o log).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 DB_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join('data', 'database.sqlite')
 
 
@@ -30,6 +38,9 @@ def run(db_path):
         col_list = ', '.join(cols)
 
         print("Migrazione tabella utenti (aggiunta ruolo tecnico)...")
+        # Vedi migrate.py: senza legacy_alter_table le FK delle tabelle
+        # figlie finirebbero per puntare a <tabella>_old, poi eliminata.
+        conn.execute("PRAGMA legacy_alter_table = ON")
         conn.execute("ALTER TABLE utenti RENAME TO utenti_old")
         conn.execute(f"""
             CREATE TABLE utenti (
@@ -77,6 +88,7 @@ def run(db_path):
         else:
             print("tecnici_strutture già esistente, skip.")
 
+        conn.execute("PRAGMA legacy_alter_table = OFF")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.commit()
         print("\nMigrazione v2.2 completata con successo.")

@@ -9,6 +9,14 @@ import os
 import sys
 import getpass
 
+# Su Windows la console non è UTF-8: senza questo, stampare accenti o
+# caratteri di riquadro fa fallire lo script con UnicodeEncodeError
+# (succede appena l'output viene rediretto su file o log).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 

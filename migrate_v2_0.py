@@ -26,6 +26,15 @@ import os
 import shutil
 import logging
 from datetime import datetime
+import sys
+
+# Su Windows la console non è UTF-8: senza questo, stampare accenti o
+# caratteri di riquadro fa fallire lo script con UnicodeEncodeError
+# (succede appena l'output viene rediretto su file o log).
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -196,7 +205,12 @@ def _migrate_v1_to_v2(db, config):
 
     # ---- A2. Struttura di default ----
     logger.info("  A2. Struttura di default...")
-    struttura_nome = config.get('structure_name', config.get('app_name', 'Struttura Principale'))
+    # structure_name esiste quasi sempre nei config reali, ma vuoto: con
+    # config.get(chiave, fallback) il fallback non scatterebbe mai e la
+    # struttura verrebbe creata senza nome.
+    struttura_nome = ((config.get('structure_name') or '').strip()
+                      or (config.get('app_name') or '').strip()
+                      or 'Struttura Principale')
     struttura_exists = db.execute("SELECT id FROM strutture LIMIT 1").fetchone()
     if not struttura_exists:
         db.execute(
