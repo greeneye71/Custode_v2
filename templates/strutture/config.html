@@ -113,6 +113,26 @@
     </div>
   </div>
 
+  {# ------------------------------------------------------------------ #}
+  {# Sezione: Logo della struttura                                       #}
+  {# ------------------------------------------------------------------ #}
+  <div class="col-12">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h5">Logo della struttura</h2>
+        <p class="text-muted small">Compare nella testata dei prospetti stampati. PNG o JPG.</p>
+        <form method="POST" action="{{ url_for('strutture.carica_logo', struttura_id=struttura.id) }}"
+              enctype="multipart/form-data" class="d-flex gap-2 align-items-end">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="flex-grow-1">
+            <input type="file" class="form-control" name="logo" accept=".png,.jpg,.jpeg" required>
+          </div>
+          <button type="submit" class="btn btn-primary">Carica</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
   {% if not is_admin_only %}
   <form method="POST" action="{{ url_for('strutture.config', struttura_id=struttura.id) }}" class="col-12 p-0">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

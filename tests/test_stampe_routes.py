@@ -363,6 +363,62 @@ def test_excel_inventario_admin_vede_tutta_la_struttura(client, dati):
     assert 'ALT-1' not in valori
 
 
+def test_la_colonna_logo_esiste(app):
+    from models import query_all
+    with app.app_context():
+        colonne = {r['name'] for r in query_all("PRAGMA table_info(strutture)")}
+    assert 'logo_path' in colonne
+
+
+def test_un_logo_inesistente_non_impedisce_la_stampa(client, dati, app):
+    """Un logo che punta a un file cancellato dal disco non deve mai
+    trasformarsi in un 500: il motore lo ignora e il PDF esce comunque
+    (il try/except di ReportPDF.header() e' testato altrove, qui verifichiamo
+    che il percorso arrivi fino in fondo senza rompere la stampa)."""
+    from models import execute
+    with app.app_context():
+        execute("UPDATE strutture SET logo_path = ? WHERE id = ?",
+                ('strutture/1/loghi/sparito.png', dati['s1']))
+    entra(client, 'admin@a.it')
+    risposta = client.get('/stampe/inventario?divisione_id=tutte')
+    assert risposta.data.startswith(b'%PDF')
+
+
+def test_admin_carica_il_logo_della_propria_struttura(client, dati, app):
+    """Caso positivo: l'upload sulla propria struttura salva il percorso
+    relativo sotto strutture/<id>/loghi/, l'unico prefisso che la rotta
+    /uploads/<path> sa isolare per struttura."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    risposta = client.post(
+        f"/strutture/{dati['s1']}/logo",
+        data={'logo': (io.BytesIO(b'contenuto-finto-png'), 'logo.png')},
+        content_type='multipart/form-data')
+    assert risposta.status_code == 302
+    with app.app_context():
+        struttura_a = query_one("SELECT logo_path FROM strutture WHERE id = ?", (dati['s1'],))
+    assert struttura_a['logo_path'] is not None
+    assert struttura_a['logo_path'].startswith(f"strutture/{dati['s1']}/loghi/")
+
+
+def test_admin_non_puo_caricare_il_logo_di_un_altra_struttura(client, dati, app):
+    """Un admin non deve poter modificare il logo di una struttura che non e'
+    la propria, nemmeno passando l'id nell'URL. Non basta controllare che la
+    risposta non sia un successo: bisogna dimostrare che il logo della
+    struttura B e' rimasto invariato nel database, altrimenti un redirect
+    'per caso' non proverebbe nulla."""
+    from models import query_one
+    entra(client, 'admin@a.it')  # admin della struttura s1
+    risposta = client.post(
+        f"/strutture/{dati['s2']}/logo",
+        data={'logo': (io.BytesIO(b'contenuto-finto-png'), 'logo.png')},
+        content_type='multipart/form-data')
+    assert risposta.status_code == 302
+    with app.app_context():
+        struttura_b = query_one("SELECT logo_path FROM strutture WHERE id = ?", (dati['s2'],))
+    assert struttura_b['logo_path'] is None
+
+
 def test_excel_scadenze_separa_scadute_e_in_scadenza(client, app, dati):
     """Il foglio delle scadenze ha una colonna 'Stato': verifica che le
     scadute e le in-scadenza finiscano davvero nella riga giusta, non solo

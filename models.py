@@ -425,6 +425,8 @@ WHERE a.stato != 'dismesso'
     LIMIT 1
   )
 ORDER BY prossima_scadenza ASC""",
+        # Logo mostrato nella testata dei prospetti stampati.
+        "ALTER TABLE strutture ADD COLUMN logo_path TEXT",
     ]
     for sql in migrations:
         try:

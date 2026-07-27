@@ -5,16 +5,20 @@ MedInventory - Gestione Strutture (superadmin)
 import base64
 import hashlib
 import httpx
+import os
 import re
+from datetime import datetime
 
 from cryptography.fernet import Fernet
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
     flash, g, current_app, jsonify
 )
+from werkzeug.utils import secure_filename
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
-    get_struttura_config_all, set_struttura_config, get_struttura_config
+    get_struttura_config_all, set_struttura_config, get_struttura_config, \
+    upload_subdir
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
@@ -738,3 +742,44 @@ def revoca_token(struttura_id, token_id):
                      struttura_id=struttura_id)
         flash('Token revocato.', 'success')
     return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
+
+
+# ============================================================================
+# LOGO DELLA STRUTTURA (testata dei prospetti stampati)
+# ============================================================================
+
+ESTENSIONI_LOGO = {'png', 'jpg', 'jpeg'}
+
+
+@strutture_bp.route('/<int:struttura_id>/logo', methods=['POST'])
+@login_required
+def carica_logo(struttura_id):
+    """Carica il logo mostrato nella testata dei prospetti stampati."""
+    ruolo = g.user['ruolo']
+    if ruolo not in ('admin', 'superadmin'):
+        flash('Accesso non autorizzato.', 'danger')
+        return redirect(url_for('index'))
+    if ruolo == 'admin' and g.user.get('struttura_id') != struttura_id:
+        flash('Non puoi modificare un\'altra struttura.', 'danger')
+        return redirect(url_for('index'))
+
+    file = request.files.get('logo')
+    if not file or not file.filename:
+        flash('Nessun file selezionato.', 'warning')
+        return redirect(url_for('strutture.config', struttura_id=struttura_id))
+
+    estensione = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if estensione not in ESTENSIONI_LOGO:
+        flash('Formato non supportato. Usa PNG o JPG.', 'danger')
+        return redirect(url_for('strutture.config', struttura_id=struttura_id))
+
+    cartella, prefisso = upload_subdir('loghi', struttura_id)
+    nome = secure_filename(f"{int(datetime.now().timestamp())}_{file.filename}")
+    file.save(os.path.join(cartella, nome))
+    execute("UPDATE strutture SET logo_path = ? WHERE id = ?",
+            (f"{prefisso}/{nome}", struttura_id))
+
+    log_attivita(g.user['id'], 'modifica', 'strutture', struttura_id,
+                 'Logo aggiornato', request.remote_addr, struttura_id=struttura_id)
+    flash('Logo aggiornato.', 'success')
+    return redirect(url_for('strutture.config', struttura_id=struttura_id))

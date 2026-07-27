@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS strutture (
   data_attivazione    DATE,
   scadenza_contratto  DATE,
   note                TEXT,
+  logo_path           TEXT,
   modalita            TEXT NOT NULL DEFAULT 'standard'
                       CHECK(modalita IN ('standard', 'avanzata')),
   attiva              INTEGER DEFAULT 1,
