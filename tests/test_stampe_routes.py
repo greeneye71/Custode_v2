@@ -1,5 +1,6 @@
 """Test delle rotte di stampa: contano soprattutto i confini di visibilita'."""
 import io
+from datetime import date, timedelta
 
 import pytest
 from pypdf import PdfReader
@@ -149,3 +150,89 @@ def test_superadmin_senza_struttura_riceve_una_spiegazione(client, app, dati):
 
     _assert_rifiuto_pulito(client, '/stampe/inventario?divisione_id=tutte',
                             'Nessuna divisione accessibile.')
+
+
+def test_scadenze_manutenzioni_produce_un_pdf(client, dati):
+    entra(client, 'admin@a.it')
+    risposta = client.get('/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=30g')
+    assert risposta.status_code == 200
+    assert risposta.data.startswith(b'%PDF')
+
+
+def test_scadenze_verifiche_produce_un_pdf(client, dati):
+    entra(client, 'admin@a.it')
+    risposta = client.get('/stampe/scadenze/verifiche?divisione_id=tutte&periodo=anno')
+    assert risposta.data.startswith(b'%PDF')
+
+
+def test_tipo_di_scadenza_non_riconosciuto_viene_respinto(client, dati):
+    entra(client, 'admin@a.it')
+    _assert_rifiuto_pulito(client, '/stampe/scadenze/inventato?divisione_id=tutte&periodo=30g',
+                            'Tipo di prospetto non riconosciuto.')
+
+
+def test_date_incoerenti_non_producono_un_pdf(client, dati):
+    entra(client, 'admin@a.it')
+    _assert_rifiuto_pulito(
+        client,
+        '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date&da=2026-12-31&a=2026-01-01',
+        'La data finale precede quella iniziale.')
+
+
+def test_data_malformata_non_produce_un_pdf(client, dati):
+    entra(client, 'admin@a.it')
+    _assert_rifiuto_pulito(
+        client,
+        '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date&da=non-una-data&a=2026-01-01',
+        'Indica due date valide nel formato giorno/mese/anno.')
+
+
+def test_utente_non_stampa_le_scadenze_di_una_divisione_non_sua(client, dati):
+    entra(client, 'utente@a.it')
+    _assert_rifiuto_pulito(
+        client, f"/stampe/scadenze/manutenzioni?divisione_id={dati['d2']}&periodo=30g",
+        'Divisione non disponibile.')
+
+
+def test_periodo_determina_quali_scadenze_rientrano_nel_prospetto(client, app, dati):
+    """Una scadenza fra 45 giorni non deve comparire nel prospetto a 30 giorni,
+    ma deve comparire in quello a 90 giorni. Un'asserzione che si limitasse a
+    controllare che la risposta e' un PDF non si accorgerebbe di un bug in cui
+    il periodo scelto viene ignorato dalla query."""
+    from models import execute
+    with app.app_context():
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='OCU-1'),"
+            "'preventiva', date('now','-1 year'), date('now','+45 days'))")
+    entra(client, 'admin@a.it')
+
+    entro_30 = client.get('/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=30g')
+    assert 'OCU-1' not in testo_di(entro_30.data)
+
+    entro_90 = client.get('/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=90g')
+    assert 'OCU-1' in testo_di(entro_90.data)
+
+
+def test_intervallo_di_date_libere_filtra_per_la_finestra_indicata(client, app, dati):
+    """Stesso principio applicato a periodo=date: la finestra scelta deve
+    davvero delimitare cosa compare nel prospetto, non bastare che sia una
+    coppia di date coerente fra loro."""
+    from models import execute
+    with app.app_context():
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='OCU-1'),"
+            "'preventiva', date('now','-1 year'), date('now','+20 days'))")
+    entra(client, 'admin@a.it')
+    oggi = date.today()
+
+    fuori_finestra = client.get(
+        '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date'
+        f'&da={oggi.isoformat()}&a={(oggi + timedelta(days=10)).isoformat()}')
+    assert 'OCU-1' not in testo_di(fuori_finestra.data)
+
+    dentro_finestra = client.get(
+        '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date'
+        f'&da={oggi.isoformat()}&a={(oggi + timedelta(days=30)).isoformat()}')
+    assert 'OCU-1' in testo_di(dentro_finestra.data)

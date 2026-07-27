@@ -7,7 +7,7 @@ al motore in report_service.py, che dell'applicazione non sa nulla.
 """
 
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import (Blueprint, render_template, request, redirect, url_for,
                    flash, g, send_file)
@@ -155,3 +155,98 @@ def inventario():
                               raggruppa=raggruppa)
     return _pdf(stampa_inventario(righe, contesto),
                 _nome_file('inventario', nome_divisione))
+
+
+TIPI_SCADENZA = {
+    'manutenzioni': ('manutenzione', 'Scadenze manutenzioni'),
+    'verifiche': ('verifica', 'Scadenze verifiche di sicurezza elettrica'),
+}
+
+
+def _intervallo(periodo, da, a):
+    """Data di fine del periodo, in formato ISO.
+
+    Servono due forme diverse: 'entro un mese' e' una finestra mobile, 'entro
+    l'anno in corso' e' una data fissa. Restituisce (fine, errore).
+    """
+    oggi = datetime.now().date()
+    if periodo == '30g':
+        return (oggi + timedelta(days=30)).isoformat(), None
+    if periodo == '90g':
+        return (oggi + timedelta(days=90)).isoformat(), None
+    if periodo == 'anno':
+        return oggi.replace(month=12, day=31).isoformat(), None
+    if periodo == 'anno_prossimo':
+        return oggi.replace(year=oggi.year + 1, month=12, day=31).isoformat(), None
+    if periodo == 'date':
+        try:
+            inizio = datetime.strptime(da or '', '%Y-%m-%d').date()
+            fine = datetime.strptime(a or '', '%Y-%m-%d').date()
+        except ValueError:
+            return None, 'Indica due date valide nel formato giorno/mese/anno.'
+        if fine < inizio:
+            return None, 'La data finale precede quella iniziale.'
+        return fine.isoformat(), None
+    return None, 'Periodo non riconosciuto.'
+
+
+@stampe_bp.route('/scadenze/<tipo>')
+@login_required
+def scadenze(tipo):
+    from report_service import stampa_scadenze
+
+    if tipo not in TIPI_SCADENZA:
+        flash('Tipo di prospetto non riconosciuto.', 'danger')
+        return redirect(url_for('stampe.index'))
+    tipo_record, titolo = TIPI_SCADENZA[tipo]
+
+    fine, errore = _intervallo(request.args.get('periodo', '30g'),
+                               request.args.get('da'), request.args.get('a'))
+    if errore:
+        flash(errore, 'danger')
+        return redirect(url_for('stampe.index'))
+
+    divisione_id = request.args.get('divisione_id', 'tutte')
+    if divisione_id == 'tutte':
+        clausola, parametri = _filtro_tutte_le_divisioni()
+        if clausola is None:
+            flash('Nessuna divisione accessibile.', 'warning')
+            return redirect(url_for('stampe.index'))
+        ambito = ''
+        nome_divisione = ''
+    else:
+        divisione = _divisione_in_scope(divisione_id)
+        if not divisione:
+            flash('Divisione non disponibile.', 'danger')
+            return redirect(url_for('stampe.index'))
+        clausola, parametri = 'a.divisione_id = ?', [divisione['id']]
+        ambito = f"Divisione: {divisione['nome']}"
+        nome_divisione = divisione['nome']
+
+    # La vista prossime_scadenze non porta struttura_id: per applicare lo
+    # stesso criterio di ambito dell'inventario (_filtro_tutte_le_divisioni,
+    # che referenzia a.struttura_id / a.divisione_id) serve un join con
+    # apparecchi. Cosi' i due prospetti mostrano lo stesso insieme allo
+    # stesso utente.
+    base = f"""SELECT ps.marca, ps.modello, ps.matricola, ps.ubicazione,
+                      ps.prossima_scadenza, ps.giorni_rimasti,
+                      d.nome AS divisione_nome
+               FROM prossime_scadenze ps
+               JOIN apparecchi a ON a.id = ps.apparecchio_id
+               LEFT JOIN divisioni d ON d.id = ps.divisione_id
+               WHERE ps.tipo_record = ? AND {clausola}"""
+
+    scadute = query_all(
+        base + " AND ps.prossima_scadenza < date('now') ORDER BY ps.prossima_scadenza",
+        [tipo_record] + parametri)
+    in_scadenza = query_all(
+        base + " AND ps.prossima_scadenza >= date('now') AND ps.prossima_scadenza <= ?"
+               " ORDER BY ps.prossima_scadenza",
+        [tipo_record] + parametri + [fine])
+
+    contesto = _contesto_base(
+        titolo, ambito,
+        fine_periodo=datetime.strptime(fine, '%Y-%m-%d').strftime('%d/%m/%Y'),
+        mostra_spunta=request.args.get('spunta') == '1')
+    return _pdf(stampa_scadenze(scadute, in_scadenza, contesto),
+                _nome_file(f'scadenze-{tipo}', ambito.replace('Divisione: ', '')))
