@@ -358,6 +358,27 @@ class Importatore:
         self.struttura_id = None
         self.mappe = {}            # tabella -> {id_sorgente: id_target}
         self.file_scritti = []     # per il rollback
+        self._residui = {}         # chiave naturale -> id già presenti nel target
+
+    def _riusa_esistente(self, chiave, sql, params):
+        """Id di una riga del target da riusare al posto di inserirne una nuova.
+
+        Conta le righe equivalenti invece di limitarsi a chiedere se ne esiste
+        una: la sorgente può contenere legittimamente più righe con la stessa
+        chiave naturale — due verifiche dello stesso apparecchio nella stessa
+        data, con verbali diversi, sono un caso reale. Con un semplice "esiste
+        già?" la seconda verrebbe scartata e il suo allegato perso.
+
+        Si riusa una riga esistente solo finché il target ne ha; le copie in
+        più della sorgente vengono inserite. Così un secondo import non
+        duplica nulla e un primo import non perde nulla.
+        """
+        if self.opz.se_esiste != 'salta':
+            return None
+        if chiave not in self._residui:
+            self._residui[chiave] = [r[0] for r in self.conn.execute(sql, params)]
+        coda = self._residui[chiave]
+        return coda.pop(0) if coda else None
 
     # -- utilità ----------------------------------------------------------
 
@@ -719,15 +740,15 @@ class Importatore:
 
             matricola = self._valore(riga, 'apparecchi', 'matricola', '')
             modello = self._valore(riga, 'apparecchi', 'modello', '')
-            if self.opz.se_esiste == 'salta':
-                esistente = self.conn.execute(
-                    """SELECT id FROM apparecchi
-                       WHERE struttura_id = ? AND matricola = ? AND modello = ?""",
-                    (self.struttura_id, matricola, modello)).fetchone()
-                if esistente:
-                    mappa[riga['id']] = esistente['id']
-                    self.rep.conta('apparecchi', 'saltati')
-                    continue
+            esistente = self._riusa_esistente(
+                ('apparecchi', self.struttura_id, matricola, modello),
+                """SELECT id FROM apparecchi
+                   WHERE struttura_id = ? AND matricola = ? AND modello = ? ORDER BY id""",
+                (self.struttura_id, matricola, modello))
+            if esistente:
+                mappa[riga['id']] = esistente
+                self.rep.conta('apparecchi', 'saltati')
+                continue
 
             dati = {c: self._valore(riga, 'apparecchi', c) for c in semplici}
             dati['descrizione'] = self._valore(riga, 'apparecchi', 'descrizione')
@@ -762,10 +783,11 @@ class Importatore:
 
             descrizione = self._valore(riga, 'accessori', 'descrizione', '')
             matricola = self._valore(riga, 'accessori', 'matricola')
-            if self.opz.se_esiste == 'salta' and self.conn.execute(
-                    """SELECT 1 FROM accessori
-                       WHERE apparecchio_id = ? AND descrizione = ? AND matricola IS ?""",
-                    (app_id, descrizione, matricola)).fetchone():
+            if self._riusa_esistente(
+                    ('accessori', app_id, descrizione, matricola),
+                    """SELECT id FROM accessori
+                       WHERE apparecchio_id = ? AND descrizione = ? AND matricola IS ? ORDER BY id""",
+                    (app_id, descrizione, matricola)):
                 self.rep.conta('accessori', 'saltati')
                 continue
 
@@ -792,15 +814,15 @@ class Importatore:
                                     self._valore(riga, 'manutenzioni', 'tipo', 'preventiva'))
             data = self._valore(riga, 'manutenzioni', 'data_intervento')
 
-            if self.opz.se_esiste == 'salta':
-                esistente = self.conn.execute(
-                    """SELECT id FROM manutenzioni
-                       WHERE apparecchio_id = ? AND tipo = ? AND data_intervento IS ?""",
-                    (app_id, tipo, data)).fetchone()
-                if esistente:
-                    mappa[riga['id']] = esistente['id']
-                    self.rep.conta('manutenzioni', 'saltati')
-                    continue
+            esistente = self._riusa_esistente(
+                ('manutenzioni', app_id, tipo, data),
+                """SELECT id FROM manutenzioni
+                   WHERE apparecchio_id = ? AND tipo = ? AND data_intervento IS ? ORDER BY id""",
+                (app_id, tipo, data))
+            if esistente:
+                mappa[riga['id']] = esistente
+                self.rep.conta('manutenzioni', 'saltati')
+                continue
 
             mappa[riga['id']] = self._inserisci('manutenzioni', {
                 'apparecchio_id': app_id,
@@ -829,14 +851,14 @@ class Importatore:
                 continue
             data = self._valore(riga, 'verifiche', 'data_verifica')
 
-            if self.opz.se_esiste == 'salta':
-                esistente = self.conn.execute(
-                    "SELECT id FROM verifiche WHERE apparecchio_id = ? AND data_verifica IS ?",
-                    (app_id, data)).fetchone()
-                if esistente:
-                    mappa[riga['id']] = esistente['id']
-                    self.rep.conta('verifiche', 'saltati')
-                    continue
+            esistente = self._riusa_esistente(
+                ('verifiche', app_id, data),
+                "SELECT id FROM verifiche WHERE apparecchio_id = ? AND data_verifica IS ? ORDER BY id",
+                (app_id, data))
+            if esistente:
+                mappa[riga['id']] = esistente
+                self.rep.conta('verifiche', 'saltati')
+                continue
 
             mappa[riga['id']] = self._inserisci('verifiche', {
                 'apparecchio_id': app_id,
@@ -863,9 +885,10 @@ class Importatore:
                 continue
 
             nome_file = self._valore(riga, 'documenti', 'filename', '')
-            if self.opz.se_esiste == 'salta' and self.conn.execute(
-                    "SELECT 1 FROM documenti WHERE apparecchio_id = ? AND filename = ?",
-                    (app_id, nome_file)).fetchone():
+            if self._riusa_esistente(
+                    ('documenti', app_id, nome_file),
+                    "SELECT id FROM documenti WHERE apparecchio_id = ? AND filename = ? ORDER BY id",
+                    (app_id, nome_file)):
                 self.rep.conta('documenti', 'saltati')
                 continue
 
@@ -909,12 +932,14 @@ class Importatore:
             utente = u_map.get(self._valore(riga, 'log_attivita', 'utente_id'))
             azione = self._valore(riga, 'log_attivita', 'azione', 'sconosciuta')
             creato = self._valore(riga, 'log_attivita', 'created_at')
-            if controlla_duplicati and self.conn.execute(
-                    """SELECT 1 FROM log_attivita
+            if controlla_duplicati and self._riusa_esistente(
+                    ('log_attivita', self.struttura_id, utente, azione,
+                     entita or 'sconosciuta', creato),
+                    """SELECT id FROM log_attivita
                        WHERE struttura_id = ? AND utente_id IS ? AND azione = ?
-                         AND entita = ? AND created_at IS ?""",
+                         AND entita = ? AND created_at IS ? ORDER BY id""",
                     (self.struttura_id, utente, azione, entita or 'sconosciuta',
-                     creato)).fetchone():
+                     creato)):
                 self.rep.conta('log_attivita', 'saltati')
                 continue
 
