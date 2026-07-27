@@ -56,6 +56,12 @@ Behaviour worth knowing before changing it:
 - `utenti.email` is globally UNIQUE, so an already-present user is skipped and its
   references are remapped onto the existing account. A source `superadmin` is
   imported as `admin` of the new struttura — it must not gain global powers here.
+- An `apparecchi.stato` the target does not know (e.g. `rottamato` from a customized
+  install) falls back to the schema default, `funzionante` — an optimistic conversion
+  that would silently put a retired device back among the active ones, deadlines
+  included. The tool warns about it twice, before and after the import, and lists the
+  affected devices by matricola; change the fallback in `VINCOLI` if that is wrong for
+  a given migration.
 - Not imported: `sessioni`, `login_attempts`, `api_tokens`, `email_config`,
   `import_preview`. They belong to the source deployment or are transient.
 

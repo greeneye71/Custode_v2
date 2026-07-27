@@ -127,6 +127,7 @@ class Report:
         self.avvisi = []
         self.utenti_collisi = []
         self.normalizzazioni = []
+        self.stati_sconosciuti = []   # apparecchi con stato non riconosciuto
 
     def conta(self, tabella, chiave, n=1):
         voce = self.tabelle.setdefault(
@@ -142,6 +143,14 @@ class Report:
         if voce not in self.normalizzazioni:
             self.normalizzazioni.append(voce)
 
+    def stato_sconosciuto(self, matricola, descrizione, originale, applicato):
+        self.stati_sconosciuti.append({
+            'matricola': matricola or '(senza matricola)',
+            'descrizione': descrizione or '',
+            'stato_originale': originale,
+            'stato_applicato': applicato,
+        })
+
     def as_dict(self):
         return {
             'tabelle': self.tabelle,
@@ -150,8 +159,33 @@ class Report:
             'drift_schema': self.drift,
             'utenti_collisi': self.utenti_collisi,
             'normalizzazioni': self.normalizzazioni,
+            'stati_sconosciuti': self.stati_sconosciuti,
             'avvisi': self.avvisi,
         }
+
+    def stampa_avviso_stati(self):
+        """Avviso in evidenza: apparecchi il cui stato non esiste nel target.
+
+        Va detto forte perché la conversione è ottimistica: un apparecchio
+        rottamato o fuori uso nella sorgente entra qui come 'funzionante' e
+        tornerebbe a comparire fra quelli attivi, con le sue scadenze.
+        """
+        if not self.stati_sconosciuti:
+            return
+        n = len(self.stati_sconosciuti)
+        print(f"\n  {'!' * 3} ATTENZIONE: {n} apparecchi con stato non riconosciuto {'!' * 3}")
+        print("  Nella sorgente avevano uno stato che questa versione non prevede")
+        print("  (es. 'rottamato'). Sono stati importati come 'funzionante', quindi")
+        print("  risultano ATTIVI e generano scadenze di manutenzione e verifica.")
+        print("  Controllali e, se sono fuori uso, dismettili dalla scheda apparecchio.")
+        print()
+        for v in self.stati_sconosciuti[:15]:
+            etichetta = f"{v['matricola']}"
+            if v['descrizione']:
+                etichetta += f" — {v['descrizione']}"
+            print(f"    - {etichetta}: '{v['stato_originale']}' -> '{v['stato_applicato']}'")
+        if n > 15:
+            print(f"    ... e altri {n - 15} (elenco completo con --report)")
 
     def stampa(self, titolo):
         print(f"\n{titolo}")
@@ -187,6 +221,7 @@ class Report:
             print("\n  Avvisi:")
             for a in self.avvisi:
                 print(f"    - {a}")
+        self.stampa_avviso_stati()   # per ultimo: è ciò che va guardato subito
 
 
 # ===========================================================================
@@ -696,8 +731,14 @@ class Importatore:
 
             dati = {c: self._valore(riga, 'apparecchi', c) for c in semplici}
             dati['descrizione'] = self._valore(riga, 'apparecchi', 'descrizione')
-            dati['stato'] = self._normalizza(
-                'apparecchi', 'stato', self._valore(riga, 'apparecchi', 'stato', 'funzionante'))
+
+            stato_originale = self._valore(riga, 'apparecchi', 'stato', 'funzionante')
+            dati['stato'] = self._normalizza('apparecchi', 'stato', stato_originale)
+            if dati['stato'] != stato_originale and stato_originale not in (None, ''):
+                # Va tracciato per nome: chi importa deve poter andare a
+                # ricontrollare questi apparecchi uno per uno.
+                self.rep.stato_sconosciuto(
+                    matricola, dati['descrizione'], stato_originale, dati['stato'])
             dati['classificazione'] = self._normalizza(
                 'apparecchi', 'classificazione', self._valore(riga, 'apparecchi', 'classificazione'))
             dati['soggetto_verifica'] = self._valore(riga, 'apparecchi', 'soggetto_verifica', 1)
@@ -1016,6 +1057,22 @@ def analizza(sorgente, report):
     return conteggi
 
 
+def stati_non_riconosciuti(sorgente):
+    """Stati di apparecchi presenti nella sorgente ma non ammessi qui.
+
+    Serve a mostrare l'avviso già in fase di analisi (quindi anche con
+    --dry-run), prima che qualcuno lanci l'import vero.
+    """
+    if 'apparecchi' not in sorgente.tabelle():
+        return []
+    if 'stato' not in sorgente.colonne('apparecchi'):
+        return []
+    ammessi = VINCOLI['apparecchi']['stato'][0]
+    righe = sorgente.conn.execute(
+        "SELECT stato, COUNT(*) FROM apparecchi WHERE stato IS NOT NULL GROUP BY stato")
+    return [(stato, n) for stato, n in righe if stato not in ammessi]
+
+
 def conta_file(sorgente):
     """Quanti allegati referenziati esistono davvero su disco."""
     presenti, mancanti = 0, 0
@@ -1159,6 +1216,19 @@ def main(argv=None):
             else:
                 print(f"  {tabella.ljust(18)} {n}")
         print(f"\n  Allegati referenziati: {presenti} presenti, {mancanti} mancanti su disco")
+
+        stati_estranei = stati_non_riconosciuti(sorgente)
+        if stati_estranei:
+            totale = sum(n for _, n in stati_estranei)
+            default_stato = VINCOLI['apparecchi']['stato'][1]
+            print(f"\n  !!! ATTENZIONE: {totale} apparecchi hanno uno stato che questa "
+                  f"versione non prevede:")
+            for stato, n in stati_estranei:
+                print(f"        '{stato}': {n} apparecchi")
+            print(f"  Verranno importati come '{default_stato}', quindi risulteranno ATTIVI")
+            print("  e genereranno scadenze di manutenzione e verifica. Se sono fuori uso,")
+            print("  vanno dismessi a mano dopo l'import: l'elenco per matricola è nel")
+            print("  riepilogo finale e nel file --report.")
 
         if not args.con_log and conteggi.get('log_attivita'):
             print("\n  Nota: il registro attività non verrà importato (usa --con-log).")

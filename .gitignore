@@ -22,8 +22,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Claude Code settings locali
-.claude/settings.local.json
+# Claude Code: impostazioni e configurazioni locali
+.claude/
 
 # File temporanei e test
 Cartel1.xlsx
