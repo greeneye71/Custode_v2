@@ -185,3 +185,66 @@ def test_un_inventario_lungo_va_a_capo_pagina():
     # La testata si ripete: il nome della struttura compare su ogni pagina
     for pagina in lettore.pages:
         assert 'Casa di Cura Sant Anna' in pagina.extract_text()
+
+
+from report_service import (COLONNE_SCADENZE, COLONNE_SCADENZE_SPUNTA,
+                            stampa_scadenze)
+
+
+def righe_scadenze():
+    return [
+        {'marca': 'REXXAM', 'modello': 'OZY', 'matricola': 'R-00015',
+         'ubicazione': 'Sala visite 1', 'divisione_nome': 'Oculistica',
+         'prossima_scadenza': '2026-08-15', 'giorni_rimasti': 18},
+    ]
+
+
+def righe_scadute():
+    return [
+        {'marca': 'GE', 'modello': 'B40', 'matricola': 'MON-1',
+         'ubicazione': 'Ambulatorio', 'divisione_nome': 'Cardiologia',
+         'prossima_scadenza': '2026-05-01', 'giorni_rimasti': -87},
+    ]
+
+
+def contesto_scadenze(**extra):
+    # I default vanno sovrascritti da extra, non passati insieme: altrimenti
+    # contesto_scadenze(mostra_spunta=True) passerebbe due volte lo stesso
+    # argomento e solleverebbe TypeError.
+    base = {'titolo': 'Scadenze manutenzioni',
+            'fine_periodo': '31/12/2026',
+            'mostra_spunta': False}
+    base.update(extra)
+    return contesto_minimo(**base)
+
+
+def test_le_colonne_scadenze_sommano_alla_larghezza_utile():
+    assert sum(larghezza for _, larghezza, _ in COLONNE_SCADENZE) == 180
+    assert sum(larghezza for _, larghezza, _ in COLONNE_SCADENZE_SPUNTA) == 180
+
+
+def test_scadenze_mostra_prima_le_scadute_poi_il_periodo():
+    pdf = stampa_scadenze(righe_scadute(), righe_scadenze(), contesto_scadenze())
+    testo = testo_di(pdf)
+    assert 'Scadute' in testo
+    assert 'In scadenza entro il 31/12/2026' in testo
+    assert testo.index('Scadute') < testo.index('In scadenza entro')
+
+
+def test_scadenze_riporta_apparecchio_matricola_e_scadenza():
+    pdf = stampa_scadenze([], righe_scadenze(), contesto_scadenze())
+    testo = testo_di(pdf)
+    assert 'REXXAM' in testo
+    assert 'R-00015' in testo
+    assert '15/08/2026' in testo
+
+
+def test_scadenze_senza_nulla_produce_il_foglio_nessun_dato():
+    pdf = stampa_scadenze([], [], contesto_scadenze())
+    assert 'Nessuna scadenza nel periodo indicato' in testo_di(pdf)
+
+
+def test_la_spunta_aggiunge_la_colonna_senza_sfondare():
+    pdf = stampa_scadenze([], righe_scadenze(), contesto_scadenze(mostra_spunta=True))
+    assert pdf.startswith(b'%PDF')
+    assert 'REXXAM' in testo_di(pdf)

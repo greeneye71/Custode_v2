@@ -203,3 +203,81 @@ def _corpo_inventario(pdf, righe):
             COLONNE_INVENTARIO,
             alternata=(indice % 2 == 0),
         )
+
+
+COLONNE_SCADENZE = [
+    ('Apparecchio', 48, 'L'),
+    ('Matricola', 30, 'L'),
+    ('Ubicazione', 40, 'L'),
+    ('Divisione', 26, 'L'),
+    ('Scadenza', 22, 'C'),
+    ('Giorni', 14, 'C'),
+]
+
+# La colonna di spunta non allarga la tabella: le altre si stringono per
+# farle posto, cosi' il prospetto resta dentro il foglio in entrambi i casi.
+COLONNE_SCADENZE_SPUNTA = [
+    ('', 6, 'C'),
+    ('Apparecchio', 46, 'L'),
+    ('Matricola', 29, 'L'),
+    ('Ubicazione', 38, 'L'),
+    ('Divisione', 25, 'L'),
+    ('Scadenza', 22, 'C'),
+    ('Giorni', 14, 'C'),
+]
+
+
+def _data_italiana(valore):
+    """Da 2026-08-15 a 15/08/2026. Lascia intatto cio' che non riconosce."""
+    testo = testo_sicuro(valore)
+    parti = testo.split('-')
+    if len(parti) == 3 and len(parti[0]) == 4:
+        return f'{parti[2]}/{parti[1]}/{parti[0]}'
+    return testo
+
+
+def stampa_scadenze(scadute, in_scadenza, contesto):
+    """Prospetto scadenze: prima cio' che e' gia' in ritardo, poi il periodo."""
+    pdf = ReportPDF(contesto)
+    pdf.add_page()
+
+    if not scadute and not in_scadenza:
+        pdf.messaggio_vuoto('Nessuna scadenza nel periodo indicato')
+        return bytes(pdf.output())
+
+    colonne = COLONNE_SCADENZE_SPUNTA if contesto.get('mostra_spunta') else COLONNE_SCADENZE
+
+    if scadute:
+        _sezione_scadenze(pdf, 'Scadute', scadute, colonne, contesto)
+    if in_scadenza:
+        _sezione_scadenze(
+            pdf, f"In scadenza entro il {contesto.get('fine_periodo', '')}",
+            in_scadenza, colonne, contesto)
+
+    pdf.ln(2)
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(0, 7, f'Totale: {len(scadute)} scadute, {len(in_scadenza)} in scadenza',
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.blocco_firma()
+    return bytes(pdf.output())
+
+
+def _sezione_scadenze(pdf, titolo, righe, colonne, contesto):
+    pdf.ln(2)
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(0, 7, testo_sicuro(f'{titolo} ({len(righe)})'),
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.intestazione_tabella(colonne)
+    for indice, riga in enumerate(righe, start=1):
+        apparecchio = f"{riga.get('marca') or ''} {riga.get('modello') or ''}".strip()
+        valori = [
+            apparecchio,
+            riga.get('matricola'),
+            riga.get('ubicazione'),
+            riga.get('divisione_nome'),
+            _data_italiana(riga.get('prossima_scadenza')),
+            riga.get('giorni_rimasti'),
+        ]
+        if contesto.get('mostra_spunta'):
+            valori.insert(0, '[  ]')
+        pdf.riga_tabella(valori, colonne, alternata=(indice % 2 == 0))
