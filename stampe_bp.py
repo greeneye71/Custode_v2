@@ -207,6 +207,16 @@ def scadenze(tipo):
         flash(errore, 'danger')
         return redirect(url_for('stampe.index'))
 
+    # Un solo "oggi" per l'intero prospetto: deve valere sia per il confine
+    # delle scadute sia (tramite _intervallo) per quello delle scelte rapide.
+    # Se le due sezioni usassero definizioni diverse - qui datetime.now()
+    # locale, nella query date('now') di SQLite, che e' in UTC - fra
+    # mezzanotte e l'una (le due con l'ora legale) una scadenza di ieri non
+    # soddisferebbe ne' "< ieri" ne' ">= oggi": sparirebbe dal prospetto
+    # senza alcun segnale, proprio nella fascia oraria in cui e' piu'
+    # probabile che nessuno se ne accorga prima che diventi un problema.
+    oggi = datetime.now().date().isoformat()
+
     divisione_id = request.args.get('divisione_id', 'tutte')
     if divisione_id == 'tutte':
         clausola, parametri = _filtro_tutte_le_divisioni()
@@ -238,8 +248,8 @@ def scadenze(tipo):
                WHERE ps.tipo_record = ? AND {clausola}"""
 
     scadute = query_all(
-        base + " AND ps.prossima_scadenza < date('now') ORDER BY ps.prossima_scadenza",
-        [tipo_record] + parametri)
+        base + " AND ps.prossima_scadenza < ? ORDER BY ps.prossima_scadenza",
+        [tipo_record] + parametri + [oggi])
     in_scadenza = query_all(
         base + " AND ps.prossima_scadenza >= ? AND ps.prossima_scadenza <= ?"
                " ORDER BY ps.prossima_scadenza",

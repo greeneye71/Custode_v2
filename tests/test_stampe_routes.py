@@ -261,3 +261,41 @@ def test_intervallo_di_date_libere_rispetta_il_confine_inferiore(client, app, da
         f'&a={(oggi + timedelta(days=40)).isoformat()}')
     assert risposta.status_code == 200
     assert 'CAR-1' not in testo_di(risposta.data)
+
+
+def test_scadute_e_in_scadenza_sono_complementari_intorno_a_oggi(client, app, dati):
+    """Le due sezioni del prospetto devono usare la stessa definizione di
+    "oggi". Se il confine delle scadute fosse calcolato da SQLite in UTC
+    (date('now')) e quello delle scelte rapide da Python in ora locale
+    (datetime.now().date()), una scadenza di ieri potrebbe non soddisfare ne'
+    "< ieri" ne' ">= oggi" e sparire da entrambe le sezioni senza alcun
+    segnale. Una scadenza di ieri deve comparire fra le scadute, una di oggi
+    deve comparire fra le in scadenza: nessuna delle due deve mancare."""
+    # Le date sono calcolate con lo stesso orologio di _intervallo() (Python,
+    # ora locale), non con date('now','...') di SQLite: e' proprio la
+    # discrepanza fra i due orologi il difetto che questo test deve
+    # dimostrare risolto, quindi il test non puo' fare affidamento su
+    # entrambi per generare i propri dati.
+    from models import execute
+    oggi = date.today()
+    ieri = oggi - timedelta(days=1)
+    with app.app_context():
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='OCU-1'),"
+            "'preventiva', date('now','-1 year'), ?)", (ieri.isoformat(),))
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='CAR-1'),"
+            "'preventiva', date('now','-1 year'), ?)", (oggi.isoformat(),))
+    entra(client, 'admin@a.it')
+
+    risposta = client.get('/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=30g')
+    assert risposta.status_code == 200
+    testo = testo_di(risposta.data)
+    assert 'OCU-1' in testo
+    assert 'CAR-1' in testo
+    # Non basta che compaiano da qualche parte: la scadenza di ieri deve
+    # essere finita proprio fra le scadute e quella di oggi proprio fra le
+    # in scadenza, non entrambe nella stessa sezione per un altro bug.
+    assert 'Totale: 1 scadute, 1 in scadenza' in testo
