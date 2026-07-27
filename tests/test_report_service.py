@@ -80,3 +80,73 @@ def test_blocco_firma_compare_solo_se_richiesto():
     con.add_page()
     con.blocco_firma()
     assert 'Firma' in testo_di(bytes(con.output()))
+
+
+from report_service import COLONNE_INVENTARIO, stampa_inventario
+
+
+def righe_inventario():
+    return [
+        {'marca': 'REXXAM', 'modello': 'OZY', 'matricola': 'R-00015',
+         'ubicazione': 'Sala visite 1', 'divisione_nome': 'Oculistica'},
+        {'marca': 'TOMEY', 'modello': 'RC-800', 'matricola': '576806',
+         'ubicazione': 'Sala visite 1', 'divisione_nome': 'Oculistica'},
+        {'marca': 'GE', 'modello': 'B40', 'matricola': 'MON-1',
+         'ubicazione': 'Ambulatorio', 'divisione_nome': 'Cardiologia'},
+    ]
+
+
+def test_le_colonne_inventario_sommano_alla_larghezza_utile():
+    assert sum(larghezza for _, larghezza, _ in COLONNE_INVENTARIO) == 180
+
+
+def test_inventario_elenca_marca_modello_matricola_e_ubicazione():
+    pdf = stampa_inventario(righe_inventario(), contesto_minimo(raggruppa=False))
+    testo = testo_di(pdf)
+    assert 'REXXAM' in testo
+    assert 'RC-800' in testo
+    assert 'R-00015' in testo
+    assert 'Sala visite 1' in testo
+
+
+def test_inventario_riporta_il_totale():
+    pdf = stampa_inventario(righe_inventario(), contesto_minimo(raggruppa=False))
+    testo = testo_di(pdf)
+    assert 'Totale apparecchi: 3' in testo
+
+
+def test_inventario_raggruppato_apre_una_sezione_per_divisione():
+    pdf = stampa_inventario(righe_inventario(), contesto_minimo(raggruppa=True))
+    testo = testo_di(pdf)
+    assert 'Oculistica' in testo
+    assert 'Cardiologia' in testo
+    # Due apparecchi in Oculistica, uno in Cardiologia
+    assert 'Totale divisione: 2' in testo
+    assert 'Totale divisione: 1' in testo
+
+
+def test_inventario_vuoto_produce_il_foglio_nessun_dato():
+    pdf = stampa_inventario([], contesto_minimo(raggruppa=False))
+    assert 'Nessun apparecchio corrisponde ai criteri selezionati' in testo_di(pdf)
+
+
+def test_inventario_regge_i_caratteri_tipografici():
+    righe = [{'marca': 'ACME', 'modello': 'X—1', 'matricola': 'A1',
+              'ubicazione': 'Sala ’Rossa’', 'divisione_nome': 'Reparto'}]
+    pdf = stampa_inventario(righe, contesto_minimo(raggruppa=False))
+    assert pdf.startswith(b'%PDF')
+
+
+def test_un_inventario_lungo_va_a_capo_pagina():
+    # ~35 righe stanno in una pagina, 200 no: serve a verificare che
+    # l'interruzione automatica funzioni e che la testata si ripeta.
+    righe = [{'marca': f'MARCA {n}', 'modello': f'MOD-{n}',
+              'matricola': f'M{n:04d}', 'ubicazione': 'Sala 1',
+              'divisione_nome': 'Reparto'} for n in range(200)]
+    pdf = stampa_inventario(righe, contesto_minimo(raggruppa=False))
+
+    lettore = PdfReader(io.BytesIO(pdf))
+    assert len(lettore.pages) > 1
+    # La testata si ripete: il nome della struttura compare su ogni pagina
+    for pagina in lettore.pages:
+        assert 'Casa di Cura Sant Anna' in pagina.extract_text()

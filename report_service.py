@@ -149,3 +149,57 @@ class ReportPDF(FPDF):
         self.cell(0, 8, 'Data ____________________     '
                         'Firma ______________________________',
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+
+# (etichetta, larghezza in mm, allineamento) — la somma deve fare 180
+COLONNE_INVENTARIO = [
+    ('N.', 10, 'C'),
+    ('Marca', 38, 'L'),
+    ('Modello', 42, 'L'),
+    ('Matricola', 38, 'L'),
+    ('Ubicazione', 52, 'L'),
+]
+
+
+def stampa_inventario(righe, contesto):
+    """Prospetto inventario. Con contesto['raggruppa'] apre una sezione per
+    divisione, con il conteggio in coda a ciascuna."""
+    pdf = ReportPDF(contesto)
+    pdf.add_page()
+
+    if not righe:
+        pdf.messaggio_vuoto('Nessun apparecchio corrisponde ai criteri selezionati')
+        return bytes(pdf.output())
+
+    if contesto.get('raggruppa'):
+        gruppi = {}
+        for riga in righe:
+            gruppi.setdefault(riga.get('divisione_nome') or 'Senza divisione', []).append(riga)
+        for divisione in sorted(gruppi):
+            pdf.set_font('Helvetica', 'B', 11)
+            pdf.ln(2)
+            pdf.cell(0, 7, testo_sicuro(divisione), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            _corpo_inventario(pdf, gruppi[divisione])
+            pdf.set_font('Helvetica', 'I', 9)
+            pdf.cell(0, 6, f'Totale divisione: {len(gruppi[divisione])}',
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+    else:
+        _corpo_inventario(pdf, righe)
+
+    pdf.ln(2)
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(0, 7, f'Totale apparecchi: {len(righe)}',
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.blocco_firma()
+    return bytes(pdf.output())
+
+
+def _corpo_inventario(pdf, righe):
+    pdf.intestazione_tabella(COLONNE_INVENTARIO)
+    for indice, riga in enumerate(righe, start=1):
+        pdf.riga_tabella(
+            [indice, riga.get('marca'), riga.get('modello'),
+             riga.get('matricola'), riga.get('ubicazione')],
+            COLONNE_INVENTARIO,
+            alternata=(indice % 2 == 0),
+        )
