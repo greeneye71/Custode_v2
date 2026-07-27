@@ -164,30 +164,31 @@ TIPI_SCADENZA = {
 
 
 def _intervallo(periodo, da, a):
-    """Data di fine del periodo, in formato ISO.
+    """Confini (inizio, fine) del periodo, in formato ISO.
 
-    Servono due forme diverse: 'entro un mese' e' una finestra mobile, 'entro
-    l'anno in corso' e' una data fissa. Restituisce (fine, errore).
+    Servono due forme diverse: le scelte rapide sono finestre mobili che
+    partono sempre da oggi, 'date' e' un intervallo libero i cui due confini
+    vengono entrambi dall'utente. Restituisce (inizio, fine, errore).
     """
     oggi = datetime.now().date()
     if periodo == '30g':
-        return (oggi + timedelta(days=30)).isoformat(), None
+        return oggi.isoformat(), (oggi + timedelta(days=30)).isoformat(), None
     if periodo == '90g':
-        return (oggi + timedelta(days=90)).isoformat(), None
+        return oggi.isoformat(), (oggi + timedelta(days=90)).isoformat(), None
     if periodo == 'anno':
-        return oggi.replace(month=12, day=31).isoformat(), None
+        return oggi.isoformat(), oggi.replace(month=12, day=31).isoformat(), None
     if periodo == 'anno_prossimo':
-        return oggi.replace(year=oggi.year + 1, month=12, day=31).isoformat(), None
+        return oggi.isoformat(), oggi.replace(year=oggi.year + 1, month=12, day=31).isoformat(), None
     if periodo == 'date':
         try:
             inizio = datetime.strptime(da or '', '%Y-%m-%d').date()
             fine = datetime.strptime(a or '', '%Y-%m-%d').date()
         except ValueError:
-            return None, 'Indica due date valide nel formato giorno/mese/anno.'
+            return None, None, 'Indica due date valide nel formato anno-mese-giorno.'
         if fine < inizio:
-            return None, 'La data finale precede quella iniziale.'
-        return fine.isoformat(), None
-    return None, 'Periodo non riconosciuto.'
+            return None, None, 'La data finale precede quella iniziale.'
+        return inizio.isoformat(), fine.isoformat(), None
+    return None, None, 'Periodo non riconosciuto.'
 
 
 @stampe_bp.route('/scadenze/<tipo>')
@@ -200,8 +201,8 @@ def scadenze(tipo):
         return redirect(url_for('stampe.index'))
     tipo_record, titolo = TIPI_SCADENZA[tipo]
 
-    fine, errore = _intervallo(request.args.get('periodo', '30g'),
-                               request.args.get('da'), request.args.get('a'))
+    inizio, fine, errore = _intervallo(request.args.get('periodo', '30g'),
+                                       request.args.get('da'), request.args.get('a'))
     if errore:
         flash(errore, 'danger')
         return redirect(url_for('stampe.index'))
@@ -240,13 +241,13 @@ def scadenze(tipo):
         base + " AND ps.prossima_scadenza < date('now') ORDER BY ps.prossima_scadenza",
         [tipo_record] + parametri)
     in_scadenza = query_all(
-        base + " AND ps.prossima_scadenza >= date('now') AND ps.prossima_scadenza <= ?"
+        base + " AND ps.prossima_scadenza >= ? AND ps.prossima_scadenza <= ?"
                " ORDER BY ps.prossima_scadenza",
-        [tipo_record] + parametri + [fine])
+        [tipo_record] + parametri + [inizio, fine])
 
     contesto = _contesto_base(
         titolo, ambito,
         fine_periodo=datetime.strptime(fine, '%Y-%m-%d').strftime('%d/%m/%Y'),
         mostra_spunta=request.args.get('spunta') == '1')
     return _pdf(stampa_scadenze(scadute, in_scadenza, contesto),
-                _nome_file(f'scadenze-{tipo}', ambito.replace('Divisione: ', '')))
+                _nome_file(f'scadenze-{tipo}', nome_divisione))

@@ -184,7 +184,7 @@ def test_data_malformata_non_produce_un_pdf(client, dati):
     _assert_rifiuto_pulito(
         client,
         '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date&da=non-una-data&a=2026-01-01',
-        'Indica due date valide nel formato giorno/mese/anno.')
+        'Indica due date valide nel formato anno-mese-giorno.')
 
 
 def test_utente_non_stampa_le_scadenze_di_una_divisione_non_sua(client, dati):
@@ -236,3 +236,28 @@ def test_intervallo_di_date_libere_filtra_per_la_finestra_indicata(client, app, 
         '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date'
         f'&da={oggi.isoformat()}&a={(oggi + timedelta(days=30)).isoformat()}')
     assert 'OCU-1' in testo_di(dentro_finestra.data)
+
+
+def test_intervallo_di_date_libere_rispetta_il_confine_inferiore(client, app, dati):
+    """Una scadenza fra oggi e la data "Da" richiesta deve restare fuori dal
+    prospetto: non e' scaduta (quindi non compare fra le scadute, che restano
+    tutto cio' che precede oggi) e precede l'inizio della finestra richiesta
+    (quindi non deve comparire nemmeno fra le prossime). Se la query ignora il
+    confine inferiore e continua a usare "prossima_scadenza >= date('now')",
+    questa scadenza compare comunque: e' proprio quello che il rilievo
+    descrive come 'il campo Da viene validato e poi ignorato'."""
+    from models import execute
+    with app.app_context():
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='CAR-1'),"
+            "'preventiva', date('now','-1 year'), date('now','+5 days'))")
+    entra(client, 'admin@a.it')
+    oggi = date.today()
+
+    risposta = client.get(
+        '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date'
+        f'&da={(oggi + timedelta(days=15)).isoformat()}'
+        f'&a={(oggi + timedelta(days=40)).isoformat()}')
+    assert risposta.status_code == 200
+    assert 'CAR-1' not in testo_di(risposta.data)
