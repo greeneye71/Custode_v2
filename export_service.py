@@ -5,7 +5,7 @@ Generates Excel and PDF reports for apparecchi, manutenzioni, and scadenzario.
 
 import os
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def export_apparecchi_excel(apparecchi, divisione_nome=''):
@@ -471,61 +471,52 @@ def stampa_scadenze_excel(scadute, in_scadenza, titolo):
 
 
 def genera_report_scadenze_pdf(struttura_id, output_path):
-    """Genera un PDF con lo scadenzario per struttura e lo salva in output_path."""
+    """Report scadenze per l'invio automatico via email.
+
+    Usa lo stesso motore delle stampe manuali: il PDF che arriva in posta e'
+    identico a quello che si stampa dalla pagina Stampe, e resta un solo posto
+    da mantenere quando la grafica cambia.
+    """
+    from flask import current_app
     from models import query_all, query_one
-    from fpdf import FPDF
-    from fpdf.enums import XPos, YPos
-    from datetime import datetime
+    from report_service import stampa_scadenze
 
-    struttura = query_one("SELECT * FROM strutture WHERE id=?", (struttura_id,))
-    if struttura is None:
-        raise ValueError(f"Struttura con id={struttura_id} non trovata.")
-    scadenze = query_all("""
-        SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
-               d.nome as divisione_nome
-        FROM prossime_scadenze ps
-        JOIN apparecchi a ON a.id = ps.apparecchio_id
-        JOIN divisioni d ON d.id = a.divisione_id
-        WHERE a.struttura_id = ?
-          AND ps.priorita IN ('scaduto','urgente','attenzione','avviso')
-        ORDER BY ps.priorita, ps.prossima_scadenza
-    """, (struttura_id,))
+    struttura = query_one("SELECT nome, logo_path FROM strutture WHERE id = ?",
+                          (struttura_id,))
+    base = """SELECT ps.marca, ps.modello, ps.matricola, ps.ubicazione,
+                     ps.prossima_scadenza, ps.giorni_rimasti,
+                     d.nome AS divisione_nome
+              FROM prossime_scadenze ps
+              JOIN apparecchi a ON a.id = ps.apparecchio_id
+              LEFT JOIN divisioni d ON d.id = ps.divisione_id
+              WHERE a.struttura_id = ?"""
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font('Helvetica', 'B', 16)
-    pdf.cell(0, 10, f"Scadenzario - {struttura['nome']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font('Helvetica', '', 10)
-    pdf.cell(0, 6, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(4)
+    scadute = query_all(
+        base + " AND ps.prossima_scadenza < date('now') ORDER BY ps.prossima_scadenza",
+        (struttura_id,))
+    in_scadenza = query_all(
+        base + " AND ps.prossima_scadenza >= date('now')"
+               " AND ps.prossima_scadenza <= date('now','+30 days')"
+               " ORDER BY ps.prossima_scadenza",
+        (struttura_id,))
 
-    colori = {
-        'scaduto':    (220, 53, 69),
-        'urgente':    (255, 140,  0),
-        'attenzione': (255, 193,  7),
-        'avviso':     ( 13, 110, 253),
+    logo_path = None
+    if struttura and struttura.get('logo_path'):
+        logo_path = os.path.join(current_app.config['UPLOADS_PATH'],
+                                 struttura['logo_path'].replace('/', os.sep))
+
+    contesto = {
+        'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
+        'titolo': 'Scadenzario',
+        'ambito': '',
+        'logo_path': logo_path,
+        'mostra_firma': False,
+        'mostra_spunta': False,
+        'fine_periodo': (datetime.now() + timedelta(days=30)).strftime('%d/%m/%Y'),
     }
 
-    if not scadenze:
-        pdf.set_font('Helvetica', 'I', 10)
-        pdf.cell(0, 8, "Nessuna scadenza critica.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    else:
-        for s in scadenze:
-            r, g_, b = colori.get(s['priorita'], (0, 0, 0))
-            pdf.set_text_color(r, g_, b)
-            pdf.set_font('Helvetica', 'B', 9)
-            nome_app = s['descrizione'] or f"{s['marca']} {s['modello']}"
-            pdf.cell(0, 5,
-                f"[{s['priorita'].upper()}] {nome_app} - {s['divisione_nome']}",
-                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font('Helvetica', '', 9)
-            pdf.cell(0, 5,
-                f"  Mat: {s['matricola']} | Scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg) | Tipo: {s['tipo_manutenzione']}",
-                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    pdf.output(output_path)
+    with open(output_path, 'wb') as f:
+        f.write(stampa_scadenze(scadute, in_scadenza, contesto))
 
 
 def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_name='MedInventory'):
