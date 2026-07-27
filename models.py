@@ -271,6 +271,19 @@ def apply_schema_updates():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_tecnici_strutture_tecnico   ON tecnici_strutture(tecnico_id)",
         "CREATE INDEX IF NOT EXISTS idx_tecnici_strutture_struttura ON tecnici_strutture(struttura_id)",
+        # struttura_id esplicita su import_history: l'isolamento multi-tenant non
+        # può dipendere da divisione_id, che è NULL per gli import da email.
+        "ALTER TABLE import_history ADD COLUMN struttura_id INTEGER REFERENCES strutture(id)",
+        "CREATE INDEX IF NOT EXISTS idx_import_history_struttura ON import_history(struttura_id)",
+        """UPDATE import_history SET struttura_id = (
+               SELECT d.struttura_id FROM divisioni d WHERE d.id = import_history.divisione_id
+           ) WHERE struttura_id IS NULL AND divisione_id IS NOT NULL""",
+        # Import storici senza divisione (es. code email) in installazioni con una
+        # sola struttura: assegnali a quella struttura, altrimenti resterebbero
+        # invisibili a tutti.
+        """UPDATE import_history SET struttura_id = (SELECT id FROM strutture WHERE attiva = 1)
+           WHERE struttura_id IS NULL
+             AND (SELECT COUNT(*) FROM strutture WHERE attiva = 1) = 1""",
         # Ricrea la vista prossime_scadenze per mostrare solo l'ultima manutenzione/verifica
         # per ogni (apparecchio, tipo) invece di tutti i record storici
         "DROP VIEW IF EXISTS prossime_scadenze",
@@ -418,6 +431,27 @@ ORDER BY prossima_scadenza ASC""",
             )
     else:
         logger.debug(f"Schema DB versione {schema_ver}")
+
+
+def apparecchio_accessibile(apparecchio_id):
+    """Verifica che l'apparecchio sia nello scope dell'utente corrente.
+
+    Controlla sia la struttura (isolamento multi-tenant) sia, per i ruoli non
+    amministrativi, l'appartenenza a una divisione accessibile.
+    Restituisce la riga dell'apparecchio, oppure None se non accessibile.
+    """
+    struttura_id = getattr(g, 'struttura_id', None)
+    app_row = query_one(
+        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
+        (apparecchio_id, struttura_id, struttura_id)
+    )
+    if not app_row:
+        return None
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        accessible_ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if app_row['divisione_id'] not in accessible_ids:
+            return None
+    return app_row
 
 
 def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None,

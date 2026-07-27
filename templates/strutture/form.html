@@ -235,7 +235,9 @@
 
 {# Form per eliminazione divisione — fuori dal form principale per evitare nesting HTML invalido #}
 {% if struttura and struttura.get('id') %}
-<form id="form-elimina-divisione" method="POST" style="display:none;"></form>
+<form id="form-elimina-divisione" method="POST" style="display:none;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+</form>
 {% endif %}
 
 {% if struttura and struttura.get('id') %}

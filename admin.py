@@ -14,7 +14,8 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash
 
-from auth import admin_required, superadmin_required, modalita_avanzata_required, tecnico_o_admin_required
+from auth import (admin_required, superadmin_required,
+                  tecnico_o_admin_required, operazione_globale_required)
 from models import query_one, query_all, execute, log_attivita
 from ai_service import AI_PROVIDERS
 
@@ -526,7 +527,7 @@ def divisione_toggle(id):
 # ============================================================================
 
 @admin_bp.route('/configurazione', methods=['GET', 'POST'])
-@admin_required
+@operazione_globale_required
 def configurazione():
     """Edit application configuration."""
     from app import load_config, save_config
@@ -611,7 +612,7 @@ def configurazione():
 
 
 @admin_bp.route('/configurazione/test-ai', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def test_default_ai():
     """Test the global default AI configuration. Saves AI fields and returns JSON with model list."""
     import httpx
@@ -700,14 +701,14 @@ def test_default_ai():
 # ============================================================================
 
 @admin_bp.route('/email-config')
-@admin_required
+@operazione_globale_required
 def email_config():
     """Redirect to unified configurazione page (IMAP config moved there)."""
     return redirect(url_for('admin.configurazione') + '#email-imap')
 
 
 @admin_bp.route('/email-config/nuova', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def email_config_nuova():
     """Create email config for a division."""
     divisione_id = request.form.get('divisione_id')
@@ -742,7 +743,7 @@ def email_config_nuova():
 
 
 @admin_bp.route('/email-config/<int:id>/toggle', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def email_config_toggle(id):
     """Toggle email config active/inactive."""
     ec = query_one("SELECT * FROM email_config WHERE id = ?", (id,))
@@ -764,7 +765,7 @@ def email_config_toggle(id):
 # ============================================================================
 
 @admin_bp.route('/backup')
-@admin_required
+@operazione_globale_required
 def backup():
     """Backup management page."""
     from backup_service import list_backups
@@ -793,7 +794,7 @@ def backup():
 
 
 @admin_bp.route('/backup/crea', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def backup_crea():
     """Create a manual backup."""
     from backup_service import create_backup
@@ -817,7 +818,7 @@ def backup_crea():
 
 
 @admin_bp.route('/backup/<filename>/scarica')
-@admin_required
+@operazione_globale_required
 def backup_scarica(filename):
     """Download a backup file."""
     from flask import send_from_directory
@@ -834,7 +835,7 @@ def backup_scarica(filename):
 
 
 @admin_bp.route('/backup/<filename>/ripristina', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def backup_ripristina(filename):
     """Restore database from a backup."""
     from backup_service import create_backup, restore_backup
@@ -899,7 +900,7 @@ def backup_elimina(filename):
 
 
 @admin_bp.route('/reset-database', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def reset_database():
     """Cancella tutto il database, crea un backup automatico e reinizializza con i dati default."""
     from backup_service import create_backup
@@ -984,7 +985,7 @@ def reset_database():
 
 
 @admin_bp.route('/reset-parziale', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def reset_parziale():
     """Cancella tutti i dati di inventario mantenendo utenti e divisioni."""
     from backup_service import create_backup
@@ -1034,7 +1035,6 @@ def reset_parziale():
 
 @admin_bp.route('/log-attivita')
 @admin_required
-@modalita_avanzata_required
 def log_attivita_view():
     """Visualizza il registro delle attività degli utenti."""
     page = request.args.get('page', 1, type=int)

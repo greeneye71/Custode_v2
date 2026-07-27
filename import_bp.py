@@ -18,7 +18,8 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from auth import login_required
-from models import query_one, query_all, execute, log_attivita
+from models import (query_one, query_all, execute, log_attivita, upload_subdir,
+                    apparecchio_accessibile)
 
 import_bp = Blueprint('import', __name__)
 logger = logging.getLogger('medinventory.import')
@@ -54,6 +55,24 @@ DOC_TYPE_LABELS = {
 
 TIPI_VALIDI_MANUTENZIONE = {'preventiva', 'correttiva', 'verifica', 'calibrazione'}
 ESITI_VALIDI_VERIFICA = {'positivo', 'negativo', 'con_riserva'}
+
+
+def get_import_in_scope(import_id):
+    """Restituisce il record di import solo se appartiene alla struttura corrente.
+
+    Senza questo controllo qualunque utente autenticato potrebbe leggere le
+    estrazioni AI di un altro tenant — o eseguirne l'import — indovinando l'id.
+    """
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id is None:
+        # Superadmin senza impersonazione: vista globale.
+        if g.user['ruolo'] == 'superadmin':
+            return query_one("SELECT * FROM import_history WHERE id = ?", (import_id,))
+        return None
+    return query_one(
+        "SELECT * FROM import_history WHERE id = ? AND struttura_id = ?",
+        (import_id, struttura_id)
+    )
 
 
 @import_bp.route('/import')
@@ -104,9 +123,13 @@ def analizza():
         flash(ai_error, 'danger')
         return redirect(url_for('import.upload'))
 
-    # Save uploaded file
-    uploads_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'import')
-    os.makedirs(uploads_dir, exist_ok=True)
+    # struttura_id derivata dalla divisione selezionata (fonte autoritativa)
+    _div_row = query_one("SELECT struttura_id FROM divisioni WHERE id = ?", (divisione_id,))
+    _struttura_import = _div_row['struttura_id'] if _div_row else _struttura_id_check
+
+    # Save uploaded file (in cartella scoped per struttura: i sorgenti di import
+    # sono serviti da /uploads/<path>, che isola solo i percorsi strutture/<id>/)
+    uploads_dir, _import_rel_prefix = upload_subdir('import', _struttura_import)
     timestamp = int(time.time())
     filename = f"{timestamp}_{secure_filename(file.filename)}"
     filepath = os.path.join(uploads_dir, filename)
@@ -118,9 +141,10 @@ def analizza():
     cursor = execute(
         """INSERT INTO import_history
            (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            stato, imported_by)
-           VALUES ('inventario', ?, ?, ?, ?, 'processing', ?)""",
-        (file.filename, f"import/{filename}", ext, divisione_id, g.user['id'])
+            struttura_id, stato, imported_by)
+           VALUES ('inventario', ?, ?, ?, ?, ?, 'processing', ?)""",
+        (file.filename, f"{_import_rel_prefix}/{filename}", ext, divisione_id,
+         _struttura_import, g.user['id'])
     )
     import_id = cursor.lastrowid
 
@@ -151,7 +175,7 @@ def analizza():
 @login_required
 def attendi(id):
     """Waiting page: polls status while AI analysis runs in background."""
-    import_rec = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    import_rec = get_import_in_scope(id)
     if not import_rec:
         flash('Import non trovato.', 'danger')
         return redirect(url_for('import.upload'))
@@ -168,9 +192,7 @@ def attendi(id):
 @login_required
 def stato(id):
     """Return current processing status as JSON (polled by attendi.html)."""
-    import_rec = query_one(
-        "SELECT stato, tipo_import, errori_dettaglio FROM import_history WHERE id = ?",
-        (id,))
+    import_rec = get_import_in_scope(id)
     if not import_rec:
         return jsonify({'stato': 'failed', 'errori_dettaglio': 'Import non trovato.'})
 
@@ -349,7 +371,7 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
                 items, _ = parse_verbale_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
             for item in items:
                 item['_pagina'] = 1
-                item['_page_file'] = f"import/{safe_name}"
+                item['_page_file'] = os.path.relpath(filepath, uploads_path)
             all_items = items
     else:
         items, _ = parse_verbale_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
@@ -437,7 +459,7 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
                 items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
             for item in items:
                 item['_pagina'] = 1
-                item['_page_file'] = f"import/{safe_name}"
+                item['_page_file'] = os.path.relpath(filepath, uploads_path)
             all_items = items
     else:
         items, _ = analyze_verifiche_with_ai(text, api_key, model, config=config, struttura_id=struttura_id)
@@ -507,7 +529,7 @@ def _match_apparecchi(items, struttura_id=None):
 @login_required
 def preview(id):
     """Preview page: show extracted items with match info. Adapts to tipo_import."""
-    import_rec = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    import_rec = get_import_in_scope(id)
     if not import_rec:
         flash('Import non trovato.', 'danger')
         return redirect(url_for('import.upload'))
@@ -546,13 +568,14 @@ def preview(id):
                    ORDER BY a.matricola""",
                 [div['id']]
             )
-        elif getattr(g, 'user', {}).get('ruolo') == 'admin':
+        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico', 'superadmin')                 and getattr(g, 'struttura_id', None):
             apparecchi_list = query_all(
                 """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
                    FROM apparecchi a
                    LEFT JOIN divisioni d ON a.divisione_id = d.id
-                   WHERE a.stato != 'dismesso'
-                   ORDER BY a.matricola"""
+                   WHERE a.stato != 'dismesso' AND a.struttura_id = ?
+                   ORDER BY a.matricola""",
+                (g.struttura_id,)
             )
         else:
             ids = [d['id'] for d in getattr(g, 'divisioni', [])]
@@ -604,7 +627,7 @@ def preview(id):
 @login_required
 def esegui(id):
     """Execute import for selected rows. Branches by tipo_import."""
-    import_rec = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    import_rec = get_import_in_scope(id)
     if not import_rec:
         flash('Import non trovato.', 'danger')
         return redirect(url_for('import.upload'))
@@ -754,13 +777,10 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                     apparecchio_id = int(app_override)
                 except (ValueError, TypeError):
                     apparecchio_id = None
-                # Bug I: validate override is within accessible divisions
-                if apparecchio_id and g.user['ruolo'] != 'admin':
-                    accessible_ids = [d['id'] for d in g.divisioni]
-                    app_rec = query_one(
-                        "SELECT divisione_id FROM apparecchi WHERE id = ?", (apparecchio_id,))
-                    if not app_rec or app_rec['divisione_id'] not in accessible_ids:
-                        apparecchio_id = None
+                # L'override arriva dal form: verifica struttura e divisione
+                # per ogni ruolo (prima l'admin non veniva controllato affatto).
+                if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                    apparecchio_id = None
             else:
                 apparecchio_id = row['apparecchio_match_id']
 
@@ -786,12 +806,12 @@ def _execute_verbali(import_id, selected_ids, import_rec):
             if page_file:
                 src = os.path.join(current_app.config['UPLOADS_PATH'], page_file)
                 if os.path.exists(src):
-                    verbali_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'verbali')
-                    os.makedirs(verbali_dir, exist_ok=True)
+                    verbali_dir, verbali_prefix = upload_subdir(
+                        'verbali', import_rec.get('struttura_id'))
                     dest_name = f"{batch_ts}_{idx}_{os.path.basename(page_file)}"
                     dest = os.path.join(verbali_dir, dest_name)
                     shutil.copy2(src, dest)
-                    verbale_path = f"verbali/{dest_name}"
+                    verbale_path = f"{verbali_prefix}/{dest_name}"
 
             # Safe periodicita conversion (handles floats like "365.0")
             periodicita_giorni = None
@@ -902,13 +922,10 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                         apparecchio_id = int(app_override)
                     except (ValueError, TypeError):
                         apparecchio_id = None
-                    # validate override is within accessible divisions
-                    if apparecchio_id and g.user['ruolo'] not in ('admin', 'superadmin'):
-                        accessible_ids = [d['id'] for d in g.divisioni]
-                        app_rec = query_one(
-                            "SELECT divisione_id FROM apparecchi WHERE id = ?", (apparecchio_id,))
-                        if not app_rec or app_rec['divisione_id'] not in accessible_ids:
-                            apparecchio_id = None
+                    # L'override arriva dal form: verifica struttura e divisione
+                    # per ogni ruolo (prima admin/superadmin non erano controllati).
+                    if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                        apparecchio_id = None
                 else:
                     apparecchio_id = row['apparecchio_match_id']
 
@@ -934,12 +951,12 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
             if page_file:
                 src = os.path.join(current_app.config['UPLOADS_PATH'], page_file)
                 if os.path.exists(src):
-                    verifiche_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'verifiche')
-                    os.makedirs(verifiche_dir, exist_ok=True)
+                    verifiche_dir, verifiche_prefix = upload_subdir(
+                        'verifiche', import_rec.get('struttura_id'))
                     dest_name = f"{batch_ts}_{idx}_{os.path.basename(page_file)}"
                     dest = os.path.join(verifiche_dir, dest_name)
                     shutil.copy2(src, dest)
-                    documento_path = f"verifiche/{dest_name}"
+                    documento_path = f"{verifiche_prefix}/{dest_name}"
 
             # Bug F: safe periodicita conversion (handles floats like "365.0"); default 730 (2 anni)
             periodicita = int(float(data.get('periodicita_giorni') or 730))
@@ -991,7 +1008,7 @@ def storico():
                FROM import_history ih
                LEFT JOIN divisioni d ON ih.divisione_id = d.id
                LEFT JOIN utenti u ON ih.imported_by = u.id
-               WHERE d.struttura_id = ?
+               WHERE ih.struttura_id = ?
                ORDER BY ih.created_at DESC
                LIMIT 50""",
             (struttura_id,)
@@ -1023,7 +1040,7 @@ def email_queue():
                FROM import_history ih
                LEFT JOIN divisioni d ON ih.divisione_id = d.id
                WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
-                     AND d.struttura_id = ?
+                     AND ih.struttura_id = ?
                ORDER BY ih.created_at DESC""",
             (struttura_id,)
         )
@@ -1048,7 +1065,7 @@ def email_queue():
                       SUM(CASE WHEN ih.stato = 'failed' THEN 1 ELSE 0 END) as failed
                FROM import_history ih
                LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               WHERE ih.tipo_import = 'verbale_email' AND d.struttura_id = ?""",
+               WHERE ih.tipo_import = 'verbale_email' AND ih.struttura_id = ?""",
             (struttura_id,)
         )
     else:
@@ -1068,7 +1085,7 @@ def email_queue():
                FROM import_history ih
                LEFT JOIN divisioni d ON ih.divisione_id = d.id
                WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
-                     AND d.struttura_id = ?
+                     AND ih.struttura_id = ?
                ORDER BY ih.created_at DESC LIMIT 10""",
             (struttura_id,)
         )
@@ -1093,7 +1110,7 @@ def email_queue():
 @login_required
 def email_dettaglio(id):
     """Detail view for a pending email verbale. Filtrato per struttura."""
-    record = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    record = get_import_in_scope(id)
     if not record:
         flash('Record non trovato.', 'danger')
         return redirect(url_for('import.email_queue'))
@@ -1150,7 +1167,7 @@ def email_dettaglio(id):
 @login_required
 def email_conferma(id):
     """Confirm and import a pending email verbale."""
-    record = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    record = get_import_in_scope(id)
     if not record:
         flash('Record non trovato.', 'danger')
         return redirect(url_for('import.email_queue'))
@@ -1232,7 +1249,7 @@ def email_conferma(id):
 @login_required
 def email_scarta(id):
     """Discard a pending email verbale."""
-    record = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    record = get_import_in_scope(id)
     if not record:
         flash('Record non trovato.', 'danger')
         return redirect(url_for('import.email_queue'))

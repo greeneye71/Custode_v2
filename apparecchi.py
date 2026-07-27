@@ -16,8 +16,9 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from auth import login_required, modalita_avanzata_required
-from models import query_one, query_all, execute, log_attivita, upload_subdir
+from auth import login_required
+from models import (query_one, query_all, execute, log_attivita, upload_subdir,
+                    apparecchio_accessibile)
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -93,6 +94,12 @@ def _validate_apparecchio(form_data, edit_id=None):
                 )
                 if not div_ok:
                     errors['divisione_id'] = 'Divisione non valida.'
+            # Per i ruoli non amministrativi la divisione dev'essere fra quelle
+            # assegnate: altrimenti un utente potrebbe spostare o creare
+            # apparecchi in reparti a cui non ha accesso.
+            if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+                if data['divisione_id'] not in [d['id'] for d in g.divisioni]:
+                    errors['divisione_id'] = 'Divisione non accessibile.'
         except ValueError:
             errors['divisione_id'] = 'Divisione non valida.'
 
@@ -518,14 +525,11 @@ def dettaglio(id):
 
 @apparecchi_bp.route('/apparecchi/<int:id>/qr')
 @login_required
-@modalita_avanzata_required
 def qr_code(id):
     """Genera e restituisce il QR code PNG per l'apparecchio."""
     import qrcode
 
-    apparecchio = query_one(
-        "SELECT * FROM apparecchi WHERE id = ?", (id,)
-    )
+    apparecchio = apparecchio_accessibile(id)
     if not apparecchio:
         abort(404)
 
@@ -735,6 +739,11 @@ def upload_documento(id):
 @login_required
 def scarica_documento(id, doc_id):
     """Download a document."""
+    # Verifica lo scope (struttura + divisione) prima di servire il file
+    if not apparecchio_accessibile(id):
+        flash('Apparecchio non trovato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
     doc = query_one(
         "SELECT * FROM documenti WHERE id = ? AND apparecchio_id = ?",
         (doc_id, id)

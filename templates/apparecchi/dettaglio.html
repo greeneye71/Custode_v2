@@ -35,13 +35,11 @@
         <a href="{{ url_for('apparecchi.modifica', id=apparecchio.id) }}" class="btn btn-primary d-print-none">
             <i class="bi bi-pencil me-1"></i> Modifica
         </a>
-        {% if g_struttura_modalita == 'avanzata' %}
         <a href="{{ url_for('apparecchi.qr_code', id=apparecchio.id) }}"
            class="btn btn-outline-secondary d-print-none"
            title="Scarica QR Code">
           <i class="bi bi-qr-code me-1"></i>QR Code
         </a>
-        {% endif %}
         <a href="{{ url_for('apparecchi.lista') }}" class="btn btn-outline-secondary d-print-none">
             <i class="bi bi-arrow-left me-1"></i> Lista
         </a>
@@ -554,6 +552,7 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
                 <form id="eliminaManutenzioneForm" method="POST" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-danger">
                         <i class="bi bi-trash me-1"></i> Elimina
                     </button>
@@ -578,6 +577,7 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
                 <form id="eliminaVerificaForm" method="POST" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-danger">
                         <i class="bi bi-trash me-1"></i> Elimina
                     </button>

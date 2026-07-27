@@ -126,19 +126,37 @@ def admin_struttura_required(f):
     return decorated_function
 
 
-def modalita_avanzata_required(f):
-    """Decorator: richiede modalita='avanzata' per la struttura corrente."""
+def operazione_globale_required(f):
+    """Decorator: operazioni che agiscono sull'INTERO database, non su una singola
+    struttura — backup, ripristino, reset, configurazione globale (chiavi AI di
+    default, credenziali IMAP/SMTP).
+
+    Riservate al superadmin: un admin di struttura non deve poter scaricare il DB
+    di tutti i tenant né azzerare i dati altrui.
+
+    Eccezione: nelle installazioni a struttura singola non esiste un superadmin
+    (seed.py crea solo un 'admin'), e "globale" coincide con "la mia struttura".
+    Lì l'admin mantiene l'accesso.
+    """
     @wraps(f)
     @login_required
     def decorated_function(*args, **kwargs):
         if g.user['ruolo'] == 'superadmin':
-            return f(*args, **kwargs)  # superadmin bypassa sempre
-        struttura_modalita = getattr(g, 'struttura_modalita', 'avanzata')
-        if struttura_modalita != 'avanzata':
-            flash('Funzione disponibile solo in modalità Avanzata.', 'warning')
-            return redirect(url_for('index'))
-        return f(*args, **kwargs)
+            return f(*args, **kwargs)
+        if g.user['ruolo'] == 'admin' and _installazione_singola_struttura():
+            return f(*args, **kwargs)
+        flash('Operazione riservata al superamministratore.', 'danger')
+        return redirect(url_for('index'))
     return decorated_function
+
+
+def _installazione_singola_struttura():
+    """True se il deployment ospita una sola struttura (nessun isolamento da
+    garantire fra tenant diversi)."""
+    if current_app.config.get('APP_CONFIG', {}).get('single_struttura', False):
+        return True
+    row = query_one("SELECT COUNT(*) AS cnt FROM strutture WHERE attiva = 1")
+    return bool(row) and row['cnt'] <= 1
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +231,6 @@ def _load_user_from_session():
     g.struttura = struttura
     g.struttura_id = struttura['id'] if struttura else None
     g.struttura_nome = struttura['nome'] if struttura else None
-    g.struttura_modalita = 'avanzata'  # tutte le strutture sono sempre avanzate
     g.is_superadmin_impersonating = (
         g.user['ruolo'] == 'superadmin' and struttura is not None
     )

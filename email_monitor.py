@@ -39,6 +39,22 @@ def decrypt_password(encrypted_password, config):
     return f.decrypt(encrypted_password.encode()).decode()
 
 
+def _struttura_unica(db_path):
+    """Id dell'unica struttura attiva, o None se ce n'è più di una (o nessuna)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            rows = conn.execute(
+                "SELECT id FROM strutture WHERE attiva = 1 LIMIT 2").fetchall()
+        finally:
+            conn.close()
+        return rows[0][0] if len(rows) == 1 else None
+    except Exception as e:
+        logger.warning(f"Impossibile determinare la struttura per l'import email: {e}")
+        return None
+
+
 def check_emails_for_division(email_cfg, app_config, db_path):
     """
     Check IMAP mailbox for a single division's email config.
@@ -356,7 +372,8 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 apparecchio_id=apparecchio_id,
                 errori=None if auto_imported else 'In attesa di revisione manuale',
                 totale_righe=totale,
-                righe_importate=righe_imp
+                righe_importate=righe_imp,
+                struttura_id=struttura_id
             )
 
         except Exception as e:
@@ -367,7 +384,8 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 db_path, divisione_id, att['filename'],
                 f"email/{safe_name}" if safe_name else '',
                 sender, subject,
-                stato='failed', errori=str(e)
+                stato='failed', errori=str(e),
+                struttura_id=struttura_id
             )
 
 
@@ -414,7 +432,7 @@ def _decode_header(value):
 def _save_email_import(db_path, divisione_id, filename, filepath, email_from, email_subject,
                        tipo_import_value='verbale_email', stato='pending', ai_prompt=None,
                        ai_response=None, parsed_data=None, apparecchio_id=None, errori=None,
-                       totale_righe=1, righe_importate=None):
+                       totale_righe=1, righe_importate=None, struttura_id=None):
     """Save an email import record to the database."""
     if righe_importate is None:
         righe_importate = 1 if stato == 'completed' else 0
@@ -423,11 +441,12 @@ def _save_email_import(db_path, divisione_id, filename, filepath, email_from, em
     try:
         conn.execute(
             """INSERT INTO import_history
-               (tipo_import, filename, filepath, divisione_id, email_from, email_subject,
+               (tipo_import, filename, filepath, divisione_id, struttura_id,
+                email_from, email_subject,
                 totale_righe, righe_importate, stato, ai_prompt, ai_response, errori_dettaglio)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                tipo_import_value, filename, filepath, divisione_id,
+                tipo_import_value, filename, filepath, divisione_id, struttura_id,
                 email_from, email_subject,
                 totale_righe, righe_importate,
                 stato, ai_prompt, ai_response,
@@ -472,6 +491,17 @@ def check_all_emails(app):
         logger.warning("IMAP abilitato ma account o server non configurati.")
         return
 
+    # L'account IMAP è configurato a livello globale, quindi non porta con sé una
+    # struttura. Se il deployment ne ha una sola, i verbali sono suoi: senza questa
+    # attribuzione i record finirebbero con struttura_id NULL e la coda email
+    # resterebbe invisibile a ogni utente (che filtra per struttura).
+    struttura_id = _struttura_unica(db_path)
+    if struttura_id is None:
+        logger.warning(
+            "IMAP globale con più strutture attive: i verbali importati non "
+            "saranno attribuibili a una struttura. Configurare l'import per struttura."
+        )
+
     email_cfg = {
         'id': None,
         'email_account': imap_account,
@@ -480,6 +510,7 @@ def check_all_emails(app):
         'imap_port': app_config.get('imap_port', 993),
         'imap_ssl': app_config.get('imap_ssl', True),
         'divisione_id': None,
+        'struttura_id': struttura_id,
     }
 
     logger.info(f"Controllo account email: {imap_account}")

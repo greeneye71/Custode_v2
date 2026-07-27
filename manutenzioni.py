@@ -13,7 +13,8 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from auth import login_required
-from models import query_one, query_all, execute, log_attivita, upload_subdir
+from models import (query_one, query_all, execute, log_attivita, upload_subdir,
+                    apparecchio_accessibile)
 
 manutenzioni_bp = Blueprint('manutenzioni', __name__)
 
@@ -54,15 +55,9 @@ def _validate_manutenzione(form_data):
     else:
         try:
             data['apparecchio_id'] = int(data['apparecchio_id'])
-            struttura_id = getattr(g, 'struttura_id', None)
-            if struttura_id is not None:
-                app = query_one(
-                    "SELECT id FROM apparecchi WHERE id = ? AND struttura_id = ?",
-                    (data['apparecchio_id'], struttura_id)
-                )
-            else:
-                app = query_one("SELECT id FROM apparecchi WHERE id = ?", (data['apparecchio_id'],))
-            if not app:
+            # Verifica struttura E divisione: un utente non deve poter agganciare
+            # il record a un apparecchio fuori dal proprio scope.
+            if not apparecchio_accessibile(data['apparecchio_id']):
                 errors['apparecchio_id'] = "Apparecchio non trovato."
         except ValueError:
             errors['apparecchio_id'] = "Apparecchio non valido."
@@ -96,6 +91,11 @@ def _validate_manutenzione(form_data):
 
     # Optional: prossima_scadenza
     data['prossima_scadenza'] = form_data.get('prossima_scadenza', '').strip() or None
+    if data['prossima_scadenza']:
+        try:
+            datetime.strptime(data['prossima_scadenza'], '%Y-%m-%d')
+        except ValueError:
+            errors['prossima_scadenza'] = "Formato data non valido (YYYY-MM-DD)."
 
     # Optional text fields
     data['tecnico_ditta'] = form_data.get('tecnico_ditta', '').strip() or None
@@ -367,6 +367,11 @@ def scarica_verbale(id):
     """Download PDF verbale for a manutenzione."""
     manutenzione = query_one("SELECT * FROM manutenzioni WHERE id = ?", (id,))
     if not manutenzione or not manutenzione.get('verbale_path'):
+        flash('Verbale non trovato.', 'danger')
+        return redirect(url_for('manutenzioni.lista'))
+
+    # Isolamento multi-tenant: l'apparecchio deve essere nello scope dell'utente
+    if not apparecchio_accessibile(manutenzione['apparecchio_id']):
         flash('Verbale non trovato.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 

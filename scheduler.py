@@ -55,8 +55,11 @@ class BackgroundScheduler:
             },
             {
                 'name': 'deadline_alerts',
+                # Controlla ogni ora, non ogni 24: _is_digest_due richiede
+                # l'ora esatta (7:00). Con interval=86400 il task si allineava
+                # all'ora di avvio dell'app e la finestra non veniva mai colpita.
                 'func': self._send_deadline_alerts,
-                'interval': 86400,  # once a day
+                'interval': 3600,
                 'last_run': 0,
             },
             {

@@ -10,12 +10,13 @@ from datetime import datetime, timedelta
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    flash, g, current_app, send_from_directory
+    flash, g, current_app, send_from_directory, abort
 )
 from werkzeug.utils import secure_filename
 
 from auth import login_required
-from models import query_one, query_all, execute, log_attivita, upload_subdir
+from models import (query_one, query_all, execute, log_attivita, upload_subdir,
+                    apparecchio_accessibile)
 
 verifiche_bp = Blueprint('verifiche', __name__)
 
@@ -69,15 +70,9 @@ def _validate_verifica(form_data):
     else:
         try:
             data['apparecchio_id'] = int(data['apparecchio_id'])
-            struttura_id = getattr(g, 'struttura_id', None)
-            if struttura_id is not None:
-                app = query_one(
-                    "SELECT id FROM apparecchi WHERE id = ? AND struttura_id = ?",
-                    (data['apparecchio_id'], struttura_id)
-                )
-            else:
-                app = query_one("SELECT id FROM apparecchi WHERE id = ?", (data['apparecchio_id'],))
-            if not app:
+            # Verifica struttura E divisione: un utente non deve poter agganciare
+            # il record a un apparecchio fuori dal proprio scope.
+            if not apparecchio_accessibile(data['apparecchio_id']):
                 errors['apparecchio_id'] = "Apparecchio non trovato."
         except ValueError:
             errors['apparecchio_id'] = "Apparecchio non valido."
@@ -367,11 +362,20 @@ def scarica_documento(id):
         flash('Documento non trovato.', 'danger')
         return redirect(url_for('verifiche.lista'))
 
+    # Isolamento multi-tenant: l'apparecchio deve essere nello scope dell'utente
+    if not apparecchio_accessibile(verifica['apparecchio_id']):
+        flash('Documento non trovato.', 'danger')
+        return redirect(url_for('verifiche.lista'))
+
     uploads_path = current_app.config['UPLOADS_PATH']
     rel = verifica['documento_path']
-    directory = os.path.join(uploads_path, os.path.dirname(rel))
-    filename = os.path.basename(rel)
-    return send_from_directory(directory, filename, as_attachment=True)
+    # Il percorso deve restare dentro uploads/ (difesa in profondità)
+    resolved = os.path.realpath(os.path.join(uploads_path, rel))
+    if not resolved.startswith(os.path.realpath(uploads_path) + os.sep):
+        abort(403)
+    return send_from_directory(os.path.dirname(resolved),
+                               os.path.basename(resolved),
+                               as_attachment=True)
 
 
 # ---------------------------------------------------------------------------
@@ -382,8 +386,7 @@ def scarica_documento(id):
 @login_required
 def import_upload():
     """Pagina upload per import massivo verifiche."""
-    divisioni = query_all("SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome")
-    return render_template('verifiche/import_upload.html', divisioni=divisioni)
+    return render_template('verifiche/import_upload.html', divisioni=g.divisioni)
 
 
 @verifiche_bp.route('/verifiche/import/analizza', methods=['POST'])
@@ -404,8 +407,8 @@ def import_analizza():
         flash('Formato file non supportato. Usa PDF, Excel o CSV.', 'danger')
         return redirect(url_for('verifiche.import_upload'))
 
-    uploads_dir = os.path.join(current_app.config['UPLOADS_PATH'], 'import')
-    os.makedirs(uploads_dir, exist_ok=True)
+    struttura_id = getattr(g, 'struttura_id', None)
+    uploads_dir, rel_prefix = upload_subdir('import', struttura_id)
     safe_name = f"{int(datetime.now().timestamp())}_{secure_filename(file.filename)}"
     filepath = os.path.join(uploads_dir, safe_name)
     file.save(filepath)
@@ -417,7 +420,6 @@ def import_analizza():
         return redirect(url_for('verifiche.import_upload'))
 
     config = current_app.config['APP_CONFIG']
-    struttura_id = getattr(g, 'struttura_id', None)
 
     from ai_service import check_ai_configured, get_ai_config
     ai_ok, ai_error = check_ai_configured(config=config, struttura_id=struttura_id)
@@ -440,10 +442,10 @@ def import_analizza():
     cursor = execute(
         """INSERT INTO import_history
            (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            totale_righe, stato, ai_prompt, ai_response, imported_by)
-           VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-        ('verifica_elettrica', file.filename, f"import/{safe_name}", ext,
-         int(divisione_id) if divisione_id else None,
+            struttura_id, totale_righe, stato, ai_prompt, ai_response, imported_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+        ('verifica_elettrica', file.filename, f"{rel_prefix}/{safe_name}", ext,
+         int(divisione_id) if divisione_id else None, struttura_id,
          len(items),
          f"[VERIFICA_BATCH_SYSTEM_PROMPT + testo ({len(text)} chars)]",
          ai_response, g.user['id'])
@@ -456,10 +458,17 @@ def import_analizza():
         match_id = None
         match_confidence = 0.0
         if matricola:
-            app_row = query_one(
-                "SELECT id FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
-                (matricola,)
-            )
+            if struttura_id:
+                app_row = query_one(
+                    "SELECT id FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'"
+                    " AND struttura_id = ?",
+                    (matricola, struttura_id)
+                )
+            else:
+                app_row = query_one(
+                    "SELECT id FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
+                    (matricola,)
+                )
             if app_row:
                 match_id = app_row['id']
                 match_confidence = 1.0
@@ -483,7 +492,8 @@ def import_analizza():
 @login_required
 def import_preview(id):
     """Show AI preview for import review."""
-    record = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    from import_bp import get_import_in_scope
+    record = get_import_in_scope(id)
     if not record or record['tipo_import'] != 'verifica_elettrica':
         flash('Import non trovato.', 'danger')
         return redirect(url_for('verifiche.import_upload'))
@@ -506,12 +516,11 @@ def import_preview(id):
         except Exception:
             r['dati'] = {}
 
-    divisioni = query_all("SELECT * FROM divisioni WHERE attiva = 1 ORDER BY nome")
     apparecchi_list = _get_accessible_apparecchi()
 
     return render_template('verifiche/import_preview.html',
                            record=record, righe=righe,
-                           divisioni=divisioni,
+                           divisioni=g.divisioni,
                            apparecchi_list=apparecchi_list)
 
 
@@ -519,7 +528,8 @@ def import_preview(id):
 @login_required
 def import_esegui(id):
     """Execute import of selected verifiche rows."""
-    record = query_one("SELECT * FROM import_history WHERE id = ?", (id,))
+    from import_bp import get_import_in_scope
+    record = get_import_in_scope(id)
     if not record or record['tipo_import'] != 'verifica_elettrica':
         flash('Import non trovato.', 'danger')
         return redirect(url_for('verifiche.import_upload'))
@@ -547,6 +557,12 @@ def import_esegui(id):
         apparecchio_id = int(app_id_override) if app_id_override else riga['apparecchio_match_id']
 
         if not apparecchio_id:
+            errors += 1
+            continue
+
+        # L'override arriva dal form: va verificato contro lo scope dell'utente,
+        # altrimenti si potrebbe scrivere una verifica su un apparecchio altrui.
+        if app_id_override and not apparecchio_accessibile(apparecchio_id):
             errors += 1
             continue
 

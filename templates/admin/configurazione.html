@@ -360,7 +360,9 @@
 </div>
 
 <form id="formResetParziale" method="POST"
-      action="{{ url_for('admin.reset_parziale') }}" style="display:none"></form>
+      action="{{ url_for('admin.reset_parziale') }}" style="display:none">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+</form>
 
 <!-- Modal conferma reset database -->
 <div class="modal fade" id="modalResetDatabase" tabindex="-1" aria-labelledby="modalResetDatabaseLabel" aria-hidden="true">
@@ -400,7 +402,9 @@
 </div>
 
 <form id="formResetDatabase" method="POST"
-      action="{{ url_for('admin.reset_database') }}" style="display:none"></form>
+      action="{{ url_for('admin.reset_database') }}" style="display:none">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+</form>
 
 <script>
 var _defTestAiUrl = "{{ url_for('admin.test_default_ai') }}";

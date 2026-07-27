@@ -324,6 +324,7 @@ CREATE TABLE IF NOT EXISTS import_history (
   filepath TEXT NOT NULL,
   tipo_documento TEXT,
   divisione_id INTEGER,
+  struttura_id INTEGER,
   email_from TEXT,
   email_subject TEXT,
   totale_righe INTEGER,
@@ -337,6 +338,7 @@ CREATE TABLE IF NOT EXISTS import_history (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   completed_at DATETIME,
   FOREIGN KEY (divisione_id) REFERENCES divisioni(id),
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id),
   FOREIGN KEY (imported_by) REFERENCES utenti(id)
 );
 

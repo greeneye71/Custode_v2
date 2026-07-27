@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v1.4.3** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.0.0** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
-**Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Ollama / LM Studio)
+**Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
 ## Running the Application
 
@@ -20,57 +20,86 @@ python run_production.py
 # First-time setup: initialize database schema + default admin user
 python seed.py
 # Default credentials: admin@medinventory.local / admin123
+
+# Multi-tenant deployments also need a superadmin (seed.py only creates an admin)
+python crea_superadmin.py
+
+# Switch between single- and multi-struttura mode
+python toggle_modalita.py --status
 ```
 
 No build step needed. No test suite exists.
 
 ## Configuration
 
-All runtime config lives in `config.json` (auto-generated from `config.example.json`). Key fields:
+Config is split in two files, merged at startup (`load_config()` in `app.py`, local wins):
 
-- `ai_provider` — `anthropic` (default), `ollama`, `lmstudio`, or `openai_compatible`
-- `anthropic_api_key` — required when using Anthropic Claude
-- `ai_import_model` — currently `claude-sonnet-4-20250514` (Anthropic)
-- `ai_email_model` — currently `claude-haiku-4-5-20251001` (Anthropic)
-- `ai_local_base_url` — URL for local AI server (Ollama/LM Studio)
-- `ai_local_model` — model name for local provider
-- `database_path` — defaults to `data/database.sqlite`
-- `encryption_key` — Fernet key for IMAP password encryption (auto-generated)
+- `config.json` — system defaults only (`version`, `database_path`, `uploads_path`, `backups_path`). Tracked in git, overwritten by updates.
+- `config.local.json` — everything the operator customizes. Auto-created from `config.local.example.json`; never touched by updates. `save_config()` only writes keys listed in `LOCAL_CONFIG_KEYS`.
+
+Key fields (all in `config.local.json`):
+
+- `single_struttura` — `true` for a single-facility install, `false` for multi-tenant
+- `default_ai_provider` — `anthropic`, `gemini`, `openai`, `ollama`, `lmstudio`, or `openai_compatible`
+- `default_anthropic_api_key` / `default_gemini_api_key` / `default_openai_api_key` — global fallback keys
+- `default_ai_import_model`, `default_ai_email_model`, `default_ai_local_base_url`, `default_ai_local_model`
+- `imap_*`, `smtp_*` — global mail settings
+- `encryption_key` — derives the Fernet key for IMAP/SMTP password encryption (auto-generated)
+- `force_https`, `cloudflare_mode` — deployment behind a tunnel/reverse proxy
+
+**Per-struttura config** lives in the `strutture_config` table (`get_struttura_config()` / `set_struttura_config()` in `models.py`), and falls back to the global values above. AI keys, models and SMTP can all be overridden per facility.
 
 ## Architecture
 
 ### Flask Application Factory
-`app.py` — `create_app()` registers all blueprints, starts the background scheduler, and injects globals into all templates via `inject_globals()` context processor.
+`app.py` — `create_app()` registers all blueprints, sets security headers and cookie flags, enables CSRF protection, and injects globals into all templates via `inject_globals()`. The background scheduler is started by the entry points (`app.py __main__`, `run_production.py`), not by the factory.
 
 ### Blueprints
 | File | Prefix | Responsibility |
 |------|--------|---------------|
-| `auth.py` | (root) | Login, logout, sessions, `@login_required` / `@admin_required` decorators |
-| `apparecchi.py` | `/apparecchi` | Medical device CRUD, file uploads, soft-delete (dismissione) |
+| `auth.py` | (root) | Login, logout, sessions, struttura impersonation, authorization decorators |
+| `apparecchi.py` | `/apparecchi` | Medical device CRUD, accessories, file uploads, QR code, soft-delete (dismissione) |
 | `manutenzioni.py` | `/manutenzioni` | Maintenance records, deadlines, scadenzario view, verbale PDF upload/download |
-| `admin.py` | `/admin` | Users, divisions, config editor, backup, activity log |
-| `import_bp.py` | `/import` | AI-powered inventory import + email queue review |
+| `verifiche.py` | `/verifiche` | Electrical safety checks (verifiche di sicurezza elettrica) + AI bulk import |
+| `admin.py` | `/admin` | Users, divisions, global config, backup, activity log, security, tecnici |
+| `strutture_bp.py` | `/strutture` | Facility CRUD, per-facility config + AI test, API tokens |
+| `import_bp.py` | `/import` | AI-powered unified document import + email queue review |
 | `export_bp.py` | `/export` | Excel/PDF report generation |
+| `api_bp.py` | `/api/v1` | REST API, Bearer-token auth, scoped to the token's struttura (CSRF-exempt) |
 
 ### Services
 | File | Responsibility |
 |------|---------------|
-| `ai_service.py` | AI provider abstraction (Anthropic/Ollama/LM Studio): text extraction + structured JSON parsing |
-| `email_monitor.py` | IMAP polling, PDF extraction, Claude parsing of maintenance reports |
-| `scheduler.py` | Background daemon: email checks, session cleanup, auto-backups |
+| `ai_service.py` | AI provider abstraction: text extraction + structured JSON parsing, per-struttura config resolution |
+| `email_monitor.py` | IMAP polling, PDF extraction, AI parsing of maintenance reports |
+| `scheduler.py` | Background daemon: email checks, session cleanup, auto-backups, deadline digests, scheduled PDF reports |
 | `backup_service.py` | SQLite backup/restore lifecycle |
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
-| `models.py` | Thin DB helper: `get_db()` returns a sqlite3 connection |
+| `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
+| `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
 
 ### Database
-SQLite with WAL mode and foreign keys enabled. Schema defined in `schema.sql`; seed data in `seed.py`. Key tables: `divisioni`, `utenti`, `utenti_divisioni`, `sessioni`, `apparecchi`, `manutenzioni`, `documenti`, `email_config`, `coda_email`, `log_attivita`. The view `prossime_scadenze` pre-calculates deadlines with 5-priority classification (scaduto / urgente / attenzione / avviso / ok).
+SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
 
-**v1.2.0 schema changes:** `apparecchi.codice_interno` (UNIQUE) renamed to `descrizione` (no UNIQUE constraint). `stato` CHECK extended with `'da_sostituire'`. New `accessori` table (FK CASCADE on `apparecchi.id`) with columns: `id`, `apparecchio_id`, `descrizione`, `produttore`, `modello`, `matricola`, `created_by`, `created_at`. Run `migrate_v1_2.py` to apply to existing databases.
+Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok).
 
-**v1.3.0 schema changes:** New `manutenzioni.verbale_path TEXT` column for PDF verbale attachment. Run `migrate_v1_3.py` to apply to existing databases.
+`import_history.struttura_id` is the authoritative tenant column for imports — `divisione_id` is NULL for email imports and must not be used for isolation.
+
+Note: `email_config` is legacy. IMAP settings are read from the global config by `email_monitor.check_all_emails()`; rows in that table are not polled.
 
 ### Sessions & Auth
-Sessions use UUID tokens stored in the `sessioni` table (not Flask cookies alone). Two roles: `admin` (full access) and `utente` (read-only). Division scoping is enforced throughout via `_get_divisione_filter()` helpers in each blueprint.
+Sessions use UUID tokens stored in the `sessioni` table (not Flask cookies alone). Login is rate-limited per IP and per email via `login_attempts`.
+
+Four roles:
+
+| Role | Scope |
+|------|-------|
+| `superadmin` | All facilities. Can impersonate a struttura; global operations (backup, reset, global config). |
+| `admin` | One struttura: its users, divisions, per-facility config, and all its data. |
+| `tecnico` | The facilities assigned via `tecnici_strutture`; selects the active one at login. |
+| `utente` | The divisions assigned via `utenti_divisioni`. Can create and edit records there, but not delete or dismiss. |
+
+Decorators in `auth.py`: `login_required`, `admin_required`, `superadmin_required`, `tecnico_o_admin_required`, `tecnico_o_superadmin_required`, `admin_struttura_required`, `operazione_globale_required`.
 
 ### HTMX Pattern
 Routes check `request.args.get('partial')` to return only a table fragment (from `templates/partials/`) for in-place updates, or the full page otherwise.
@@ -78,19 +107,21 @@ Routes check `request.args.get('partial')` to return only a table fragment (from
 ## Key Conventions
 
 - **Language:** All UI text, comments, variable names, and database values are in Italian.
+- **Tenant isolation:** Every query touching `apparecchi`, `manutenzioni`, `verifiche`, `documenti` or `import_history` must be scoped to the caller's struttura. Use `models.apparecchio_accessibile()` before serving or writing anything tied to a device (it checks struttura *and* division), and `import_bp.get_import_in_scope()` for import records. Reaching a row by id alone is never sufficient.
+- **Global vs per-facility operations:** Anything acting on the whole database (backup, restore, reset, global config) goes behind `@operazione_globale_required`, not `@admin_required` — a facility admin must not be able to dump or wipe other tenants' data.
 - **Soft delete:** Devices are never physically deleted — `stato='dismesso'` marks them retired. Stati validi: `funzionante`, `in_manutenzione`, `da_sostituire`, `dismesso`.
-- **Parameterized SQL:** All queries use `?` placeholders; never f-string SQL.
-- **Activity logging:** Every significant action must call `log_attivita()` from `auth.py`.
-- **Division filter:** Always apply `_get_divisione_filter()` when querying `apparecchi` or `manutenzioni` to respect the user's active division scope.
-- **File uploads:** Uploaded photos/documents go to `uploads/` with `secure_filename()`; extensions are whitelisted per type.
+- **Parameterized SQL:** All queries use `?` placeholders; never f-string user input. When a query *is* built with an f-string (division filters), remember Python does not consume `%%` — write `strftime('%Y-%m', ...)`, not the doubled form.
+- **CSRF:** `CSRFProtect` is global. Every POST form needs a hidden `csrf_token` field rendered with `{{ csrf_token() }}` — including empty JS-driven forms. `fetch()` and HTMX get the header automatically from the wrapper in `base.html`.
+- **Activity logging:** Every significant action must call `log_attivita()` from `models.py`.
+- **Division filter:** Always apply `_get_divisione_filter()` when querying `apparecchi`, `manutenzioni` or `verifiche` to respect the user's active division scope.
+- **File uploads:** Go through `models.upload_subdir()`, which places files under `uploads/strutture/<id>/<tipo>/` in multi-tenant mode — the only path prefix `/uploads/<path>` knows how to isolate. Always `secure_filename()`; extensions are whitelisted per type.
 
 ## AI Features
 
-`ai_service.py` wraps the AI workflows with multi-provider support (Anthropic Claude / Ollama / LM Studio / OpenAI-compatible):
-1. **Unified document import** (`import_bp.py`): Upload Excel/PDF/CSV → classify document type (inventario / verbale manutenzione / verifica elettrica) via keyword heuristics + AI fallback → for multi-page PDFs, split into individual pages (`pypdf`) → analyze each page with type-specific prompt → preview with apparecchio matching → batch insert into `apparecchi`, `manutenzioni`, or `verifiche`.
-2. **Email maintenance parsing** (`email_monitor.py`): IMAP polling → PDF attachment extraction → AI parses maintenance report → auto-creates `manutenzioni` record with PDF verbale attached (`verbale_path`) if device found, else queues for manual review in `coda_email`.
+`ai_service.py` wraps the AI workflows with multi-provider support (Anthropic Claude / Gemini / OpenAI / Ollama / LM Studio / OpenAI-compatible), resolving provider, key and model per struttura with fallback to the global defaults:
+1. **Unified document import** (`import_bp.py`): Upload Excel/PDF/CSV → classify document type (inventario / verbale manutenzione / verifica elettrica) via keyword heuristics + AI fallback → for multi-page PDFs, split into individual pages (`pypdf`) → analyze each page with type-specific prompt → preview with apparecchio matching → batch insert into `apparecchi`, `manutenzioni`, or `verifiche`. Analysis runs in a background thread; `import_history.stato` tracks progress.
+2. **Email maintenance parsing** (`email_monitor.py`): IMAP polling → PDF attachment extraction → AI parses maintenance report → auto-creates `manutenzioni` record with PDF verbale attached (`verbale_path`) if device found, else queues for manual review in the email queue (`import_history` with `tipo_import='verbale_email'`).
 
-<!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
 
 ## Golden Rule

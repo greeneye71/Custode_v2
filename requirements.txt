@@ -17,6 +17,9 @@ fpdf2>=2.8
 pdfplumber>=0.11
 pypdf>=4.0
 
+# HTTP client (test connessione provider AI in strutture_bp/admin)
+httpx>=0.27
+
 # Encryption for IMAP credentials
 cryptography>=42.0
 

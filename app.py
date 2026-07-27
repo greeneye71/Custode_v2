@@ -260,12 +260,7 @@ def create_app():
         single_struttura = config.get('single_struttura', False)
 
         struttura = getattr(g, 'struttura', None)
-        struttura_modalita = getattr(g, 'struttura_modalita', 'standard')
         is_superadmin_impersonating = getattr(g, 'is_superadmin_impersonating', False)
-
-        # In modalità single_struttura la modalità è sempre avanzata
-        if single_struttura:
-            struttura_modalita = 'avanzata'
 
         # Lista strutture per il switcher (superadmin: tutte; tecnico: le sue)
         strutture_list = []
@@ -288,15 +283,23 @@ def create_app():
                     )
                 strutture_list = g._strutture_list_cache
 
+        # Installazione a struttura singola: l'admin conserva l'accesso alle
+        # operazioni globali (backup, config) perché non c'è nulla da isolare.
+        # Stesso criterio usato da auth.operazione_globale_required.
+        installazione_singola = single_struttura
+        if not installazione_singola and getattr(g, 'user', None):
+            from auth import _installazione_singola_struttura
+            installazione_singola = _installazione_singola_struttura()
+
         ctx = {
             'app_config': config,
+            'installazione_singola': installazione_singola,
             'app_name': config.get('app_name', 'MedInventory'),
             'organization': config.get('organization', 'Studio Bergamaschi'),
             'structure_name': config.get('structure_name', ''),
             'app_version': APP_VERSION,
             'single_struttura': single_struttura,
             'g_struttura': struttura,
-            'g_struttura_modalita': struttura_modalita,
             'g_is_superadmin_impersonating': is_superadmin_impersonating,
             'strutture_list': strutture_list,
         }
@@ -463,7 +466,7 @@ def create_app():
         r = query_one(
             f"""SELECT COUNT(*) as cnt FROM manutenzioni m
                 JOIN apparecchi a ON m.apparecchio_id = a.id
-                WHERE strftime('%%Y-%%m', m.data_intervento) = strftime('%%Y-%%m', 'now')
+                WHERE strftime('%Y-%m', m.data_intervento) = strftime('%Y-%m', 'now')
                 {div_clause_m}""",
             div_params
         )
@@ -473,7 +476,7 @@ def create_app():
         r = query_one(
             f"""SELECT COALESCE(SUM(m.costo), 0) as tot FROM manutenzioni m
                 JOIN apparecchi a ON m.apparecchio_id = a.id
-                WHERE strftime('%%Y-%%m', m.data_intervento) = strftime('%%Y-%%m', 'now')
+                WHERE strftime('%Y-%m', m.data_intervento) = strftime('%Y-%m', 'now')
                 {div_clause_m}""",
             div_params
         )
@@ -530,7 +533,7 @@ def create_app():
 
         # Chart data: costi mensili (last 12 months)
         chart_costi = query_all(
-            f"""SELECT strftime('%%Y-%%m', m.data_intervento) as mese,
+            f"""SELECT strftime('%Y-%m', m.data_intervento) as mese,
                        COALESCE(SUM(m.costo), 0) as totale
                 FROM manutenzioni m
                 JOIN apparecchi a ON m.apparecchio_id = a.id
