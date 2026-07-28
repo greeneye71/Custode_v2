@@ -30,7 +30,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 
 # ---------------------------------------------------------------------------
 # Logging setup

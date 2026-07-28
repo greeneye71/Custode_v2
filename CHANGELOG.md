@@ -6,30 +6,64 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.5.1] - 2026-07-28
+
+Release di rifinitura delle stampe: correzioni emerse dalla revisione finale del
+branch 2.5 e dal primo uso sul campo. Nessuna modifica allo schema del database.
+
+### Aggiunto
+
+- **Descrizione dell'apparecchio** nelle stampe di inventario, PDF ed Excel. Marca,
+  modello e matricola da soli non bastano a capire di che macchina si tratta per chi
+  non conosce a memoria il parco installato.
+- **Colonna Tipo** nel report che lo scheduler allega alle email. E' l'unico prospetto
+  che elenca manutenzioni e verifiche insieme: senza, due scadenze dello stesso
+  apparecchio risultano identiche tranne che nella data, e chi riceve l'email non puo'
+  capire quale girare alla ditta di assistenza e quale allo studio di ingegneria.
+- **Workflow GitHub Actions** per la review automatica delle pull request e per le
+  menzioni `@claude` in issue e commenti.
+
+### Modificato
+
+- **Corpo delle tabelle a 8 pt** (righe da 5,5 mm) in tutti i prospetti e nel report
+  email: quaranta apparecchi stanno in una pagina sola, contro i trentasette di prima,
+  e resta larghezza per la colonna Descrizione senza stringere le altre.
+- Il **logo della struttura** viene scalato in proporzione entro 40 mm di larghezza e
+  15 di altezza, e la testata si sposta a destra. Prima era vincolata la sola altezza:
+  un logo a banda usciva largo 150 mm, sopra il nome della struttura.
+- La logica che decide l'ambito di una stampa (quale struttura, quali divisioni) vive
+  ora in un solo punto, condiviso fra inventario e scadenze.
+
+### Corretto
+
+- Un **intervallo di date libero che parte nel passato** — "cosa scade in tutto il
+  2026" — faceva comparire la stessa scadenza sia fra le scadute sia fra quelle in
+  arrivo, con il totale in calce che la contava due volte.
+- Il **report email** aveva due definizioni di "oggi": l'etichetta del periodo in ora
+  locale, il confine delle query in UTC. Nella fascia notturna le due potevano indicare
+  giorni diversi.
+
+---
+
 ## [2.5.0] - 2026-07-28
 
 ### Aggiunto
 
 - **Stampe** — quattro prospetti PDF pensati per il foglio A4: inventario generale,
   inventario di divisione, scadenze manutenzioni e scadenze verifiche. Ogni prospetto
-  riporta marca, modello, matricola e ubicazione, e l'inventario anche la descrizione
-  dell'apparecchio; l'inventario generale delle strutture
+  riporta marca, modello, matricola e ubicazione; l'inventario generale delle strutture
   multi-divisione e' raggruppato per reparto con i conteggi. Per admin, tecnico e
   superadmin l'inventario generale copre l'intera struttura, incluse le divisioni
   disattivate — a differenza dell'elenco a video, che le nasconde.
 - **Periodo delle scadenze** a scelte rapide (30 giorni, 90 giorni, entro l'anno in corso
   o il prossimo) oppure con intervallo di date libero, che include entrambi gli estremi
-  indicati. Le scadute compaiono sempre in testa, prima di quelle in arrivo, e non
-  vengono ripetute fra le prossime quando l'intervallo libero parte da una data gia'
-  passata.
+  indicati. Le scadute compaiono sempre in testa, prima di quelle in arrivo.
 - **`report_service.py`** — motore di stampa indipendente da Flask e dal database:
   riceve righe gia' filtrate e restituisce byte, quindi serve sia la stampa manuale sia
   il report che lo scheduler allega alle email.
 - **Logo della struttura** nella testata dei prospetti, caricabile dalla configurazione.
 - **Colonna di spunta** e **spazio per data e firma**, opzionali.
 - **Versione Excel** di tutti e quattro i prospetti.
-- Corpo delle tabelle a 8 pt: quaranta apparecchi stanno in una pagina sola, contro i
-  trentasette di prima, e resta larghezza per la colonna Descrizione.
 - **Prima rete di test automatici del progetto** (pytest): motore di stampa, normalizzazione
   dei caratteri, confini di visibilita' sulle rotte.
 
@@ -37,13 +71,8 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 - Il report email dello scheduler ora usa lo stesso motore delle stampe manuali: il
   documento che arriva in posta e' identico a quello generato a mano, logo della
-  struttura compreso, e resta un solo generatore da mantenere. E' l'unico prospetto
-  che elenca manutenzioni e verifiche insieme, quindi porta una colonna **Tipo** che
-  le distingue: senza, due scadenze dello stesso apparecchio sarebbero indistinguibili
-  e chi riceve l'email non saprebbe a chi girare quale riga.
-- Nuova colonna `strutture.logo_path` (migrazione idempotente). Il logo viene scalato
-  in proporzione entro 40 mm di larghezza e 15 di altezza, e la testata si sposta a
-  destra: un logo a banda non finisce piu' sotto il nome della struttura.
+  struttura compreso, e resta un solo generatore da mantenere.
+- Nuova colonna `strutture.logo_path` (migrazione idempotente).
 
 ---
 
