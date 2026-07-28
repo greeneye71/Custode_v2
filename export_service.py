@@ -481,22 +481,33 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
 
     struttura = query_one("SELECT nome, logo_path FROM strutture WHERE id = ?",
                           (struttura_id,))
+    # Un solo "oggi" per l'intero prospetto, come in stampe_bp.scadenze():
+    # date('now') di SQLite e' in UTC, datetime.now() in ora locale, e nella
+    # fascia notturna italiana i due non coincidono. Qui il rischio e' minore
+    # (l'etichetta del periodo che indica un giorno diverso dal confine reale
+    # delle query), ma la classe di difetto e' la stessa e costa una riga.
+    oggi = datetime.now().date()
+    fine = oggi + timedelta(days=30)
+
+    # ps.tipo_manutenzione porta il genere di manutenzione (preventiva,
+    # correttiva, ...) e per le verifiche il letterale 'verifica_elettrica':
+    # e' quello che distingue le righe in un prospetto che, a differenza
+    # delle stampe manuali, non e' filtrato per tipo_record.
     base = """SELECT ps.marca, ps.modello, ps.matricola, ps.ubicazione,
                      ps.prossima_scadenza, ps.giorni_rimasti,
-                     d.nome AS divisione_nome
+                     ps.tipo_manutenzione, d.nome AS divisione_nome
               FROM prossime_scadenze ps
               JOIN apparecchi a ON a.id = ps.apparecchio_id
               LEFT JOIN divisioni d ON d.id = ps.divisione_id
               WHERE a.struttura_id = ?"""
 
     scadute = query_all(
-        base + " AND ps.prossima_scadenza < date('now') ORDER BY ps.prossima_scadenza",
-        (struttura_id,))
+        base + " AND ps.prossima_scadenza < ? ORDER BY ps.prossima_scadenza",
+        (struttura_id, oggi.isoformat()))
     in_scadenza = query_all(
-        base + " AND ps.prossima_scadenza >= date('now')"
-               " AND ps.prossima_scadenza <= date('now','+30 days')"
+        base + " AND ps.prossima_scadenza >= ? AND ps.prossima_scadenza <= ?"
                " ORDER BY ps.prossima_scadenza",
-        (struttura_id,))
+        (struttura_id, oggi.isoformat(), fine.isoformat()))
 
     contesto = {
         'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
@@ -505,7 +516,8 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
         'logo_path': percorso_logo_struttura(struttura),
         'mostra_firma': False,
         'mostra_spunta': False,
-        'fine_periodo': (datetime.now() + timedelta(days=30)).strftime('%d/%m/%Y'),
+        'mostra_tipo': True,
+        'fine_periodo': fine.strftime('%d/%m/%Y'),
     }
 
     with open(output_path, 'wb') as f:

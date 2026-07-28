@@ -261,10 +261,17 @@ def scadenze(tipo):
     scadute = query_all(
         base + " AND ps.prossima_scadenza < ? ORDER BY ps.prossima_scadenza",
         [tipo_record] + parametri + [oggi])
+    # Le due sezioni devono partizionare le scadenze, non sovrapporsi. Le
+    # scadute sono per definizione tutto cio' che precede oggi, qualunque
+    # periodo sia stato scelto; con un intervallo libero che parte nel passato
+    # ("cosa scade in tutto il 2026") l'utente puo' indicare un inizio
+    # anteriore a oggi, e senza questo confine ogni scadenza compresa fra i
+    # due estremi finirebbe in entrambe le query: stampata due volte, e
+    # contata due volte nel totale in calce.
     in_scadenza = query_all(
         base + " AND ps.prossima_scadenza >= ? AND ps.prossima_scadenza <= ?"
                " ORDER BY ps.prossima_scadenza",
-        [tipo_record] + parametri + [inizio, fine])
+        [tipo_record] + parametri + [max(inizio, oggi), fine])
 
     contesto = _contesto_base(
         titolo, ambito,

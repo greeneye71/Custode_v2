@@ -63,6 +63,26 @@ def tronca(pdf, testo, larghezza):
     return testo + '...'
 
 
+LOGO_ALTEZZA_MAX = 15
+LOGO_LARGHEZZA_MAX = 40
+
+
+def misura_logo(percorso):
+    """Dimensioni in mm del logo, entro i due tetti e in proporzione.
+
+    Vincolare la sola altezza non basta: un logo a banda (10:1) resterebbe
+    alto 15 mm ma largo 150, cioe' occuperebbe la stessa fascia verticale in
+    cui la testata scrive il nome della struttura, e i due si sovrapporrebbero.
+    """
+    from PIL import Image
+    with Image.open(percorso) as immagine:
+        larghezza_px, altezza_px = immagine.size
+    if not larghezza_px or not altezza_px:
+        raise ValueError('immagine senza dimensioni')
+    scala = min(LOGO_LARGHEZZA_MAX / larghezza_px, LOGO_ALTEZZA_MAX / altezza_px)
+    return larghezza_px * scala, altezza_px * scala
+
+
 class ReportPDF(FPDF):
     """Base comune a tutti i prospetti: testata, pie' di pagina, elementi di tabella."""
 
@@ -77,12 +97,21 @@ class ReportPDF(FPDF):
         # Ripetuta su ogni pagina: i fogli si separano, e la pagina 4 trovata da
         # sola su una scrivania deve poter dire cos'e'.
         alto_iniziale = self.get_y()
+        margine_testo = 15
         logo = self.contesto.get('logo_path')
         if logo and os.path.exists(logo):
             try:
-                self.image(logo, x=15, y=alto_iniziale, h=15)
+                larghezza, altezza = misura_logo(logo)
+                self.image(logo, x=15, y=alto_iniziale, w=larghezza, h=altezza)
+                # Il blocco di testo parte dopo il logo: centrato sullo spazio
+                # che resta, non sul foglio intero, altrimenti tornerebbe a
+                # finirgli sopra.
+                margine_testo = 15 + larghezza + 4
             except Exception:
                 pass  # un logo illeggibile non deve impedire la stampa
+
+        self.set_left_margin(margine_testo)
+        self.set_x(margine_testo)
 
         self.set_font('Helvetica', 'B', 15)
         self.cell(0, 8, testo_sicuro(self.contesto['struttura_nome']),
@@ -102,6 +131,11 @@ class ReportPDF(FPDF):
         self.set_font('Helvetica', 'I', 8)
         self.cell(0, 5, f"generato il {datetime.now().strftime('%d/%m/%Y')}",
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+
+        # Il corpo del prospetto torna a partire dal margine del foglio: lo
+        # spostamento vale solo per la testata.
+        self.set_left_margin(15)
+        self.set_x(15)
 
         self.set_draw_color(180, 180, 180)
         self.line(15, self.get_y(), 195, self.get_y())
@@ -226,6 +260,29 @@ COLONNE_SCADENZE_SPUNTA = [
     ('Giorni', 14, 'C'),
 ]
 
+# Solo per il prospetto misto (il report email dello scheduler), l'unico che
+# elenca manutenzioni e verifiche insieme: senza la colonna Tipo due righe
+# dello stesso apparecchio sarebbero identiche tranne che nella data, e chi
+# riceve il PDF non saprebbe a chi girare quale. Le stampe manuali sono gia'
+# separate per tipo e la colonna sarebbe una ripetizione del titolo.
+COLONNE_SCADENZE_TIPO = [
+    ('Apparecchio', 38, 'L'),
+    ('Matricola', 26, 'L'),
+    ('Ubicazione', 30, 'L'),
+    ('Divisione', 20, 'L'),
+    # 30 mm: 'Verifica elettrica' e' l'etichetta piu' lunga che questa colonna
+    # deve contenere e a 24 usciva troncata, cioe' proprio il dato che la
+    # colonna esiste per portare.
+    ('Tipo', 30, 'L'),
+    ('Scadenza', 22, 'C'),
+    ('Giorni', 14, 'C'),
+]
+
+
+def _etichetta_tipo(valore):
+    """Da 'verifica_elettrica' a 'Verifica elettrica'."""
+    return testo_sicuro(valore).replace('_', ' ').capitalize()
+
 
 def _data_italiana(valore):
     """Da 2026-08-15 a 15/08/2026. Lascia intatto cio' che non riconosce."""
@@ -245,7 +302,12 @@ def stampa_scadenze(scadute, in_scadenza, contesto):
         pdf.messaggio_vuoto('Nessuna scadenza nel periodo indicato')
         return bytes(pdf.output())
 
-    colonne = COLONNE_SCADENZE_SPUNTA if contesto.get('mostra_spunta') else COLONNE_SCADENZE
+    if contesto.get('mostra_tipo'):
+        colonne = COLONNE_SCADENZE_TIPO
+    elif contesto.get('mostra_spunta'):
+        colonne = COLONNE_SCADENZE_SPUNTA
+    else:
+        colonne = COLONNE_SCADENZE
 
     if scadute:
         _sezione_scadenze(pdf, 'Scadute', scadute, colonne, contesto)
@@ -278,6 +340,8 @@ def _sezione_scadenze(pdf, titolo, righe, colonne, contesto):
             _data_italiana(riga.get('prossima_scadenza')),
             riga.get('giorni_rimasti'),
         ]
-        if contesto.get('mostra_spunta'):
+        if contesto.get('mostra_tipo'):
+            valori.insert(4, _etichetta_tipo(riga.get('tipo_manutenzione')))
+        elif contesto.get('mostra_spunta'):
             valori.insert(0, '[  ]')
         pdf.riga_tabella(valori, colonne, alternata=(indice % 2 == 0))

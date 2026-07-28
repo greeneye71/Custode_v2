@@ -96,6 +96,26 @@ def righe_inventario():
     ]
 
 
+def test_il_logo_resta_entro_i_due_tetti_mantenendo_le_proporzioni(tmp_path):
+    """La specifica pone due limiti, 15 mm di altezza e 40 di larghezza.
+    Vincolare la sola altezza lascia passare un logo a banda largo 150 mm, che
+    invade la fascia in cui la testata scrive il nome della struttura."""
+    from PIL import Image
+    from report_service import misura_logo
+
+    banda = str(tmp_path / 'banda.png')
+    Image.new('RGB', (1200, 120), color=(30, 80, 200)).save(banda)
+    larghezza, altezza = misura_logo(banda)
+    assert larghezza <= 40 and altezza <= 15
+    assert abs(larghezza / altezza - 10) < 0.01   # proporzioni intatte
+
+    colonna = str(tmp_path / 'colonna.png')
+    Image.new('RGB', (100, 400), color=(30, 80, 200)).save(colonna)
+    larghezza, altezza = misura_logo(colonna)
+    assert larghezza <= 40 and altezza <= 15
+    assert abs(altezza / larghezza - 4) < 0.01
+
+
 def test_le_colonne_inventario_sommano_alla_larghezza_utile():
     assert sum(larghezza for _, larghezza, _ in COLONNE_INVENTARIO) == 180
 
@@ -188,7 +208,7 @@ def test_un_inventario_lungo_va_a_capo_pagina():
 
 
 from report_service import (COLONNE_SCADENZE, COLONNE_SCADENZE_SPUNTA,
-                            stampa_scadenze)
+                            COLONNE_SCADENZE_TIPO, stampa_scadenze)
 
 
 def righe_scadenze():
@@ -221,6 +241,20 @@ def contesto_scadenze(**extra):
 def test_le_colonne_scadenze_sommano_alla_larghezza_utile():
     assert sum(larghezza for _, larghezza, _ in COLONNE_SCADENZE) == 180
     assert sum(larghezza for _, larghezza, _ in COLONNE_SCADENZE_SPUNTA) == 180
+    assert sum(larghezza for _, larghezza, _ in COLONNE_SCADENZE_TIPO) == 180
+
+
+def test_la_colonna_tipo_riporta_la_natura_della_scadenza():
+    """Il prospetto misto (solo il report email) deve dire di ogni riga se e'
+    una manutenzione e di che genere, o una verifica elettrica: e' l'unico
+    dato che distingue due righe dello stesso apparecchio."""
+    righe = [
+        dict(righe_scadenze()[0], tipo_manutenzione='preventiva'),
+        dict(righe_scadenze()[0], tipo_manutenzione='verifica_elettrica'),
+    ]
+    testo = testo_di(stampa_scadenze([], righe, contesto_scadenze(mostra_tipo=True)))
+    assert 'Preventiva' in testo
+    assert 'Verifica elettrica' in testo
 
 
 def test_scadenze_mostra_prima_le_scadute_poi_il_periodo():

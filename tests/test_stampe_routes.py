@@ -302,6 +302,36 @@ def test_scadute_e_in_scadenza_sono_complementari_intorno_a_oggi(client, app, da
     assert 'Totale: 1 scadute, 1 in scadenza' in testo
 
 
+def test_un_intervallo_libero_che_parte_nel_passato_non_duplica_le_righe(client, app, dati):
+    """"Cosa scade in tutto il 2026" e' una richiesta legittima, e il form non
+    impedisce di indicare una data "Da" gia' passata. Ma le scadute sono per
+    definizione tutto cio' che precede oggi, indipendentemente dal periodo:
+    se la sezione "in scadenza" partisse dalla data indicata dall'utente,
+    ogni scadenza compresa fra quella data e oggi soddisferebbe entrambe le
+    query e verrebbe stampata due volte, con un totale che ne dichiara due
+    dove il record e' uno solo. Un documento consegnato a terzi con conteggi
+    gonfiati e' peggio di un documento che non esce."""
+    from models import execute
+    oggi = date.today()
+    with app.app_context():
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES ((SELECT id FROM apparecchi WHERE matricola='OCU-1'),"
+            "'preventiva', date('now','-1 year'), ?)",
+            ((oggi - timedelta(days=1)).isoformat(),))
+    entra(client, 'admin@a.it')
+
+    risposta = client.get(
+        '/stampe/scadenze/manutenzioni?divisione_id=tutte&periodo=date'
+        f'&da={(oggi - timedelta(days=30)).isoformat()}'
+        f'&a={(oggi + timedelta(days=30)).isoformat()}')
+    assert risposta.status_code == 200
+    testo = testo_di(risposta.data)
+    # Compare una volta sola, fra le scadute: e' li' che appartiene.
+    assert testo.count('OCU-1') == 1
+    assert 'Totale: 1 scadute, 0 in scadenza' in testo
+
+
 FOGLIO = ('application/vnd.openxmlformats-officedocument'
           '.spreadsheetml.sheet')
 

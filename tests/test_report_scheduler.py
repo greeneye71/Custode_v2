@@ -1,5 +1,15 @@
 """Il report inviato via email deve essere lo stesso documento che si stampa a mano."""
+import io
 import os
+
+from pypdf import PdfReader
+
+
+def testo_di(percorso):
+    """Estrae il testo di tutte le pagine di un PDF su disco."""
+    with open(percorso, 'rb') as f:
+        lettore = PdfReader(io.BytesIO(f.read()))
+    return "\n".join(pagina.extract_text() for pagina in lettore.pages)
 
 
 def test_il_report_dello_scheduler_usa_il_motore(app, tmp_path):
@@ -27,6 +37,46 @@ def test_il_report_dello_scheduler_usa_il_motore(app, tmp_path):
     assert os.path.exists(destinazione)
     with open(destinazione, 'rb') as f:
         assert f.read(4) == b'%PDF'
+
+
+def test_il_report_dello_scheduler_distingue_manutenzioni_e_verifiche(app, tmp_path):
+    """Il report email e' l'unico prospetto che mescola i due tipi: le stampe
+    manuali sono separate proprio perche' vanno a destinatari diversi (la
+    ditta di assistenza e lo studio di ingegneria). Senza una colonna che dica
+    di cosa si tratta, due righe dello stesso apparecchio sono identiche in
+    tutto tranne la data, e chi riceve l'email non puo' capire a chi girare
+    cosa. Il generatore precedente il tipo lo stampava: perderlo e' una
+    regressione."""
+    from models import execute
+    from export_service import genera_report_scadenze_pdf
+
+    with app.app_context():
+        struttura = execute(
+            "INSERT INTO strutture (nome,codice,attiva) VALUES ('Mista','M',1)").lastrowid
+        divisione = execute(
+            "INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Oculistica','OCU',?)",
+            (struttura,)).lastrowid
+        apparecchio = execute(
+            "INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
+            "VALUES (?,?,'R-1','REXXAM','OZY','funzionante','Sala 1')",
+            (divisione, struttura)).lastrowid
+        # Stesso apparecchio, due scadenze di natura diversa: e' il caso in
+        # cui le due righe sarebbero indistinguibili.
+        execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza) "
+            "VALUES (?,'preventiva',date('now','-1 year'),date('now','+10 days'))",
+            (apparecchio,))
+        execute(
+            "INSERT INTO verifiche (apparecchio_id,data_verifica,prossima_scadenza,esito) "
+            "VALUES (?,date('now','-1 year'),date('now','+20 days'),'positivo')",
+            (apparecchio,))
+
+        destinazione = str(tmp_path / 'misto.pdf')
+        genera_report_scadenze_pdf(struttura_id=struttura, output_path=destinazione)
+
+    testo = testo_di(destinazione)
+    assert 'Preventiva' in testo
+    assert 'Verifica elettrica' in testo
 
 
 def test_il_report_dello_scheduler_regge_una_struttura_senza_scadenze(app, tmp_path):
