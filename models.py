@@ -55,6 +55,26 @@ def upload_subdir(subdir, struttura_id=None, uploads_base=None, single_struttura
     return abs_path, rel_prefix
 
 
+def percorso_logo_struttura(struttura):
+    """Percorso assoluto del logo di una struttura, o None se non ne ha uno.
+
+    Condivisa fra le stampe manuali (dentro una request, via g.struttura) e il
+    report dello scheduler (fuori da una request, dentro un app_context aperto
+    a mano): in entrambi i casi current_app e' disponibile, ma viene toccato
+    solo quando la struttura ha davvero un logo_path, cosi' l'helper resta
+    innocuo per chi importa models.py fuori da Flask e non lo invoca mai con
+    una struttura che ne ha uno.
+
+    Il chiamante deve comunque verificare l'esistenza del file (lo fa gia'
+    ReportPDF.header()): un logo cancellato da disco non deve impedire la
+    stampa.
+    """
+    if not struttura or not struttura.get('logo_path'):
+        return None
+    return os.path.join(current_app.config['UPLOADS_PATH'],
+                        struttura['logo_path'].replace('/', os.sep))
+
+
 def init_db():
     """Initialize the database from schema.sql."""
     db = get_db()

@@ -3,7 +3,6 @@ MedInventory - Export Service
 Generates Excel and PDF reports for apparecchi, manutenzioni, and scadenzario.
 """
 
-import os
 import io
 from datetime import datetime, timedelta
 
@@ -477,8 +476,7 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
     identico a quello che si stampa dalla pagina Stampe, e resta un solo posto
     da mantenere quando la grafica cambia.
     """
-    from flask import current_app
-    from models import query_all, query_one
+    from models import query_all, query_one, percorso_logo_struttura
     from report_service import stampa_scadenze
 
     struttura = query_one("SELECT nome, logo_path FROM strutture WHERE id = ?",
@@ -500,16 +498,11 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
                " ORDER BY ps.prossima_scadenza",
         (struttura_id,))
 
-    logo_path = None
-    if struttura and struttura.get('logo_path'):
-        logo_path = os.path.join(current_app.config['UPLOADS_PATH'],
-                                 struttura['logo_path'].replace('/', os.sep))
-
     contesto = {
         'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
         'titolo': 'Scadenzario',
         'ambito': '',
-        'logo_path': logo_path,
+        'logo_path': percorso_logo_struttura(struttura),
         'mostra_firma': False,
         'mostra_spunta': False,
         'fine_periodo': (datetime.now() + timedelta(days=30)).strftime('%d/%m/%Y'),

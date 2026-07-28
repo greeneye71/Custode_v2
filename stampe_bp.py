@@ -7,7 +7,6 @@ al motore in report_service.py, che dell'applicazione non sa nulla.
 """
 
 import io
-import os
 from datetime import datetime, timedelta
 
 from flask import (Blueprint, render_template, request, redirect, url_for,
@@ -15,7 +14,7 @@ from flask import (Blueprint, render_template, request, redirect, url_for,
 from werkzeug.utils import secure_filename
 
 from auth import login_required
-from models import query_all
+from models import query_all, percorso_logo_struttura
 
 stampe_bp = Blueprint('stampe', __name__, url_prefix='/stampe')
 
@@ -72,26 +71,13 @@ def _filtro_tutte_le_divisioni():
     return f"a.divisione_id IN ({segnaposto})", ids
 
 
-def _percorso_logo(struttura):
-    """Percorso assoluto del logo, o None se la struttura non ne ha uno.
-
-    Il motore verifica comunque l'esistenza del file: un logo cancellato da
-    disco non deve impedire la stampa.
-    """
-    if not struttura or not struttura.get('logo_path'):
-        return None
-    from flask import current_app
-    return os.path.join(current_app.config['UPLOADS_PATH'],
-                        struttura['logo_path'].replace('/', os.sep))
-
-
 def _contesto_base(titolo, ambito='', **extra):
     struttura = getattr(g, 'struttura', None)
     contesto = {
         'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
         'titolo': titolo,
         'ambito': ambito,
-        'logo_path': _percorso_logo(struttura),
+        'logo_path': percorso_logo_struttura(struttura),
         'mostra_firma': request.args.get('firma') == '1',
     }
     contesto.update(extra)
