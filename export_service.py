@@ -449,9 +449,11 @@ def _foglio_semplice(titolo, intestazioni, righe_valori):
 
 def stampa_inventario_excel(righe, titolo):
     """Foglio con lo stesso inventario del PDF: stesse righe, stesso ordine."""
-    intestazioni = ['Marca', 'Modello', 'Matricola', 'Ubicazione', 'Divisione']
-    valori = [[r.get('marca'), r.get('modello'), r.get('matricola'),
-               r.get('ubicazione'), r.get('divisione_nome')] for r in righe]
+    intestazioni = ['Marca', 'Modello', 'Descrizione', 'Matricola',
+                    'Ubicazione', 'Divisione']
+    valori = [[r.get('marca'), r.get('modello'), r.get('descrizione'),
+               r.get('matricola'), r.get('ubicazione'), r.get('divisione_nome')]
+              for r in righe]
     return _foglio_semplice(titolo, intestazioni, valori)
 
 

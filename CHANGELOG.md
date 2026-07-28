@@ -12,7 +12,8 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 - **Stampe** — quattro prospetti PDF pensati per il foglio A4: inventario generale,
   inventario di divisione, scadenze manutenzioni e scadenze verifiche. Ogni prospetto
-  riporta marca, modello, matricola e ubicazione; l'inventario generale delle strutture
+  riporta marca, modello, matricola e ubicazione, e l'inventario anche la descrizione
+  dell'apparecchio; l'inventario generale delle strutture
   multi-divisione e' raggruppato per reparto con i conteggi. Per admin, tecnico e
   superadmin l'inventario generale copre l'intera struttura, incluse le divisioni
   disattivate — a differenza dell'elenco a video, che le nasconde.
@@ -27,6 +28,8 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 - **Logo della struttura** nella testata dei prospetti, caricabile dalla configurazione.
 - **Colonna di spunta** e **spazio per data e firma**, opzionali.
 - **Versione Excel** di tutti e quattro i prospetti.
+- Corpo delle tabelle a 8 pt: quaranta apparecchi stanno in una pagina sola, contro i
+  trentasette di prima, e resta larghezza per la colonna Descrizione.
 - **Prima rete di test automatici del progetto** (pytest): motore di stampa, normalizzazione
   dei caratteri, confini di visibilita' sulle rotte.
 

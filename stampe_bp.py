@@ -163,7 +163,7 @@ def inventario():
 
     filtro_stato = '' if includi_dismessi else "AND a.stato != 'dismesso'"
     righe = query_all(
-        f"""SELECT a.marca, a.modello, a.matricola, a.ubicazione,
+        f"""SELECT a.marca, a.modello, a.descrizione, a.matricola, a.ubicazione,
                    d.nome AS divisione_nome
             FROM apparecchi a
             LEFT JOIN divisioni d ON d.id = a.divisione_id

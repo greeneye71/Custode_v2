@@ -87,12 +87,15 @@ from report_service import COLONNE_INVENTARIO, stampa_inventario
 
 def righe_inventario():
     return [
-        {'marca': 'REXXAM', 'modello': 'OZY', 'matricola': 'R-00015',
-         'ubicazione': 'Sala visite 1', 'divisione_nome': 'Oculistica'},
-        {'marca': 'TOMEY', 'modello': 'RC-800', 'matricola': '576806',
-         'ubicazione': 'Sala visite 1', 'divisione_nome': 'Oculistica'},
-        {'marca': 'GE', 'modello': 'B40', 'matricola': 'MON-1',
-         'ubicazione': 'Ambulatorio', 'divisione_nome': 'Cardiologia'},
+        {'marca': 'REXXAM', 'modello': 'OZY', 'descrizione': 'Autorefrattometro',
+         'matricola': 'R-00015', 'ubicazione': 'Sala visite 1',
+         'divisione_nome': 'Oculistica'},
+        {'marca': 'TOMEY', 'modello': 'RC-800', 'descrizione': 'Topografo',
+         'matricola': '576806', 'ubicazione': 'Sala visite 1',
+         'divisione_nome': 'Oculistica'},
+        {'marca': 'GE', 'modello': 'B40', 'descrizione': 'Monitor multiparametrico',
+         'matricola': 'MON-1', 'ubicazione': 'Ambulatorio',
+         'divisione_nome': 'Cardiologia'},
     ]
 
 
@@ -120,13 +123,40 @@ def test_le_colonne_inventario_sommano_alla_larghezza_utile():
     assert sum(larghezza for _, larghezza, _ in COLONNE_INVENTARIO) == 180
 
 
-def test_inventario_elenca_marca_modello_matricola_e_ubicazione():
+def test_il_corpo_a_8_pt_fa_stare_quaranta_righe_in_una_pagina():
+    """Il carattere piu' piccolo serve a stampare meno fogli, quindi il test
+    misura proprio quello: quaranta apparecchi devono stare in una pagina
+    sola. Con il corpo e l'altezza riga precedenti (9 pt su righe da 6 mm) ne
+    entravano trentasette, e questa stessa lista ne avrebbe occupate due."""
+    righe = [{'marca': 'M', 'modello': 'MM', 'descrizione': 'D',
+              'matricola': f'S{i}', 'ubicazione': 'U', 'divisione_nome': 'Div'}
+             for i in range(40)]
+    pdf = stampa_inventario(righe, contesto_minimo(raggruppa=False))
+    assert len(PdfReader(io.BytesIO(pdf)).pages) == 1
+
+
+def test_inventario_elenca_marca_modello_descrizione_matricola_e_ubicazione():
     pdf = stampa_inventario(righe_inventario(), contesto_minimo(raggruppa=False))
     testo = testo_di(pdf)
     assert 'REXXAM' in testo
     assert 'RC-800' in testo
+    assert 'Autorefrattometro' in testo
     assert 'R-00015' in testo
     assert 'Sala visite 1' in testo
+
+
+def test_una_descrizione_lunga_non_sfonda_la_sua_colonna():
+    """La colonna Descrizione e' larga 42 mm: un testo che non ci sta va
+    troncato con i puntini, non mandato a capo ne' lasciato debordare sulla
+    colonna Matricola. Una riga alta il doppio spezza la griglia e rende la
+    tabella illeggibile in diagonale."""
+    lunga = 'Elettrocardiografo multicanale con carrello e stampante integrata'
+    righe = [dict(righe_inventario()[0], descrizione=lunga)]
+    testo = testo_di(stampa_inventario(righe, contesto_minimo(raggruppa=False)))
+    assert lunga not in testo
+    assert '...' in testo
+    # La matricola resta al suo posto: la descrizione non l'ha spinta fuori.
+    assert 'R-00015' in testo
 
 
 def test_inventario_riporta_il_totale():

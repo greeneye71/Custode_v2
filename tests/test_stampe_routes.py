@@ -52,8 +52,8 @@ def dati(app):
             "VALUES ('utente@a.it',?,'U','U','utente',?,0)", (hash_pw, s1)).lastrowid
         execute("INSERT INTO utenti_divisioni (utente_id,divisione_id,ruolo_divisione) VALUES (?,?,'utente')",
                 (utente, d1))
-        execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
-                "VALUES (?,?,'OCU-1','REXXAM','OZY','funzionante','Sala 1')", (d1, s1))
+        execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione,descrizione) "
+                "VALUES (?,?,'OCU-1','REXXAM','OZY','funzionante','Sala 1','Autorefrattometro')", (d1, s1))
         execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
                 "VALUES (?,?,'CAR-1','GE','B40','funzionante','Sala 2')", (d2, s1))
         execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato,ubicazione) "
@@ -84,6 +84,16 @@ def test_admin_ottiene_l_inventario_di_struttura(client, dati):
     risposta = client.get('/stampe/inventario?divisione_id=tutte')
     assert risposta.status_code == 200
     assert risposta.data.startswith(b'%PDF')
+
+
+def test_la_descrizione_arriva_dal_database_al_prospetto(client, dati):
+    """La colonna esiste nel motore, ma serve a qualcosa solo se la query la
+    chiede: senza a.descrizione nella SELECT il PDF esce con la colonna
+    intestata e vuota, e il difetto non si vede da un controllo su %PDF."""
+    entra(client, 'admin@a.it')
+    testo = testo_di(client.get('/stampe/inventario?divisione_id=tutte').data)
+    assert 'Descrizione' in testo          # intestazione di colonna
+    assert 'Autorefrattometro' in testo    # valore dell'apparecchio OCU-1
 
 
 def test_utente_non_ottiene_una_divisione_non_sua(client, dati):
@@ -379,6 +389,9 @@ def test_excel_inventario_contiene_solo_le_righe_in_ambito(client, dati):
     assert 'OCU-1' in valori
     assert 'CAR-1' not in valori
     assert 'DIS-DIV-1' not in valori
+    # Il foglio porta le stesse colonne del PDF, descrizione compresa.
+    assert 'Descrizione' in valori
+    assert 'Autorefrattometro' in valori
 
 
 def test_excel_inventario_admin_vede_tutta_la_struttura(client, dati):

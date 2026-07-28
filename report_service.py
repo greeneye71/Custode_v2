@@ -21,6 +21,15 @@ LARGHEZZA_UTILE = 180
 # pieno colorato esce sporco e consuma inutilmente.
 GRIGIO_RIGA = (245, 247, 250)
 
+# Corpo delle tabelle. A 8 pt ci stanno circa quattro righe in piu' per pagina
+# e resta spazio per la colonna Descrizione senza stringere le altre oltre il
+# leggibile; sotto gli 8 un elenco lungo diventa faticoso da scorrere in
+# diagonale su una stampa laser. Le altezze seguono il corpo: una riga troppo
+# alta per il carattere che contiene fa sembrare la tabella slabbrata.
+CORPO_PT = 8
+ALTEZZA_RIGA = 5.5
+ALTEZZA_INTESTAZIONE = 6.5
+
 # Caratteri tipografici che arrivano dai copia-incolla e che i font incorporati
 # di fpdf2 (latin-1) non sanno rappresentare.
 SOSTITUZIONI = {
@@ -148,21 +157,21 @@ class ReportPDF(FPDF):
 
     def intestazione_tabella(self, colonne):
         """colonne: lista di (etichetta, larghezza_mm, allineamento)."""
-        self.set_font('Helvetica', 'B', 9)
+        self.set_font('Helvetica', 'B', CORPO_PT)
         self.set_fill_color(226, 232, 240)
         self.set_draw_color(180, 180, 180)
         for etichetta, larghezza, _allineamento in colonne:
-            self.cell(larghezza, 7, testo_sicuro(etichetta), border='B',
-                      align='C', fill=True)
+            self.cell(larghezza, ALTEZZA_INTESTAZIONE, testo_sicuro(etichetta),
+                      border='B', align='C', fill=True)
         self.ln()
 
     def riga_tabella(self, valori, colonne, alternata=False):
-        self.set_font('Helvetica', '', 9)
+        self.set_font('Helvetica', '', CORPO_PT)
         if alternata:
             self.set_fill_color(*GRIGIO_RIGA)
         for valore, (_etichetta, larghezza, allineamento) in zip(valori, colonne):
-            self.cell(larghezza, 6, tronca(self, valore, larghezza), border=0,
-                      align=allineamento, fill=alternata)
+            self.cell(larghezza, ALTEZZA_RIGA, tronca(self, valore, larghezza),
+                      border=0, align=allineamento, fill=alternata)
         self.ln()
 
     def messaggio_vuoto(self, testo):
@@ -187,11 +196,12 @@ class ReportPDF(FPDF):
 
 # (etichetta, larghezza in mm, allineamento) — la somma deve fare 180
 COLONNE_INVENTARIO = [
-    ('N.', 10, 'C'),
-    ('Marca', 38, 'L'),
-    ('Modello', 42, 'L'),
-    ('Matricola', 38, 'L'),
-    ('Ubicazione', 52, 'L'),
+    ('N.', 8, 'C'),
+    ('Marca', 30, 'L'),
+    ('Modello', 34, 'L'),
+    ('Descrizione', 42, 'L'),
+    ('Matricola', 30, 'L'),
+    ('Ubicazione', 36, 'L'),
 ]
 
 
@@ -233,7 +243,8 @@ def _corpo_inventario(pdf, righe):
     for indice, riga in enumerate(righe, start=1):
         pdf.riga_tabella(
             [indice, riga.get('marca'), riga.get('modello'),
-             riga.get('matricola'), riga.get('ubicazione')],
+             riga.get('descrizione'), riga.get('matricola'),
+             riga.get('ubicazione')],
             COLONNE_INVENTARIO,
             alternata=(indice % 2 == 0),
         )
