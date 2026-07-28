@@ -6,6 +6,37 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.5.0] - 2026-07-28
+
+### Aggiunto
+
+- **Stampe** — quattro prospetti PDF pensati per il foglio A4: inventario generale,
+  inventario di divisione, scadenze manutenzioni e scadenze verifiche. Ogni prospetto
+  riporta marca, modello, matricola e ubicazione; l'inventario generale delle strutture
+  multi-divisione e' raggruppato per reparto con i conteggi. Per admin, tecnico e
+  superadmin l'inventario generale copre l'intera struttura, incluse le divisioni
+  disattivate — a differenza dell'elenco a video, che le nasconde.
+- **Periodo delle scadenze** a scelte rapide (30 giorni, 90 giorni, entro l'anno in corso
+  o il prossimo) oppure con intervallo di date libero, che include entrambi gli estremi
+  indicati. Le scadute compaiono sempre in testa, prima di quelle in arrivo.
+- **`report_service.py`** — motore di stampa indipendente da Flask e dal database:
+  riceve righe gia' filtrate e restituisce byte, quindi serve sia la stampa manuale sia
+  il report che lo scheduler allega alle email.
+- **Logo della struttura** nella testata dei prospetti, caricabile dalla configurazione.
+- **Colonna di spunta** e **spazio per data e firma**, opzionali.
+- **Versione Excel** di tutti e quattro i prospetti.
+- **Prima rete di test automatici del progetto** (pytest): motore di stampa, normalizzazione
+  dei caratteri, confini di visibilita' sulle rotte.
+
+### Modificato
+
+- Il report email dello scheduler ora usa lo stesso motore delle stampe manuali: il
+  documento che arriva in posta e' identico a quello generato a mano, logo della
+  struttura compreso, e resta un solo generatore da mantenere.
+- Nuova colonna `strutture.logo_path` (migrazione idempotente).
+
+---
+
 ## [2.4.0] - 2026-07-27
 
 Release dedicata all'isolamento fra strutture, alla migrazione da installazioni
