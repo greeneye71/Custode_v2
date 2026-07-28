@@ -7,6 +7,7 @@ al motore in report_service.py, che dell'applicazione non sa nulla.
 """
 
 import io
+from collections import namedtuple
 from datetime import datetime, timedelta
 
 from flask import (Blueprint, render_template, request, redirect, url_for,
@@ -71,6 +72,35 @@ def _filtro_tutte_le_divisioni():
     return f"a.divisione_id IN ({segnaposto})", ids
 
 
+Ambito = namedtuple('Ambito', 'clausola parametri etichetta nome_divisione')
+
+
+def _ambito_richiesto(divisione_id):
+    """Traduce il parametro divisione_id nell'ambito su cui stampare.
+
+    Restituisce (Ambito, errore); errore e' la coppia (messaggio, categoria)
+    da passare a flash(), oppure None.
+
+    Vive in un solo posto perche' e' il codice che decide cosa un utente puo'
+    vedere: tenerne una copia per prospetto significa che una correzione
+    all'isolamento applicata a una sola delle due lascia l'altra scoperta, e
+    la differenza non si nota finche' qualcuno non stampa il prospetto
+    sbagliato. Sia l'inventario sia le scadenze devono mostrare esattamente
+    lo stesso insieme allo stesso utente.
+    """
+    if divisione_id == 'tutte':
+        clausola, parametri = _filtro_tutte_le_divisioni()
+        if clausola is None:
+            return None, ('Nessuna divisione accessibile.', 'warning')
+        return Ambito(clausola, parametri, '', ''), None
+
+    divisione = _divisione_in_scope(divisione_id)
+    if not divisione:
+        return None, ('Divisione non disponibile.', 'danger')
+    return Ambito('a.divisione_id = ?', [divisione['id']],
+                  f"Divisione: {divisione['nome']}", divisione['nome']), None
+
+
 def _contesto_base(titolo, ambito='', **extra):
     struttura = getattr(g, 'struttura', None)
     contesto = {
@@ -124,24 +154,12 @@ def index():
 def inventario():
     from report_service import stampa_inventario
 
-    divisione_id = request.args.get('divisione_id', 'tutte')
     includi_dismessi = request.args.get('dismessi') == '1'
 
-    if divisione_id == 'tutte':
-        clausola, parametri = _filtro_tutte_le_divisioni()
-        if clausola is None:
-            flash('Nessuna divisione accessibile.', 'warning')
-            return redirect(url_for('stampe.index'))
-        ambito = ''
-        nome_divisione = ''
-    else:
-        divisione = _divisione_in_scope(divisione_id)
-        if not divisione:
-            flash('Divisione non disponibile.', 'danger')
-            return redirect(url_for('stampe.index'))
-        clausola, parametri = 'a.divisione_id = ?', [divisione['id']]
-        ambito = f"Divisione: {divisione['nome']}"
-        nome_divisione = divisione['nome']
+    ambito, errore = _ambito_richiesto(request.args.get('divisione_id', 'tutte'))
+    if errore:
+        flash(*errore)
+        return redirect(url_for('stampe.index'))
 
     filtro_stato = '' if includi_dismessi else "AND a.stato != 'dismesso'"
     righe = query_all(
@@ -149,18 +167,18 @@ def inventario():
                    d.nome AS divisione_nome
             FROM apparecchi a
             LEFT JOIN divisioni d ON d.id = a.divisione_id
-            WHERE {clausola} {filtro_stato}
+            WHERE {ambito.clausola} {filtro_stato}
             ORDER BY d.nome, a.marca, a.modello""",
-        parametri)
+        ambito.parametri)
 
     # Piu' di una divisione presente fra le righe restituite: raggruppa il
     # prospetto per divisione (vale sia per l'ambito 'tutte' sia, in teoria,
     # per l'ambito di una singola divisione, dove pero' e' sempre falso).
     raggruppa = len({r['divisione_nome'] for r in righe}) > 1
 
-    contesto = _contesto_base('Inventario apparecchi elettromedicali', ambito,
-                              raggruppa=raggruppa)
-    nome = _nome_file('inventario', nome_divisione)
+    contesto = _contesto_base('Inventario apparecchi elettromedicali',
+                              ambito.etichetta, raggruppa=raggruppa)
+    nome = _nome_file('inventario', ambito.nome_divisione)
     if request.args.get('formato') == 'excel':
         from export_service import stampa_inventario_excel
         titolo = 'Inventario apparecchi elettromedicali'
@@ -228,22 +246,10 @@ def scadenze(tipo):
     # probabile che nessuno se ne accorga prima che diventi un problema.
     oggi = datetime.now().date().isoformat()
 
-    divisione_id = request.args.get('divisione_id', 'tutte')
-    if divisione_id == 'tutte':
-        clausola, parametri = _filtro_tutte_le_divisioni()
-        if clausola is None:
-            flash('Nessuna divisione accessibile.', 'warning')
-            return redirect(url_for('stampe.index'))
-        ambito = ''
-        nome_divisione = ''
-    else:
-        divisione = _divisione_in_scope(divisione_id)
-        if not divisione:
-            flash('Divisione non disponibile.', 'danger')
-            return redirect(url_for('stampe.index'))
-        clausola, parametri = 'a.divisione_id = ?', [divisione['id']]
-        ambito = f"Divisione: {divisione['nome']}"
-        nome_divisione = divisione['nome']
+    ambito, errore = _ambito_richiesto(request.args.get('divisione_id', 'tutte'))
+    if errore:
+        flash(*errore)
+        return redirect(url_for('stampe.index'))
 
     # La vista prossime_scadenze non porta struttura_id: per applicare lo
     # stesso criterio di ambito dell'inventario (_filtro_tutte_le_divisioni,
@@ -256,11 +262,11 @@ def scadenze(tipo):
                FROM prossime_scadenze ps
                JOIN apparecchi a ON a.id = ps.apparecchio_id
                LEFT JOIN divisioni d ON d.id = ps.divisione_id
-               WHERE ps.tipo_record = ? AND {clausola}"""
+               WHERE ps.tipo_record = ? AND {ambito.clausola}"""
 
     scadute = query_all(
         base + " AND ps.prossima_scadenza < ? ORDER BY ps.prossima_scadenza",
-        [tipo_record] + parametri + [oggi])
+        [tipo_record] + ambito.parametri + [oggi])
     # Le due sezioni devono partizionare le scadenze, non sovrapporsi. Le
     # scadute sono per definizione tutto cio' che precede oggi, qualunque
     # periodo sia stato scelto; con un intervallo libero che parte nel passato
@@ -271,13 +277,13 @@ def scadenze(tipo):
     in_scadenza = query_all(
         base + " AND ps.prossima_scadenza >= ? AND ps.prossima_scadenza <= ?"
                " ORDER BY ps.prossima_scadenza",
-        [tipo_record] + parametri + [max(inizio, oggi), fine])
+        [tipo_record] + ambito.parametri + [max(inizio, oggi), fine])
 
     contesto = _contesto_base(
-        titolo, ambito,
+        titolo, ambito.etichetta,
         fine_periodo=datetime.strptime(fine, '%Y-%m-%d').strftime('%d/%m/%Y'),
         mostra_spunta=request.args.get('spunta') == '1')
-    nome = _nome_file(f'scadenze-{tipo}', nome_divisione)
+    nome = _nome_file(f'scadenze-{tipo}', ambito.nome_divisione)
     if request.args.get('formato') == 'excel':
         from export_service import stampa_scadenze_excel
         return _excel(stampa_scadenze_excel(scadute, in_scadenza, titolo), nome)
