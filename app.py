@@ -30,7 +30,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -370,6 +370,9 @@ def create_app():
 
     from export_bp import export_bp
     app.register_blueprint(export_bp)
+
+    from stampe_bp import stampe_bp
+    app.register_blueprint(stampe_bp)
 
     from verifiche import verifiche_bp
     app.register_blueprint(verifiche_bp)

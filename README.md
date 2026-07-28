@@ -1,4 +1,4 @@
-# MedInventory v2.4.0
+# MedInventory v2.5.0
 
 **Gestione Apparecchi Elettromedicali** — applicazione web per strutture sanitarie
 by Studio Bergamaschi
@@ -446,6 +446,32 @@ Note:
 
 ---
 
+## Stampe
+
+La voce **Stampe** del menu genera quattro prospetti in PDF, pensati per il foglio A4
+verticale, e le corrispondenti versioni in Excel:
+
+| Prospetto | Contenuto |
+|---|---|
+| Inventario generale | Tutti gli apparecchi, raggruppati per divisione nelle strutture multi-divisione |
+| Inventario di divisione | Gli apparecchi di un singolo reparto (non compare nelle strutture mono-divisione) |
+| Scadenze manutenzioni | Prima le scadute, poi quelle in arrivo nel periodo scelto |
+| Scadenze verifiche | Come sopra, per le verifiche di sicurezza elettrica |
+
+Ogni prospetto riporta marca, modello, matricola e ubicazione. Il periodo si indica con
+una scelta rapida (30 giorni, 90 giorni, entro l'anno in corso o il prossimo) oppure con
+un intervallo di date libero (entrambi gli estremi indicati sono inclusi).
+
+Opzioni: colonna di spunta da barrare durante il giro di controllo, spazio per data e
+firma in calce, inclusione degli apparecchi dismessi.
+
+Il logo della struttura, se caricato da Strutture → Configurazione, compare nella testata.
+
+Per admin, tecnico e superadmin l'inventario generale copre l'intera struttura, incluse le
+divisioni disattivate (l'elenco a video, invece, le nasconde).
+
+---
+
 ## Credenziali default
 
 | Campo | Valore |
@@ -526,4 +552,4 @@ Vedere il file [LICENSE](LICENSE) per i termini di licenza.
 
 ---
 
-*MedInventory v2.4.0 — by Studio Bergamaschi*
+*MedInventory v2.5.0 — by Studio Bergamaschi*

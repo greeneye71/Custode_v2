@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Stampe{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="h3 mb-0"><i class="bi bi-printer me-2"></i>Stampe</h1>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h5">Inventario generale</h2>
+        <p class="text-muted small">
+          Tutti gli apparecchi, con marca, modello, matricola e ubicazione.
+          {% if multi_divisione %}Raggruppati per divisione.{% endif %}
+        </p>
+        <form method="GET" action="{{ url_for('stampe.inventario') }}">
+          <input type="hidden" name="divisione_id" value="tutte">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="dismessi" value="1" id="inv-dismessi">
+            <label class="form-check-label" for="inv-dismessi">Includi gli apparecchi dismessi</label>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="firma" value="1" id="inv-firma">
+            <label class="form-check-label" for="inv-firma">Spazio per data e firma</label>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-file-earmark-pdf me-1"></i>Genera PDF
+          </button>
+          <button type="submit" name="formato" value="excel" class="btn btn-outline-secondary">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>Excel
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {% if multi_divisione %}
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h5">Inventario di divisione</h2>
+        <p class="text-muted small">Gli apparecchi di un singolo reparto.</p>
+        <form method="GET" action="{{ url_for('stampe.inventario') }}">
+          <div class="mb-3">
+            <label class="form-label" for="inv-div">Divisione</label>
+            <select class="form-select" name="divisione_id" id="inv-div" required>
+              {% for divisione in divisioni %}
+              <option value="{{ divisione.id }}">{{ divisione.nome }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="dismessi" value="1" id="invd-dismessi">
+            <label class="form-check-label" for="invd-dismessi">Includi gli apparecchi dismessi</label>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="firma" value="1" id="invd-firma">
+            <label class="form-check-label" for="invd-firma">Spazio per data e firma</label>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-file-earmark-pdf me-1"></i>Genera PDF
+          </button>
+          <button type="submit" name="formato" value="excel" class="btn btn-outline-secondary">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>Excel
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% for tipo, etichetta in [('manutenzioni', 'manutenzioni'),
+                             ('verifiche', 'verifiche di sicurezza elettrica')] %}
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body">
+        <h2 class="h5">Scadenze {{ etichetta }}</h2>
+        <p class="text-muted small">
+          Prima le scadute, poi quelle in arrivo nel periodo scelto.
+        </p>
+        <form method="GET" action="{{ url_for('stampe.scadenze', tipo=tipo) }}">
+          <div class="mb-3">
+            <label class="form-label" for="{{ tipo }}-div">Ambito</label>
+            <select class="form-select" name="divisione_id" id="{{ tipo }}-div">
+              <option value="tutte">Tutte le divisioni</option>
+              {% for divisione in divisioni %}
+              <option value="{{ divisione.id }}">{{ divisione.nome }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="{{ tipo }}-per">Periodo</label>
+            <select class="form-select" name="periodo" id="{{ tipo }}-per">
+              <option value="30g">Prossimi 30 giorni</option>
+              <option value="90g">Prossimi 90 giorni</option>
+              <option value="anno">Entro l'anno in corso</option>
+              <option value="anno_prossimo">Entro l'anno prossimo</option>
+              <option value="date">Intervallo indicato sotto</option>
+            </select>
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col">
+              <label class="form-label small" for="{{ tipo }}-da">Da</label>
+              <input type="date" class="form-control" name="da" id="{{ tipo }}-da">
+            </div>
+            <div class="col">
+              <label class="form-label small" for="{{ tipo }}-a">A</label>
+              <input type="date" class="form-control" name="a" id="{{ tipo }}-a">
+            </div>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="spunta" value="1" id="{{ tipo }}-spunta">
+            <label class="form-check-label" for="{{ tipo }}-spunta">Colonna per la spunta</label>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="firma" value="1" id="{{ tipo }}-firma">
+            <label class="form-check-label" for="{{ tipo }}-firma">Spazio per data e firma</label>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-file-earmark-pdf me-1"></i>Genera PDF
+          </button>
+          <button type="submit" name="formato" value="excel" class="btn btn-outline-secondary">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>Excel
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

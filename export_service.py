@@ -3,9 +3,8 @@ MedInventory - Export Service
 Generates Excel and PDF reports for apparecchi, manutenzioni, and scadenzario.
 """
 
-import os
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def export_apparecchi_excel(apparecchi, divisione_nome=''):
@@ -407,62 +406,122 @@ def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_na
     return buffer
 
 
+def _foglio_semplice(titolo, intestazioni, righe_valori):
+    """Foglio piano con intestazione formattata e colonne dimensionate.
+
+    Niente raggruppamenti: in Excel si filtra e si ordina da soli, quindi la
+    divisione e' una colonna e non una sezione.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = titolo[:31]
+
+    ws.cell(row=1, column=1, value=titolo).font = Font(bold=True, size=13)
+
+    for colonna, etichetta in enumerate(intestazioni, start=1):
+        cella = ws.cell(row=3, column=colonna, value=etichetta)
+        cella.font = Font(bold=True, color='FFFFFF')
+        cella.fill = PatternFill(start_color='0EA5E9', end_color='0EA5E9',
+                                 fill_type='solid')
+        cella.alignment = Alignment(horizontal='center')
+
+    for indice, valori in enumerate(righe_valori, start=4):
+        for colonna, valore in enumerate(valori, start=1):
+            ws.cell(row=indice, column=colonna, value=valore)
+
+    for colonna, etichetta in enumerate(intestazioni, start=1):
+        larghezza = max([len(str(etichetta))] +
+                        [len(str(v[colonna - 1] or '')) for v in righe_valori] or [10])
+        ws.column_dimensions[ws.cell(row=3, column=colonna).column_letter].width = \
+            min(max(larghezza + 2, 12), 40)
+
+    ws.auto_filter.ref = f"A3:{ws.cell(row=3, column=len(intestazioni)).column_letter}" \
+                         f"{max(3, len(righe_valori) + 3)}"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def stampa_inventario_excel(righe, titolo):
+    """Foglio con lo stesso inventario del PDF: stesse righe, stesso ordine."""
+    intestazioni = ['Marca', 'Modello', 'Matricola', 'Ubicazione', 'Divisione']
+    valori = [[r.get('marca'), r.get('modello'), r.get('matricola'),
+               r.get('ubicazione'), r.get('divisione_nome')] for r in righe]
+    return _foglio_semplice(titolo, intestazioni, valori)
+
+
+def stampa_scadenze_excel(scadute, in_scadenza, titolo):
+    """Foglio con le stesse scadenze del PDF: prima le scadute, poi le altre."""
+    intestazioni = ['Stato', 'Marca', 'Modello', 'Matricola', 'Ubicazione',
+                    'Divisione', 'Scadenza', 'Giorni']
+    valori = []
+    for stato, gruppo in (('Scaduta', scadute), ('In scadenza', in_scadenza)):
+        for r in gruppo:
+            valori.append([stato, r.get('marca'), r.get('modello'),
+                           r.get('matricola'), r.get('ubicazione'),
+                           r.get('divisione_nome'), r.get('prossima_scadenza'),
+                           r.get('giorni_rimasti')])
+    return _foglio_semplice(titolo, intestazioni, valori)
+
+
 def genera_report_scadenze_pdf(struttura_id, output_path):
-    """Genera un PDF con lo scadenzario per struttura e lo salva in output_path."""
-    from models import query_all, query_one
-    from fpdf import FPDF
-    from fpdf.enums import XPos, YPos
-    from datetime import datetime
+    """Report scadenze per l'invio automatico via email.
 
-    struttura = query_one("SELECT * FROM strutture WHERE id=?", (struttura_id,))
-    if struttura is None:
-        raise ValueError(f"Struttura con id={struttura_id} non trovata.")
-    scadenze = query_all("""
-        SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
-               d.nome as divisione_nome
-        FROM prossime_scadenze ps
-        JOIN apparecchi a ON a.id = ps.apparecchio_id
-        JOIN divisioni d ON d.id = a.divisione_id
-        WHERE a.struttura_id = ?
-          AND ps.priorita IN ('scaduto','urgente','attenzione','avviso')
-        ORDER BY ps.priorita, ps.prossima_scadenza
-    """, (struttura_id,))
+    Usa lo stesso motore delle stampe manuali: il PDF che arriva in posta e'
+    identico a quello che si stampa dalla pagina Stampe, e resta un solo posto
+    da mantenere quando la grafica cambia.
+    """
+    from models import query_all, query_one, percorso_logo_struttura
+    from report_service import stampa_scadenze
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font('Helvetica', 'B', 16)
-    pdf.cell(0, 10, f"Scadenzario - {struttura['nome']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.set_font('Helvetica', '', 10)
-    pdf.cell(0, 6, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(4)
+    struttura = query_one("SELECT nome, logo_path FROM strutture WHERE id = ?",
+                          (struttura_id,))
+    # Un solo "oggi" per l'intero prospetto, come in stampe_bp.scadenze():
+    # date('now') di SQLite e' in UTC, datetime.now() in ora locale, e nella
+    # fascia notturna italiana i due non coincidono. Qui il rischio e' minore
+    # (l'etichetta del periodo che indica un giorno diverso dal confine reale
+    # delle query), ma la classe di difetto e' la stessa e costa una riga.
+    oggi = datetime.now().date()
+    fine = oggi + timedelta(days=30)
 
-    colori = {
-        'scaduto':    (220, 53, 69),
-        'urgente':    (255, 140,  0),
-        'attenzione': (255, 193,  7),
-        'avviso':     ( 13, 110, 253),
+    # ps.tipo_manutenzione porta il genere di manutenzione (preventiva,
+    # correttiva, ...) e per le verifiche il letterale 'verifica_elettrica':
+    # e' quello che distingue le righe in un prospetto che, a differenza
+    # delle stampe manuali, non e' filtrato per tipo_record.
+    base = """SELECT ps.marca, ps.modello, ps.matricola, ps.ubicazione,
+                     ps.prossima_scadenza, ps.giorni_rimasti,
+                     ps.tipo_manutenzione, d.nome AS divisione_nome
+              FROM prossime_scadenze ps
+              JOIN apparecchi a ON a.id = ps.apparecchio_id
+              LEFT JOIN divisioni d ON d.id = ps.divisione_id
+              WHERE a.struttura_id = ?"""
+
+    scadute = query_all(
+        base + " AND ps.prossima_scadenza < ? ORDER BY ps.prossima_scadenza",
+        (struttura_id, oggi.isoformat()))
+    in_scadenza = query_all(
+        base + " AND ps.prossima_scadenza >= ? AND ps.prossima_scadenza <= ?"
+               " ORDER BY ps.prossima_scadenza",
+        (struttura_id, oggi.isoformat(), fine.isoformat()))
+
+    contesto = {
+        'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
+        'titolo': 'Scadenzario',
+        'ambito': '',
+        'logo_path': percorso_logo_struttura(struttura),
+        'mostra_firma': False,
+        'mostra_spunta': False,
+        'mostra_tipo': True,
+        'fine_periodo': fine.strftime('%d/%m/%Y'),
     }
 
-    if not scadenze:
-        pdf.set_font('Helvetica', 'I', 10)
-        pdf.cell(0, 8, "Nessuna scadenza critica.", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    else:
-        for s in scadenze:
-            r, g_, b = colori.get(s['priorita'], (0, 0, 0))
-            pdf.set_text_color(r, g_, b)
-            pdf.set_font('Helvetica', 'B', 9)
-            nome_app = s['descrizione'] or f"{s['marca']} {s['modello']}"
-            pdf.cell(0, 5,
-                f"[{s['priorita'].upper()}] {nome_app} - {s['divisione_nome']}",
-                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.set_text_color(0, 0, 0)
-            pdf.set_font('Helvetica', '', 9)
-            pdf.cell(0, 5,
-                f"  Mat: {s['matricola']} | Scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg) | Tipo: {s['tipo_manutenzione']}",
-                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    pdf.output(output_path)
+    with open(output_path, 'wb') as f:
+        f.write(stampa_scadenze(scadute, in_scadenza, contesto))
 
 
 def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_name='MedInventory'):
