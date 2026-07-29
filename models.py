@@ -527,6 +527,44 @@ ORDER BY prossima_scadenza ASC""",
         logger.debug(f"Schema DB versione {schema_ver}")
 
 
+def filtro_divisione(table_alias='a'):
+    """Clausola WHERE e parametri per limitare una query allo scope dell'utente.
+
+    Unico punto del progetto che decide cosa un utente puo' vedere. Fino alla
+    2.5 ne esistevano quattro copie divergenti, una per blueprint, e tutte
+    contenevano lo stesso difetto: per un admin o tecnico senza struttura
+    attiva restituivano ("", []), cioe' NESSUN filtro, e la query tornava gli
+    apparecchi di tutte le strutture. Lo stato si raggiunge sia eliminando la
+    struttura (utenti.struttura_id e' ON DELETE SET NULL) sia semplicemente
+    disattivandola, perche' auth.py porta g.struttura_id a None quando la
+    struttura non e' attiva.
+
+    In un'applicazione multi-tenant l'assenza di scope significa "nessun
+    dato", mai "tutti i dati".
+
+    Il superadmin che non impersona alcuna struttura ricade anche lui in
+    "AND 1=0": e' gia' il comportamento odierno di tre blueprint su quattro,
+    e la via per vedere i dati di una struttura e' entrarci.
+
+    Restituisce (clausola, parametri). La clausola inizia sempre con "AND ".
+    """
+    div = getattr(g, 'divisione_attiva', None)
+    if div and div.get('id') != 'tutte':
+        return f"AND {table_alias}.divisione_id = ?", [div['id']]
+
+    if getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico', 'superadmin'):
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
+        return "AND 1=0", []
+
+    ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+    if not ids:
+        return "AND 1=0", []
+    segnaposto = ','.join('?' * len(ids))
+    return f"AND {table_alias}.divisione_id IN ({segnaposto})", ids
+
+
 def apparecchio_accessibile(apparecchio_id):
     """Verifica che l'apparecchio sia nello scope dell'utente corrente.
 
@@ -535,10 +573,19 @@ def apparecchio_accessibile(apparecchio_id):
     Restituisce la riga dell'apparecchio, oppure None se non accessibile.
     """
     struttura_id = getattr(g, 'struttura_id', None)
-    app_row = query_one(
-        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
-        (apparecchio_id, struttura_id, struttura_id)
-    )
+    if struttura_id:
+        app_row = query_one(
+            "SELECT * FROM apparecchi WHERE id = ? AND struttura_id = ?",
+            (apparecchio_id, struttura_id)
+        )
+    elif g.user['ruolo'] == 'superadmin':
+        # Stato normale del superadmin che non sta impersonando nessuno.
+        app_row = query_one("SELECT * FROM apparecchi WHERE id = ?", (apparecchio_id,))
+    else:
+        # Admin, tecnico o utente senza struttura attiva: nessun apparecchio.
+        # La condizione precedente era "struttura_id = ? OR ? IS NULL", che
+        # con struttura_id None accettava qualunque riga.
+        return None
     if not app_row:
         return None
     if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):

@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile)
+                    apparecchio_accessibile, filtro_divisione)
 
 verifiche_bp = Blueprint('verifiche', __name__)
 
@@ -27,27 +27,9 @@ ALLOWED_DOC_EXT = {'pdf'}
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_divisione_filter(table_alias='a'):
-    """Return SQL WHERE clause and params for division filtering."""
-    div = g.divisione_attiva
-    if div and div.get('id') != 'tutte':
-        return f"AND {table_alias}.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] in ('admin', 'tecnico'):
-        struttura_id = getattr(g, 'struttura_id', None)
-        if struttura_id:
-            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
-        return "", []
-    else:
-        ids = [d['id'] for d in g.divisioni]
-        if not ids:
-            return "AND 1=0", []
-        placeholders = ','.join('?' * len(ids))
-        return f"AND {table_alias}.divisione_id IN ({placeholders})", ids
-
-
 def _get_accessible_apparecchi():
     """Get list of apparecchi accessible by current user."""
-    div_clause, div_params = _get_divisione_filter('a')
+    div_clause, div_params = filtro_divisione('a')
     return query_all(
         f"""SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
             FROM apparecchi a
@@ -135,7 +117,7 @@ def _save_documento(file_obj, verifica_id, struttura_id=None):
 @login_required
 def lista():
     """List verifiche with filters."""
-    div_clause, div_params = _get_divisione_filter('a')
+    div_clause, div_params = filtro_divisione('a')
 
     search = request.args.get('search', '').strip()
     esito = request.args.get('esito', '')

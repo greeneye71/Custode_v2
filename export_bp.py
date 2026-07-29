@@ -8,27 +8,9 @@ from flask import (
 )
 
 from auth import login_required
-from models import query_all
+from models import query_all, filtro_divisione
 
 export_bp = Blueprint('export', __name__)
-
-
-def _get_divisione_filter():
-    """Build division filter SQL clause."""
-    div = getattr(g, 'divisione_attiva', None)
-    if div and div.get('id') != 'tutte':
-        return "AND a.divisione_id = ?", [div['id']]
-    elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico', 'superadmin'):
-        struttura_id = getattr(g, 'struttura_id', None)
-        if struttura_id:
-            return "AND a.struttura_id = ?", [struttura_id]
-        return "", []
-    else:
-        ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-        if ids:
-            ph = ','.join('?' * len(ids))
-            return f"AND a.divisione_id IN ({ph})", ids
-        return "AND 1=0", []
 
 
 def _get_divisione_nome():
@@ -49,7 +31,7 @@ def apparecchi_excel():
     """Export apparecchi to Excel."""
     from export_service import export_apparecchi_excel
 
-    div_clause, div_params = _get_divisione_filter()
+    div_clause, div_params = filtro_divisione()
     apparecchi = query_all(
         f"""SELECT a.*, d.nome as divisione_nome
             FROM apparecchi a
@@ -76,7 +58,7 @@ def apparecchi_pdf():
     """Export apparecchi to PDF."""
     from export_service import export_apparecchi_pdf
 
-    div_clause, div_params = _get_divisione_filter()
+    div_clause, div_params = filtro_divisione()
     apparecchi = query_all(
         f"""SELECT a.*, d.nome as divisione_nome
             FROM apparecchi a
@@ -113,7 +95,7 @@ def manutenzioni_excel():
     """Export manutenzioni to Excel."""
     from export_service import export_manutenzioni_excel
 
-    div_clause, div_params = _get_divisione_filter()
+    div_clause, div_params = filtro_divisione()
     manutenzioni = query_all(
         f"""SELECT m.*, a.marca, a.modello, a.matricola,
                    d.nome as divisione_nome
@@ -150,7 +132,7 @@ def verifiche_excel():
     """Export verifiche to Excel."""
     from export_service import export_verifiche_excel
 
-    div_clause, div_params = _get_divisione_filter()
+    div_clause, div_params = filtro_divisione()
     verifiche = query_all(
         f"""SELECT v.*, a.marca, a.modello, a.matricola,
                    d.nome as divisione_nome
@@ -179,7 +161,7 @@ def verifiche_pdf():
     """Export verifiche to PDF."""
     from export_service import export_verifiche_pdf
 
-    div_clause, div_params = _get_divisione_filter()
+    div_clause, div_params = filtro_divisione()
     verifiche = query_all(
         f"""SELECT v.*, a.marca, a.modello, a.matricola,
                    d.nome as divisione_nome

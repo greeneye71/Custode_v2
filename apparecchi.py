@@ -18,7 +18,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile)
+                    apparecchio_accessibile, filtro_divisione)
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -29,24 +29,6 @@ ALLOWED_DOC_EXT = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'jpg', 'jpeg', 'png'}
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _get_divisione_filter():
-    """Return SQL WHERE clause and params for division filtering."""
-    div = g.divisione_attiva
-    if div and div.get('id') != 'tutte':
-        return "AND a.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] in ('admin', 'tecnico'):
-        struttura_id = getattr(g, 'struttura_id', None)
-        if struttura_id:
-            return "AND a.struttura_id = ?", [struttura_id]
-        return "", []
-    else:
-        ids = [d['id'] for d in g.divisioni]
-        if not ids:
-            return "AND 1=0", []
-        placeholders = ','.join('?' * len(ids))
-        return f"AND a.divisione_id IN ({placeholders})", ids
-
 
 def _validate_apparecchio(form_data, edit_id=None):
     """Validate form data for apparecchio. Returns (cleaned_data, errors)."""
@@ -217,7 +199,7 @@ def _parse_accessori_from_form(form_data):
 @login_required
 def lista():
     """List apparecchi with filters and search."""
-    div_clause, div_params = _get_divisione_filter()
+    div_clause, div_params = filtro_divisione()
 
     # Gather filters
     search = request.args.get('search', '').strip()
