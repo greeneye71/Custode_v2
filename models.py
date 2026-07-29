@@ -462,8 +462,7 @@ ORDER BY prossima_scadenza ASC""",
         ).fetchone()
         if row and "'tecnico'" not in row[0]:
             logger.info("Migrazione v2.2: aggiunta ruolo tecnico a tabella utenti...")
-            cols = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
-            col_list = ', '.join(cols)
+            cols_vecchie = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
             # legacy_alter_table=ON: impedisce a SQLite 3.26+ di aggiornare
             # automaticamente i riferimenti FK nelle tabelle figlie durante il RENAME,
             # altrimenti sessioni/utenti_divisioni punterebbero a utenti_old_v22.
@@ -489,7 +488,22 @@ ORDER BY prossima_scadenza ASC""",
                   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id)
                 )
             """)
-            db.execute(f"INSERT INTO utenti SELECT {col_list} FROM utenti_old_v22")
+            # Colonne di destinazione nominate esplicitamente: senza elenco,
+            # SQLite pretende che il numero di colonne selezionate coincida con
+            # quello della tabella nuova. Una utenti di uno schema v1.x (senza
+            # struttura_id) ne ha di meno e l'INSERT fallirebbe — nel modo
+            # peggiore, perché RENAME e CREATE TABLE sono DDL già in autocommit
+            # e il rollback dell'except sotto non li annulla.
+            cols_nuove = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
+            cols_comuni = [c for c in cols_vecchie if c in cols_nuove]
+            cols_scartate = [c for c in cols_vecchie if c not in cols_nuove]
+            if cols_scartate:
+                logger.warning(
+                    f"Migrazione v2.2: colonne di utenti_old_v22 assenti nella "
+                    f"nuova tabella utenti, scartate: {cols_scartate}"
+                )
+            col_list = ', '.join(cols_comuni)
+            db.execute(f"INSERT INTO utenti ({col_list}) SELECT {col_list} FROM utenti_old_v22")
             db.execute("DROP TABLE utenti_old_v22")
             db.execute("PRAGMA legacy_alter_table = OFF")
             db.execute("PRAGMA foreign_keys = ON")
@@ -547,8 +561,7 @@ ORDER BY prossima_scadenza ASC""",
         ).fetchone()
         if row and 'ON DELETE RESTRICT' not in row[0]:
             logger.info("Migrazione v2.6: struttura_id di utenti a ON DELETE RESTRICT...")
-            cols = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
-            col_list = ', '.join(cols)
+            cols_vecchie = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
             db.execute("PRAGMA legacy_alter_table = ON")
             db.execute("PRAGMA foreign_keys = OFF")
             db.execute("ALTER TABLE utenti RENAME TO utenti_old_26")
@@ -571,7 +584,24 @@ ORDER BY prossima_scadenza ASC""",
                   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
                 )
             """)
-            db.execute(f"INSERT INTO utenti SELECT {col_list} FROM utenti_old_26")
+            # Colonne di destinazione nominate esplicitamente (vedi stesso
+            # commento nella migrazione v2.2 sopra): un utente che viene da
+            # uno schema senza struttura_id deve ritrovarsi struttura_id NULL
+            # (valore predefinito), non far fallire l'INSERT. cols_vecchie
+            # viene da PRAGMA table_info sulla tabella vecchia e puo' contenere
+            # colonne che la tabella nuova non ha (installazione personalizzata
+            # o colonna rimossa fra le versioni): si scartano e si segnalano,
+            # perché un dato che sparisce in silenzio è peggio di un errore.
+            cols_nuove = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
+            cols_comuni = [c for c in cols_vecchie if c in cols_nuove]
+            cols_scartate = [c for c in cols_vecchie if c not in cols_nuove]
+            if cols_scartate:
+                logger.warning(
+                    f"Migrazione v2.6: colonne di utenti_old_26 assenti nella "
+                    f"nuova tabella utenti, scartate: {cols_scartate}"
+                )
+            col_list = ', '.join(cols_comuni)
+            db.execute(f"INSERT INTO utenti ({col_list}) SELECT {col_list} FROM utenti_old_26")
             db.execute("DROP TABLE utenti_old_26")
             db.execute("PRAGMA legacy_alter_table = OFF")
             db.execute("PRAGMA foreign_keys = ON")
