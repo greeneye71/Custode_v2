@@ -162,3 +162,55 @@ def test_elenco_vuoto_non_fa_nulla(conn):
     con.commit()
     assert conta(con, 'strutture') == 2
     assert conteggi['strutture'] == 0
+
+
+def test_import_preview_di_un_altra_struttura_non_blocca_la_cancellazione(conn):
+    """import_preview.apparecchio_match_id non ha ON DELETE verso apparecchi.
+    Una riga di import_preview puo' appartenere a un import_history della
+    struttura B (sopravvissuta) e puntare, come suggerimento di match, a un
+    apparecchio della struttura A che stiamo cancellando: e' il ramo di
+    import_bp._match_apparecchi che cerca un match senza scope di struttura.
+    Una preview creata dentro l'import di A non proverebbe nulla: sparirebbe
+    gia' in cascata insieme al suo import_history. Qui la preview e' di B, non
+    va toccata come riga, ma il suo collegamento all'apparecchio di A deve
+    essere azzerato, altrimenti la DELETE FROM apparecchi va in FK error."""
+    from struttura_service import rimuovi_strutture
+    con, ids = conn
+    import_id = con.execute(
+        "INSERT INTO import_history (struttura_id,divisione_id,tipo_import,filename,filepath,imported_by) "
+        "VALUES (?,?,'inventario','y.xlsx','y/y.xlsx',?)",
+        (ids['b']['struttura'], ids['b']['divisione'], ids['b']['utente'])).lastrowid
+    preview_id = con.execute(
+        "INSERT INTO import_preview (import_id,apparecchio_match_id,stato) VALUES (?,?,'pending')",
+        (import_id, ids['a']['apparecchio'])).lastrowid
+    con.commit()
+
+    rimuovi_strutture(con, [ids['a']['struttura']])
+    con.commit()
+
+    riga = con.execute("SELECT apparecchio_match_id FROM import_preview WHERE id=?",
+                       (preview_id,)).fetchone()
+    assert riga is not None  # e' roba di B: la riga resta, solo il link sparisce
+    assert riga['apparecchio_match_id'] is None
+    assert conta(con, 'import_history', 'WHERE id=?', (import_id,)) == 1
+
+
+def test_config_e_token_vengono_cancellati_solo_per_la_struttura_indicata(conn):
+    """strutture_config e api_tokens vanno in cascata sulla FK verso strutture:
+    qui verifichiamo che il confine di tenant sia rispettato anche per loro,
+    non solo per apparecchi/divisioni/utenti."""
+    from struttura_service import rimuovi_strutture
+    con, ids = conn
+    con.execute("INSERT INTO api_tokens (struttura_id,nome,token_hash,created_by) VALUES (?,?,?,?)",
+                (ids['a']['struttura'], 'Token A', 'hash-a', ids['a']['utente']))
+    con.execute("INSERT INTO api_tokens (struttura_id,nome,token_hash,created_by) VALUES (?,?,?,?)",
+                (ids['b']['struttura'], 'Token B', 'hash-b', ids['b']['utente']))
+    con.commit()
+
+    rimuovi_strutture(con, [ids['a']['struttura']])
+    con.commit()
+
+    assert conta(con, 'strutture_config', 'WHERE struttura_id=?', (ids['a']['struttura'],)) == 0
+    assert conta(con, 'strutture_config', 'WHERE struttura_id=?', (ids['b']['struttura'],)) == 1
+    assert conta(con, 'api_tokens', 'WHERE struttura_id=?', (ids['a']['struttura'],)) == 0
+    assert conta(con, 'api_tokens', 'WHERE struttura_id=?', (ids['b']['struttura'],)) == 1

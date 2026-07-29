@@ -70,24 +70,35 @@ def rimuovi_strutture(conn, ids):
     conteggi['strutture'] = conta(f"SELECT COUNT(*) FROM strutture WHERE id IN ({seg})")
 
     # 1. import_history: la FK verso strutture non ha ON DELETE e bloccherebbe.
-    #    import_preview va in cascata.
+    #    import_preview va in cascata (import_id -> import_history ON DELETE CASCADE).
     conn.execute(f"DELETE FROM import_history WHERE struttura_id IN ({seg})", ids)
 
-    # 2. apparecchi: manutenzioni, verifiche, documenti e accessori in cascata.
+    # 2. import_preview.apparecchio_match_id non ha ON DELETE verso apparecchi,
+    #    e puo' puntare a un apparecchio delle strutture in cancellazione anche
+    #    da una riga che appartiene all'import_history di UN'ALTRA struttura,
+    #    sopravvissuta: e' il caso di import_bp._match_apparecchi quando cerca
+    #    un match senza scope di struttura. Quella riga non e' nostra - e' di
+    #    un tenant che non c'entra - quindi non la cancelliamo: si azzera solo
+    #    il collegamento, a righe cancellate la referenza non avrebbe piu' senso.
+    conn.execute(
+        f"UPDATE import_preview SET apparecchio_match_id = NULL "
+        f"WHERE apparecchio_match_id IN ({figli})", ids)
+
+    # 3. apparecchi: manutenzioni, verifiche, documenti e accessori in cascata.
     conn.execute(f"DELETE FROM apparecchi WHERE struttura_id IN ({seg})", ids)
 
-    # 3. email_config: la FK verso divisioni e' SET NULL, le righe resterebbero
+    # 4. email_config: la FK verso divisioni e' SET NULL, le righe resterebbero
     #    orfane con le credenziali di una struttura che non esiste piu'.
     conn.execute(
         f"DELETE FROM email_config WHERE divisione_id IN "
         f"(SELECT id FROM divisioni WHERE struttura_id IN ({seg}))", ids)
 
-    # 4. Il registro sopravvive, slegato dalla struttura: su un registro di
+    # 5. Il registro sopravvive, slegato dalla struttura: su un registro di
     #    apparecchi elettromedicali la traccia di chi ha fatto cosa e' proprio
     #    la cosa che non deve sparire insieme ai dati.
     conn.execute(f"UPDATE log_attivita SET struttura_id = NULL WHERE struttura_id IN ({seg})", ids)
 
-    # 5. Utenti. Prima si libera ogni riferimento che sopravvive a loro, poi si
+    # 6. Utenti. Prima si libera ogni riferimento che sopravvive a loro, poi si
     #    conserva la loro identita' nel registro in forma testuale.
     utenti = conn.execute(
         f"SELECT id, email FROM utenti WHERE struttura_id IN ({seg})", ids).fetchall()
@@ -103,7 +114,7 @@ def rimuovi_strutture(conn, ids):
     # da questa DELETE per costruzione, non per un controllo dimenticabile.
     conn.execute(f"DELETE FROM utenti WHERE struttura_id IN ({seg})", ids)
 
-    # 6. La struttura: divisioni, strutture_config, api_tokens e
+    # 7. La struttura: divisioni, strutture_config, api_tokens e
     #    tecnici_strutture vanno in cascata. Il tecnico perde l'assegnazione,
     #    non l'account.
     conn.execute(f"DELETE FROM strutture WHERE id IN ({seg})", ids)
