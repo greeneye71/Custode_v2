@@ -240,3 +240,36 @@ def test_contenuto_senza_cartella_uploads(conn, tmp_path):
     c = contenuto_struttura(con, ids['b']['struttura'], str(tmp_path / 'inesistente'))
     assert c['file'] == 0
     assert c['byte'] == 0
+
+
+def test_contenuto_in_modalita_single_struttura(conn, tmp_path):
+    """In single-struttura upload_subdir mette i file sotto uploads_base/<tipo>/,
+    senza il prefisso strutture/<id>/: contenuto_struttura deve guardare li',
+    non nel percorso multi-struttura. Nessuna cartella strutture/<id>/ esiste
+    qui: un'implementazione che ignorasse il flag e cercasse comunque nel
+    percorso multi troverebbe zero file e il test fallirebbe."""
+    from struttura_service import contenuto_struttura
+    con, ids = conn
+    cartella = tmp_path / 'uploads' / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'y.jpg').write_bytes(b'0' * 500)
+
+    c = contenuto_struttura(con, ids['a']['struttura'], str(tmp_path / 'uploads'),
+                            single_struttura=True)
+    assert c['file'] == 1
+    assert c['byte'] == 500
+
+
+def test_contenuto_di_default_resta_in_modalita_multi(conn, tmp_path):
+    """Senza specificare single_struttura, il comportamento resta quello
+    multi-struttura preesistente: i file vanno cercati sotto
+    uploads_base/strutture/<id>/<tipo>/."""
+    from struttura_service import contenuto_struttura
+    con, ids = conn
+    cartella = tmp_path / 'uploads' / 'strutture' / str(ids['a']['struttura']) / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'z.jpg').write_bytes(b'0' * 777)
+
+    c = contenuto_struttura(con, ids['a']['struttura'], str(tmp_path / 'uploads'))
+    assert c['file'] == 1
+    assert c['byte'] == 777

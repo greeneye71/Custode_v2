@@ -380,8 +380,10 @@ def scheda(struttura_id):
         flash('Struttura non trovata.', 'danger')
         return redirect(url_for('strutture.index'))
 
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
     contenuto = contenuto_struttura(get_db(), struttura_id,
-                                    current_app.config['UPLOADS_PATH'])
+                                    current_app.config['UPLOADS_PATH'],
+                                    single_struttura=single)
     divisioni = _get_divisioni_struttura(struttura_id)
     utenti = query_all(
         "SELECT nome, cognome, email, ruolo, attivo FROM utenti "
@@ -390,7 +392,6 @@ def scheda(struttura_id):
         "SELECT u.nome, u.cognome, u.email FROM utenti u "
         "JOIN tecnici_strutture ts ON ts.tecnico_id = u.id "
         "WHERE ts.struttura_id = ? ORDER BY u.cognome, u.nome", (struttura_id,))
-    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
 
     return render_template('strutture/scheda.html', struttura=struttura,
                            contenuto=contenuto, divisioni=divisioni,

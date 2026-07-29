@@ -122,18 +122,36 @@ def rimuovi_strutture(conn, ids):
     return conteggi
 
 
-def cartella_struttura(uploads_base, struttura_id):
-    """Albero dei file di una struttura, come lo compone models.upload_subdir."""
+def cartella_struttura(uploads_base, struttura_id, single_struttura=False):
+    """Albero dei file di una struttura, come lo compone models.upload_subdir.
+
+    Le due funzioni devono restare d'accordo: upload_subdir() decide dove un
+    upload viene *scritto* (uploads_base/<subdir> in single-struttura,
+    uploads_base/strutture/<id>/<subdir> in multi-struttura), questa decide
+    dove lo si va a *cercare*. Chi cambia l'una deve controllare l'altra.
+    """
+    if single_struttura:
+        return uploads_base
     return os.path.join(uploads_base, 'strutture', str(struttura_id))
 
 
-def contenuto_struttura(conn, struttura_id, uploads_base):
+def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False):
     """Cosa contiene una struttura: conteggi, file e spazio occupato.
 
     Serve alla scheda, alla pagina di conferma della cancellazione e a
     ESPORTAZIONE.txt. I 'tecnici' sono quelli assegnati, che alla
     cancellazione sopravvivono: contarli insieme agli utenti li farebbe
     sembrare in pericolo.
+
+    Limite noto: se un'installazione e' stata promossa da single a multi
+    struttura, gli allegati caricati prima della promozione restano nel
+    vecchio percorso (uploads_base/<subdir>/) mentre single_struttura qui
+    arriva gia' valorizzato a False dal chiamante: il conteggio guardera'
+    nel percorso multi-struttura e non li trovera'. toggle_modalita.py cambia
+    solo il flag di configurazione, non sposta i file. Non e' un problema che
+    questa funzione possa risolvere da sola: e' un travaso di dati, non una
+    lettura; chi legge 'file: 0' su una struttura del genere non se ne deve
+    fidare senza controllare a mano.
     """
     def conta(sql):
         return conn.execute(sql, (struttura_id,)).fetchone()[0]
@@ -152,7 +170,7 @@ def contenuto_struttura(conn, struttura_id, uploads_base):
     }
 
     numero, byte = 0, 0
-    radice = cartella_struttura(uploads_base, struttura_id)
+    radice = cartella_struttura(uploads_base, struttura_id, single_struttura)
     for cartella, _sotto, file_presenti in os.walk(radice):
         for nome in file_presenti:
             numero += 1
