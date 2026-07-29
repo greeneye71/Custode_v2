@@ -521,13 +521,20 @@ ORDER BY prossima_scadenza ASC""",
         except Exception:
             pass
 
-    # Utenti rimasti senza struttura: li disattiva e li segnala.
-    # Ci si arriva eliminando una struttura (utenti.struttura_id era
-    # ON DELETE SET NULL fino alla 2.6) oppure importando dati incompleti.
-    # Dal Task 1 un account cosi' non vede piu' alcun dato, ma continua ad
-    # autenticarsi: disattivarlo lo rende visibile a chi amministra, invece
-    # di lasciarlo come un accesso silenzioso che nessuno controlla.
-    # superadmin e tecnico sono esclusi: hanno struttura_id NULL per progetto.
+    # Utenti rimasti senza struttura: adottali, astienti o disattivali a
+    # seconda di quante strutture esistono. Ci si arriva eliminando una
+    # struttura (utenti.struttura_id era ON DELETE SET NULL fino alla 2.6),
+    # importando dati incompleti, oppure aggiornando un'installazione che
+    # non conosceva ancora struttura_id (schema v1.x, prima di
+    # migrate_v2_0.py): in quel caso la migrazione v2.2 appena eseguita ha
+    # lasciato struttura_id NULL su ogni utente esistente, e disattivarli
+    # tutti incondizionatamente bloccherebbe fuori un'installazione che ha
+    # aggiornato senza che nessuno abbia sbagliato niente. Questo blocco
+    # esiste per chiudere una falla (un account senza scope che, prima del
+    # Task 1, vedeva comunque dati altrui), non per murare fuori chi
+    # aggiorna: i tre rami sotto lo distinguono da un'ambiguita' reale.
+    # superadmin e tecnico sono esclusi in ogni ramo: hanno struttura_id
+    # NULL per progetto.
     try:
         orfani = db.execute(
             "SELECT id, email FROM utenti "
@@ -535,19 +542,58 @@ ORDER BY prossima_scadenza ASC""",
             "  AND ruolo IN ('admin', 'utente')"
         ).fetchall()
         if orfani:
-            db.execute(
-                "UPDATE utenti SET attivo = 0 "
-                "WHERE struttura_id IS NULL AND attivo = 1 "
-                "  AND ruolo IN ('admin', 'utente')"
-            )
-            db.commit()
-            for riga in orfani:
-                logger.warning(
-                    f"Utente senza struttura disattivato: {riga['email']} (id {riga['id']}). "
-                    "Riassegnalo a una struttura per riabilitarlo."
+            strutture_attive = db.execute(
+                "SELECT id, nome FROM strutture WHERE attiva = 1"
+            ).fetchall()
+            if len(strutture_attive) == 1:
+                # Adozione: stessa logica del precedente su import_history
+                # (poco sopra, "Import storici senza divisione..."): con
+                # un'unica struttura attiva non c'e' ambiguita' su dove
+                # inquadrarli, ed e' il caso piu' comune (installazione
+                # monostruttura che aggiorna).
+                struttura = strutture_attive[0]
+                db.execute(
+                    "UPDATE utenti SET struttura_id = ? "
+                    "WHERE struttura_id IS NULL AND attivo = 1 "
+                    "  AND ruolo IN ('admin', 'utente')",
+                    (struttura['id'],)
                 )
+                db.commit()
+                logger.warning(
+                    f"{len(orfani)} utenti senza struttura assegnati "
+                    f"all'unica struttura attiva '{struttura['nome']}' "
+                    f"(id {struttura['id']}): "
+                    + ', '.join(r['email'] for r in orfani)
+                )
+            elif len(strutture_attive) == 0:
+                # Astensione: non esiste ancora una struttura in cui
+                # inquadrarli (es. installazione mai passata da
+                # migrate_v2_0.py). Disattivarli qui li renderebbe
+                # inaccessibili senza che nessuno abbia un posto dove
+                # riassegnarli: si lasciano attivi e si segnala soltanto.
+                logger.warning(
+                    f"{len(orfani)} utenti senza struttura e nessuna struttura "
+                    "attiva nel database: lasciati attivi in attesa che venga "
+                    "creata almeno una struttura. Utenti: "
+                    + ', '.join(r['email'] for r in orfani)
+                )
+            else:
+                # Disattivazione: con due o piu' strutture attive
+                # l'ambiguita' e' reale, nessuno puo' indovinare a quale
+                # appartenesse l'utente. Comportamento invariato.
+                db.execute(
+                    "UPDATE utenti SET attivo = 0 "
+                    "WHERE struttura_id IS NULL AND attivo = 1 "
+                    "  AND ruolo IN ('admin', 'utente')"
+                )
+                db.commit()
+                for riga in orfani:
+                    logger.warning(
+                        f"Utente senza struttura disattivato: {riga['email']} (id {riga['id']}). "
+                        "Riassegnalo a una struttura per riabilitarlo."
+                    )
     except Exception as e:
-        logger.error(f"Disattivazione utenti orfani fallita: {e}", exc_info=True)
+        logger.error(f"Gestione utenti orfani fallita: {e}", exc_info=True)
 
     # v2.6: utenti.struttura_id da ON DELETE SET NULL a RESTRICT.
     # SQLite non sa cambiare una FK con ALTER TABLE: va ricostruita la tabella.

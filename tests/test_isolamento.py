@@ -156,13 +156,17 @@ def test_apparecchio_accessibile_lascia_passare_il_superadmin(app, due_strutture
         assert apparecchio_accessibile(due_strutture['app_b']) is not None
 
 
-def test_gli_utenti_orfani_vengono_disattivati_all_avvio(app):
-    """Un admin senza struttura non deve restare un account funzionante di
-    cui nessuno sa nulla: dopo il Task 1 non vede piu' dati, ma entra ancora.
-    I superadmin hanno struttura_id NULL per progetto e non vanno toccati; i
-    tecnici nemmeno, perche' sono legati alle strutture da tecnici_strutture."""
+def test_gli_utenti_orfani_vengono_disattivati_se_ambigui_su_piu_strutture(app):
+    """Con due o piu' strutture attive l'ambiguita' e' reale: nessuno puo'
+    indovinare a quale appartenesse un admin senza struttura, e disattivarlo
+    resta la scelta prudente (dal Task 1 non vede piu' dati, ma continuava
+    ad autenticarsi). I superadmin hanno struttura_id NULL per progetto e
+    non vanno toccati; i tecnici nemmeno, perche' sono legati alle strutture
+    da tecnici_strutture."""
     from models import execute, query_one, apply_schema_updates
     with app.app_context():
+        execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Prima','P1',1)")
+        execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Seconda','P2',1)")
         execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
                 "VALUES ('orfano@a.it','x','O','O','admin',1)")
         execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
@@ -175,6 +179,78 @@ def test_gli_utenti_orfani_vengono_disattivati_all_avvio(app):
         assert query_one("SELECT attivo FROM utenti WHERE email='orfano@a.it'")['attivo'] == 0
         assert query_one("SELECT attivo FROM utenti WHERE email='super@x.it'")['attivo'] == 1
         assert query_one("SELECT attivo FROM utenti WHERE email='tec@x.it'")['attivo'] == 1
+
+
+def test_utente_orfano_resta_attivo_se_non_esiste_alcuna_struttura(app):
+    """Se non esiste ancora nessuna struttura (es. installazione mai passata
+    da migrate_v2_0.py) non c'e' un posto dove inquadrare l'utente:
+    disattivarlo qui lo bloccherebbe fuori senza che nessuno abbia un posto
+    dove riassegnarlo. Va lasciato attivo, in attesa che una struttura venga
+    creata."""
+    from models import execute, query_one, apply_schema_updates
+    with app.app_context():
+        execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
+                "VALUES ('orfano@nostruttura.it','x','O','O','admin',1)")
+
+        apply_schema_updates()
+
+        riga = query_one(
+            "SELECT attivo, struttura_id FROM utenti WHERE email='orfano@nostruttura.it'"
+        )
+        assert riga['attivo'] == 1
+        assert riga['struttura_id'] is None
+
+
+def test_utente_orfano_viene_adottato_dall_unica_struttura_attiva(app):
+    """Lo scenario dell'aggiornamento reale: un'installazione monostruttura
+    ferma su uno schema v1.x (utenti senza struttura_id, CHECK a due soli
+    ruoli) esegue apply_schema_updates(). La migrazione v2.2 aggiunge
+    struttura_id lasciandolo NULL per l'admin esistente (in uno schema che
+    non conosceva ancora superadmin/tecnico, l'unico utente possibile è
+    admin o utente). Con un'unica struttura attiva non c'e' ambiguita' su
+    dove inquadrarlo: deve restare attivo e ritrovarsi assegnato a quella
+    struttura, non disattivato. E' esattamente il caso che una
+    disattivazione incondizionata bloccherebbe fuori senza che nessuno
+    abbia sbagliato niente."""
+    from models import get_db, execute, query_one, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("DROP TABLE utenti")
+        db.execute("""
+            CREATE TABLE utenti (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              email TEXT UNIQUE NOT NULL,
+              password_hash TEXT NOT NULL,
+              nome TEXT NOT NULL,
+              cognome TEXT NOT NULL,
+              ruolo TEXT NOT NULL CHECK(ruolo IN ('admin', 'utente')),
+              divisione_default_id INTEGER,
+              attivo INTEGER DEFAULT 1,
+              primo_accesso INTEGER DEFAULT 1,
+              ultimo_accesso DATETIME,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id)
+            )
+        """)
+        db.commit()
+
+        struttura_id = execute(
+            "INSERT INTO strutture (nome,codice,attiva) VALUES ('Unica','UNI',1)"
+        ).lastrowid
+        execute(
+            "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo) "
+            "VALUES ('admin@unica.it','x','A','A','admin')"
+        )
+
+        apply_schema_updates()
+
+        riga = query_one(
+            "SELECT attivo, struttura_id FROM utenti WHERE email='admin@unica.it'"
+        )
+        assert riga['attivo'] == 1
+        assert riga['struttura_id'] == struttura_id
 
 
 def test_una_delete_diretta_non_puo_piu_orfanare_un_admin(app):
