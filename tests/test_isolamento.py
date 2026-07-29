@@ -4,8 +4,33 @@ Il difetto che questi test inchiodano non e' un errore di calcolo: e' un ramo
 che restituisce "nessun filtro" invece di "nessun dato". Non si vede leggendo
 una pagina che funziona, si vede solo chiedendola da un account senza scope.
 """
+import io
+
 import pytest
+from openpyxl import load_workbook
+from pypdf import PdfReader
 from werkzeug.security import generate_password_hash
+
+
+def _testo_html(dati):
+    """Le rotte HTML mostrano il dato cosi' com'e' nel markup: basta decodificare."""
+    return dati.decode('utf-8', errors='replace')
+
+
+def _testo_excel(dati):
+    """Un xlsx e' uno zip: la stringa cercata non compare mai nei byte grezzi.
+    Bisogna aprire il foglio e leggere i valori delle celle davvero."""
+    wb = load_workbook(io.BytesIO(dati))
+    ws = wb.active
+    valori = {str(c.value) for riga in ws.iter_rows() for c in riga if c.value is not None}
+    return '\n'.join(valori)
+
+
+def _testo_pdf(dati):
+    """Il testo di un PDF vive dentro stream di contenuto: va estratto, non
+    cercato nei byte grezzi (vedi tests/test_report_service.py:testo_di)."""
+    lettore = PdfReader(io.BytesIO(dati))
+    return '\n'.join(pagina.extract_text() for pagina in lettore.pages)
 
 
 @pytest.fixture
@@ -48,33 +73,48 @@ def orfana(app, struttura_id):
 
 
 ROTTE = [
-    '/apparecchi',
-    '/manutenzioni',
-    '/manutenzioni/scadenzario',
-    '/verifiche',
-    '/export/apparecchi/excel',
-    '/export/apparecchi/pdf',
+    # (url, estrattore) — ogni rotta va interrogata nel formato in cui parla
+    # davvero: identita' per l'HTML, foglio letto per l'xlsx, testo estratto
+    # per il PDF. La versione precedente cercava la stringa nei byte grezzi
+    # della risposta per tutte le rotte: per l'xlsx (uno zip) e il PDF (testo
+    # dentro stream di contenuto) l'asserzione passava qualunque cosa
+    # facesse il codice, difetto compreso — un test che non prova nulla.
+    ('/apparecchi', _testo_html),
+    ('/manutenzioni', _testo_html),
+    # Nota: la rotta e' registrata come '/scadenzario', non
+    # '/manutenzioni/scadenzario' (il blueprint non ha url_prefix e questo
+    # unico @manutenzioni_bp.route non ripete '/manutenzioni' come fanno gli
+    # altri) — verificato con app.url_map.iter_rules(). E' un'inconsistenza
+    # di naming preesistente e indipendente da questo fix; url_for('manutenzioni.
+    # scadenzario') la risolve comunque correttamente, quindi l'app non ne
+    # risente, ma un test che chiama l'URL sbagliato riceve sempre 404 e
+    # "SEGRETO-B non c'e'" e' vero per il motivo sbagliato: usiamo l'URL reale.
+    ('/scadenzario', _testo_html),
+    ('/verifiche', _testo_html),
+    ('/export/apparecchi/excel', _testo_excel),
+    ('/export/apparecchi/pdf', _testo_pdf),
 ]
 
 
-@pytest.mark.parametrize('rotta', ROTTE)
-def test_admin_senza_struttura_non_ottiene_dati_altrui(client, app, due_strutture, rotta):
+@pytest.mark.parametrize('rotta,estrattore', ROTTE)
+def test_admin_senza_struttura_non_ottiene_dati_altrui(client, app, due_strutture, rotta, estrattore):
     """Il caso concreto: la struttura dell'admin sparisce e lui resta senza
     scope. Non deve diventare un lasciapassare su tutte le altre."""
     entra(client, 'admin@a.it')
     orfana(app, due_strutture['a'])
     risposta = client.get(rotta, follow_redirects=True)
-    assert b'SEGRETO-B' not in risposta.data
+    assert 'SEGRETO-B' not in estrattore(risposta.data)
 
 
-@pytest.mark.parametrize('rotta', ROTTE)
-def test_utente_senza_divisioni_non_ottiene_dati(client, app, due_strutture, rotta):
+@pytest.mark.parametrize('rotta,estrattore', ROTTE)
+def test_utente_senza_divisioni_non_ottiene_dati(client, app, due_strutture, rotta, estrattore):
     """Controprova sul ramo che gia' funziona: se questo fallisce, la
     correzione ha rotto il caso sano invece di sistemare quello guasto."""
     entra(client, 'nessuno@a.it')
     risposta = client.get(rotta, follow_redirects=True)
-    assert b'SEGRETO-B' not in risposta.data
-    assert b'OCU-1' not in risposta.data
+    testo = estrattore(risposta.data)
+    assert 'SEGRETO-B' not in testo
+    assert 'OCU-1' not in testo
 
 
 def test_admin_con_struttura_vede_i_propri(client, due_strutture):
