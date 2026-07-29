@@ -154,3 +154,24 @@ def test_apparecchio_accessibile_lascia_passare_il_superadmin(app, due_strutture
         g.struttura_id = None
         g.divisioni = []
         assert apparecchio_accessibile(due_strutture['app_b']) is not None
+
+
+def test_gli_utenti_orfani_vengono_disattivati_all_avvio(app):
+    """Un admin senza struttura non deve restare un account funzionante di
+    cui nessuno sa nulla: dopo il Task 1 non vede piu' dati, ma entra ancora.
+    I superadmin hanno struttura_id NULL per progetto e non vanno toccati; i
+    tecnici nemmeno, perche' sono legati alle strutture da tecnici_strutture."""
+    from models import execute, query_one, apply_schema_updates
+    with app.app_context():
+        execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
+                "VALUES ('orfano@a.it','x','O','O','admin',1)")
+        execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
+                "VALUES ('super@x.it','x','S','S','superadmin',1)")
+        execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
+                "VALUES ('tec@x.it','x','T','T','tecnico',1)")
+
+        apply_schema_updates()
+
+        assert query_one("SELECT attivo FROM utenti WHERE email='orfano@a.it'")['attivo'] == 0
+        assert query_one("SELECT attivo FROM utenti WHERE email='super@x.it'")['attivo'] == 1
+        assert query_one("SELECT attivo FROM utenti WHERE email='tec@x.it'")['attivo'] == 1

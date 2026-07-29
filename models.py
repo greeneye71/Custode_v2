@@ -507,6 +507,34 @@ ORDER BY prossima_scadenza ASC""",
         except Exception:
             pass
 
+    # Utenti rimasti senza struttura: li disattiva e li segnala.
+    # Ci si arriva eliminando una struttura (utenti.struttura_id era
+    # ON DELETE SET NULL fino alla 2.6) oppure importando dati incompleti.
+    # Dal Task 1 un account cosi' non vede piu' alcun dato, ma continua ad
+    # autenticarsi: disattivarlo lo rende visibile a chi amministra, invece
+    # di lasciarlo come un accesso silenzioso che nessuno controlla.
+    # superadmin e tecnico sono esclusi: hanno struttura_id NULL per progetto.
+    try:
+        orfani = db.execute(
+            "SELECT id, email FROM utenti "
+            "WHERE struttura_id IS NULL AND attivo = 1 "
+            "  AND ruolo IN ('admin', 'utente')"
+        ).fetchall()
+        if orfani:
+            db.execute(
+                "UPDATE utenti SET attivo = 0 "
+                "WHERE struttura_id IS NULL AND attivo = 1 "
+                "  AND ruolo IN ('admin', 'utente')"
+            )
+            db.commit()
+            for riga in orfani:
+                logger.warning(
+                    f"Utente senza struttura disattivato: {riga['email']} (id {riga['id']}). "
+                    "Riassegnalo a una struttura per riabilitarlo."
+                )
+    except Exception as e:
+        logger.error(f"Disattivazione utenti orfani fallita: {e}", exc_info=True)
+
     # Versioning schema DB tramite PRAGMA user_version
     # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)
     schema_ver = db.execute("PRAGMA user_version").fetchone()[0]
