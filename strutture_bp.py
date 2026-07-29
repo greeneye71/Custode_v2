@@ -370,6 +370,50 @@ def modifica(struttura_id):
                            tipi_struttura=_TIPI_STRUTTURA, divisioni=divisioni)
 
 
+@strutture_bp.route('/<int:struttura_id>')
+@superadmin_required
+def scheda(struttura_id):
+    from struttura_service import contenuto_struttura
+
+    struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    contenuto = contenuto_struttura(get_db(), struttura_id,
+                                    current_app.config['UPLOADS_PATH'])
+    divisioni = _get_divisioni_struttura(struttura_id)
+    utenti = query_all(
+        "SELECT nome, cognome, email, ruolo, attivo FROM utenti "
+        "WHERE struttura_id = ? ORDER BY cognome, nome", (struttura_id,))
+    tecnici = query_all(
+        "SELECT u.nome, u.cognome, u.email FROM utenti u "
+        "JOIN tecnici_strutture ts ON ts.tecnico_id = u.id "
+        "WHERE ts.struttura_id = ? ORDER BY u.cognome, u.nome", (struttura_id,))
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+
+    return render_template('strutture/scheda.html', struttura=struttura,
+                           contenuto=contenuto, divisioni=divisioni,
+                           utenti=utenti, tecnici=tecnici,
+                           single_struttura=single)
+
+
+@strutture_bp.route('/<int:struttura_id>/riattiva', methods=['POST'])
+@superadmin_required
+def riattiva(struttura_id):
+    struttura = query_one("SELECT id, nome FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    execute("UPDATE strutture SET attiva = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (struttura_id,))
+    log_attivita(g.user['id'], 'riattivazione', 'strutture', struttura_id,
+                 f'Struttura "{struttura["nome"]}" riattivata', request.remote_addr)
+    flash(f'Struttura "{struttura["nome"]}" riattivata.', 'success')
+    return redirect(url_for('strutture.index'))
+
+
 def _fetch_anthropic_models(api_key):
     """Fetch available Anthropic models via /v1/models API. Falls back to hardcoded list on network errors.
     Raises on HTTP errors (invalid key, server error) so the caller can return ok: False."""

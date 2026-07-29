@@ -120,3 +120,46 @@ def rimuovi_strutture(conn, ids):
     conn.execute(f"DELETE FROM strutture WHERE id IN ({seg})", ids)
 
     return conteggi
+
+
+def cartella_struttura(uploads_base, struttura_id):
+    """Albero dei file di una struttura, come lo compone models.upload_subdir."""
+    return os.path.join(uploads_base, 'strutture', str(struttura_id))
+
+
+def contenuto_struttura(conn, struttura_id, uploads_base):
+    """Cosa contiene una struttura: conteggi, file e spazio occupato.
+
+    Serve alla scheda, alla pagina di conferma della cancellazione e a
+    ESPORTAZIONE.txt. I 'tecnici' sono quelli assegnati, che alla
+    cancellazione sopravvivono: contarli insieme agli utenti li farebbe
+    sembrare in pericolo.
+    """
+    def conta(sql):
+        return conn.execute(sql, (struttura_id,)).fetchone()[0]
+
+    figli = "SELECT id FROM apparecchi WHERE struttura_id = ?"
+    contenuto = {
+        'apparecchi': conta("SELECT COUNT(*) FROM apparecchi WHERE struttura_id = ?"),
+        'manutenzioni': conta(f"SELECT COUNT(*) FROM manutenzioni WHERE apparecchio_id IN ({figli})"),
+        'verifiche': conta(f"SELECT COUNT(*) FROM verifiche WHERE apparecchio_id IN ({figli})"),
+        'documenti': conta(f"SELECT COUNT(*) FROM documenti WHERE apparecchio_id IN ({figli})"),
+        'accessori': conta(f"SELECT COUNT(*) FROM accessori WHERE apparecchio_id IN ({figli})"),
+        'import': conta("SELECT COUNT(*) FROM import_history WHERE struttura_id = ?"),
+        'divisioni': conta("SELECT COUNT(*) FROM divisioni WHERE struttura_id = ?"),
+        'utenti': conta("SELECT COUNT(*) FROM utenti WHERE struttura_id = ?"),
+        'tecnici': conta("SELECT COUNT(*) FROM tecnici_strutture WHERE struttura_id = ?"),
+    }
+
+    numero, byte = 0, 0
+    radice = cartella_struttura(uploads_base, struttura_id)
+    for cartella, _sotto, file_presenti in os.walk(radice):
+        for nome in file_presenti:
+            numero += 1
+            try:
+                byte += os.path.getsize(os.path.join(cartella, nome))
+            except OSError:
+                pass
+    contenuto['file'] = numero
+    contenuto['byte'] = byte
+    return contenuto

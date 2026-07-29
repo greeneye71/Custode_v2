@@ -214,3 +214,29 @@ def test_config_e_token_vengono_cancellati_solo_per_la_struttura_indicata(conn):
     assert conta(con, 'strutture_config', 'WHERE struttura_id=?', (ids['b']['struttura'],)) == 1
     assert conta(con, 'api_tokens', 'WHERE struttura_id=?', (ids['a']['struttura'],)) == 0
     assert conta(con, 'api_tokens', 'WHERE struttura_id=?', (ids['b']['struttura'],)) == 1
+
+
+def test_contenuto_conta_dati_utenti_e_tecnici(conn, tmp_path):
+    from struttura_service import contenuto_struttura
+    con, ids = conn
+    cartella = tmp_path / 'uploads' / 'strutture' / str(ids['a']['struttura']) / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'x.jpg').write_bytes(b'0' * 1234)
+
+    c = contenuto_struttura(con, ids['a']['struttura'], str(tmp_path / 'uploads'))
+    assert c['apparecchi'] == 1
+    assert c['manutenzioni'] == 1
+    assert c['verifiche'] == 1
+    assert c['utenti'] == 1
+    assert c['tecnici'] == 1      # assegnato, non di proprieta'
+    assert c['file'] == 1
+    assert c['byte'] == 1234
+
+
+def test_contenuto_senza_cartella_uploads(conn, tmp_path):
+    """Una struttura senza allegati non deve far fallire la scheda."""
+    from struttura_service import contenuto_struttura
+    con, ids = conn
+    c = contenuto_struttura(con, ids['b']['struttura'], str(tmp_path / 'inesistente'))
+    assert c['file'] == 0
+    assert c['byte'] == 0
