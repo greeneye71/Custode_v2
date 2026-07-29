@@ -175,3 +175,38 @@ def test_gli_utenti_orfani_vengono_disattivati_all_avvio(app):
         assert query_one("SELECT attivo FROM utenti WHERE email='orfano@a.it'")['attivo'] == 0
         assert query_one("SELECT attivo FROM utenti WHERE email='super@x.it'")['attivo'] == 1
         assert query_one("SELECT attivo FROM utenti WHERE email='tec@x.it'")['attivo'] == 1
+
+
+def test_una_delete_diretta_non_puo_piu_orfanare_un_admin(app):
+    """Il Task 1 impedisce all'orfano di vedere dati e il Task 2 lo disattiva,
+    ma la condizione continuava a prodursi a ogni DELETE. Con RESTRICT la
+    cancellazione viene rifiutata finche' gli utenti sono al loro posto: e'
+    il Task 4 a cancellarli esplicitamente, prima della struttura."""
+    import sqlite3
+    import pytest
+    from models import execute, get_db
+    with app.app_context():
+        s = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Da Cancellare','DC',1)").lastrowid
+        execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id) "
+                "VALUES ('admin@dc.it','x','A','A','admin',?)", (s,))
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = ON")
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("DELETE FROM strutture WHERE id = ?", (s,))
+
+
+def test_la_migrazione_non_rompe_le_fk_delle_tabelle_figlie(app):
+    """Il modo in cui questa migrazione fallisce non e' un'eccezione: e' un
+    database che sembra a posto e in cui sessioni punta a utenti_old_26. Si
+    scopre al primo login, con un 500 'no such table'."""
+    from models import get_db
+    with app.app_context():
+        db = get_db()
+        for tabella in ('sessioni', 'utenti_divisioni', 'tecnici_strutture'):
+            sql = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                (tabella,)
+            ).fetchone()[0]
+            assert 'utenti_old' not in sql, f"{tabella} punta a una tabella rinominata"
+        db.execute("PRAGMA foreign_keys = ON")
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []

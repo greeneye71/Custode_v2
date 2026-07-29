@@ -128,7 +128,11 @@ CREATE TABLE IF NOT EXISTS utenti (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   struttura_id INTEGER,   -- NULL per superadmin
-  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE SET NULL,
+  -- RESTRICT e non SET NULL: azzerare il campo lascia un admin senza scope,
+  -- che fino alla 2.6 significava vedere gli apparecchi di tutte le strutture.
+  -- Chi elimina una struttura deve cancellarne prima gli utenti (lo fa
+  -- struttura_service.rimuovi_strutture).
+  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE RESTRICT,
   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
 );
 

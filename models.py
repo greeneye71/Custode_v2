@@ -535,6 +535,60 @@ ORDER BY prossima_scadenza ASC""",
     except Exception as e:
         logger.error(f"Disattivazione utenti orfani fallita: {e}", exc_info=True)
 
+    # v2.6: utenti.struttura_id da ON DELETE SET NULL a RESTRICT.
+    # SQLite non sa cambiare una FK con ALTER TABLE: va ricostruita la tabella.
+    # legacy_alter_table = ON e' obbligatorio: da SQLite 3.26 il RENAME
+    # riscrive da solo le FK delle tabelle figlie, e sessioni e
+    # utenti_divisioni finirebbero a puntare a utenti_old_26 lasciando
+    # l'applicazione senza login. Stessa forma della migrazione v2.2 sopra.
+    try:
+        row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='utenti'"
+        ).fetchone()
+        if row and 'ON DELETE RESTRICT' not in row[0]:
+            logger.info("Migrazione v2.6: struttura_id di utenti a ON DELETE RESTRICT...")
+            cols = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
+            col_list = ', '.join(cols)
+            db.execute("PRAGMA legacy_alter_table = ON")
+            db.execute("PRAGMA foreign_keys = OFF")
+            db.execute("ALTER TABLE utenti RENAME TO utenti_old_26")
+            db.execute("""
+                CREATE TABLE utenti (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT UNIQUE NOT NULL,
+                  password_hash TEXT NOT NULL,
+                  nome TEXT NOT NULL,
+                  cognome TEXT NOT NULL,
+                  ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin', 'admin', 'utente', 'tecnico')),
+                  divisione_default_id INTEGER,
+                  attivo INTEGER DEFAULT 1,
+                  primo_accesso INTEGER DEFAULT 1,
+                  ultimo_accesso DATETIME,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  struttura_id INTEGER,
+                  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE RESTRICT,
+                  FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
+                )
+            """)
+            db.execute(f"INSERT INTO utenti SELECT {col_list} FROM utenti_old_26")
+            db.execute("DROP TABLE utenti_old_26")
+            db.execute("PRAGMA legacy_alter_table = OFF")
+            db.execute("PRAGMA foreign_keys = ON")
+            db.commit()
+            logger.info("Migrazione v2.6 completata.")
+    except Exception as e:
+        logger.error(f"Migrazione v2.6 (FK utenti.struttura_id) FALLITA: {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.execute("PRAGMA legacy_alter_table = OFF")
+            db.execute("PRAGMA foreign_keys = ON")
+        except Exception:
+            pass
+
     # Versioning schema DB tramite PRAGMA user_version
     # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)
     schema_ver = db.execute("PRAGMA user_version").fetchone()[0]
