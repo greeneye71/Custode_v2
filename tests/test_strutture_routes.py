@@ -60,3 +60,28 @@ def test_riattivazione_negata_a_un_admin(client, app, dati):
     client.post(f"/strutture/{dati['spenta']}/riattiva", follow_redirects=True)
     with app.app_context():
         assert query_one("SELECT attiva FROM strutture WHERE id=?", (dati['spenta'],))['attiva'] == 0
+
+
+def test_esportazione_dalla_scheda(client, app, dati):
+    import os
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/esporta", follow_redirects=True)
+    assert risposta.status_code == 200
+    with app.app_context():
+        from flask import current_app
+        radice = os.path.join(current_app.config['BACKUPS_PATH'], 'strutture')
+        assert os.path.isdir(radice)
+        assert len(os.listdir(radice)) == 1
+
+
+def test_esportazione_negata_a_un_admin(client, app, dati):
+    """Come le altre operazioni sull'intero ciclo di vita di una struttura,
+    l'esportazione e' riservata al superadmin: un admin vede solo la propria
+    struttura e non deve poter produrre un archivio scaricabile."""
+    import os
+    entra(client, 'admin@a.it')
+    client.post(f"/strutture/{dati['s']}/esporta", follow_redirects=True)
+    with app.app_context():
+        from flask import current_app
+        radice = os.path.join(current_app.config['BACKUPS_PATH'], 'strutture')
+        assert not os.path.isdir(radice) or len(os.listdir(radice)) == 0

@@ -77,6 +77,12 @@
 </div>
 
 <div class="d-flex gap-2" id="azioni-struttura">
+  <form method="post" action="{{ url_for('strutture.esporta', struttura_id=struttura.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-primary">
+      <i class="bi bi-box-arrow-down me-1"></i>Esporta archivio
+    </button>
+  </form>
   {% if not struttura.attiva %}
   <form method="post" action="{{ url_for('strutture.riattiva', struttura_id=struttura.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -273,3 +273,111 @@ def test_contenuto_di_default_resta_in_modalita_multi(conn, tmp_path):
     c = contenuto_struttura(con, ids['a']['struttura'], str(tmp_path / 'uploads'))
     assert c['file'] == 1
     assert c['byte'] == 777
+
+
+# ---------------------------------------------------------------------------
+# esporta_struttura
+# ---------------------------------------------------------------------------
+
+def test_esportazione_contiene_solo_la_struttura_richiesta(conn, tmp_path):
+    """L'archivio deve essere una installazione con dentro una struttura sola:
+    se ci finisse anche la B, consegnandolo si consegnerebbero i dati di
+    un'altra struttura."""
+    import sqlite3
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'strutture' / str(ids['a']['struttura']) / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'foto.jpg').write_bytes(b'immagine')
+
+    destinazione = esporta_struttura(percorso_db, str(uploads),
+                                     ids['a']['struttura'], str(tmp_path / 'archivi'))
+
+    copia = sqlite3.connect(os.path.join(destinazione, 'data', 'medinventory.db'))
+    nomi = [r[0] for r in copia.execute("SELECT nome FROM strutture")]
+    assert nomi == ['Clinica A']
+    assert copia.execute("SELECT COUNT(*) FROM apparecchi").fetchone()[0] == 1
+    assert copia.execute("SELECT matricola FROM apparecchi").fetchone()[0] == 'A-1'
+    copia.close()
+
+    atteso = os.path.join(destinazione, 'uploads', 'strutture',
+                          str(ids['a']['struttura']), 'foto', 'foto.jpg')
+    assert os.path.exists(atteso)
+    assert os.path.exists(os.path.join(destinazione, 'ESPORTAZIONE.txt'))
+
+
+def test_esportazione_non_tocca_il_database_vivo(conn, tmp_path):
+    """rimuovi_strutture gira sulla copia. Se per un errore girasse
+    sull'originale, l'esportazione cancellerebbe tutte le altre strutture."""
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    esporta_struttura(percorso_db, str(tmp_path / 'uploads'),
+                      ids['a']['struttura'], str(tmp_path / 'archivi'))
+
+    assert con.execute("SELECT COUNT(*) FROM strutture").fetchone()[0] == 2
+    assert con.execute("SELECT COUNT(*) FROM apparecchi").fetchone()[0] == 2
+
+
+def test_due_esportazioni_non_si_sovrascrivono(conn, tmp_path):
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    uno = esporta_struttura(percorso_db, str(tmp_path / 'u'), ids['a']['struttura'], str(tmp_path / 'ar'))
+    due = esporta_struttura(percorso_db, str(tmp_path / 'u'), ids['a']['struttura'], str(tmp_path / 'ar'))
+    assert uno != due
+    assert os.path.exists(uno) and os.path.exists(due)
+
+
+def test_due_esportazioni_nello_stesso_secondo_non_si_sovrascrivono(conn, tmp_path, monkeypatch):
+    """_nome_cartella ha risoluzione al secondo: se due esportazioni cadono
+    nello stesso secondo (capita facilmente su un database di prova, piccolo
+    e veloce da copiare), senza un controllo di esistenza la seconda
+    sovrascriverebbe silenziosamente la prima invece di fallire o accodarsi.
+    Qui si blocca l'orologio per rendere la collisione certa, non probabile."""
+    import struttura_service as svc
+
+    class OrologioFermo(svc.datetime):
+        @classmethod
+        def now(cls):
+            return svc.datetime(2026, 1, 1, 12, 0, 0)
+
+    monkeypatch.setattr(svc, 'datetime', OrologioFermo)
+
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    uno = svc.esporta_struttura(percorso_db, str(tmp_path / 'u'), ids['a']['struttura'], str(tmp_path / 'ar'))
+    due = svc.esporta_struttura(percorso_db, str(tmp_path / 'u'), ids['a']['struttura'], str(tmp_path / 'ar'))
+    assert uno != due
+    assert os.path.isdir(uno) and os.path.isdir(due)
+    # Ognuna deve contenere davvero la propria copia, non un archivio a metà
+    # sovrascritto dall'altra esportazione.
+    for cartella in (uno, due):
+        assert os.path.exists(os.path.join(cartella, 'ESPORTAZIONE.txt'))
+
+
+def test_esportazione_in_modalita_single_struttura_include_gli_allegati(conn, tmp_path):
+    """In single-struttura gli allegati stanno sotto uploads_base/<tipo>/,
+    senza il prefisso strutture/<id>/ (vedi contenuto_struttura). Se
+    esporta_struttura non propagasse single_struttura a cartella_struttura,
+    cercherebbe gli allegati nel posto sbagliato e l'archivio uscirebbe senza
+    foto pur avendone una sul disco."""
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'unica.jpg').write_bytes(b'immagine-single')
+
+    destinazione = esporta_struttura(percorso_db, str(uploads), ids['a']['struttura'],
+                                     str(tmp_path / 'archivi'), single_struttura=True)
+
+    atteso = os.path.join(destinazione, 'uploads', 'foto', 'unica.jpg')
+    assert os.path.exists(atteso)

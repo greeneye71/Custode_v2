@@ -181,3 +181,107 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
     contenuto['file'] = numero
     contenuto['byte'] = byte
     return contenuto
+
+
+def _nome_cartella(nome_struttura):
+    """Nome parlante e ordinabile, con l'ora: due esportazioni nello stesso
+    giorno non si sovrascrivono."""
+    pulito = ''.join(c if c.isalnum() else '-' for c in nome_struttura.lower())
+    pulito = '-'.join(p for p in pulito.split('-') if p)[:40] or 'struttura'
+    return f"{pulito}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+
+def _cartella_esportazione_libera(cartella_archivi, nome_struttura):
+    """Nome di cartella non ancora usato dentro cartella_archivi.
+
+    _nome_cartella ha risoluzione al secondo: due esportazioni della stessa
+    struttura fatte nello stesso secondo (un database di prova si copia in
+    pochi millisecondi) produrrebbero altrimenti lo stesso nome, e la seconda
+    sovrascriverebbe silenziosamente la prima invece di finire in un archivio
+    proprio. Qui si controlla l'esistenza e si accoda un contatore finche' il
+    nome non e' libero.
+    """
+    base = _nome_cartella(nome_struttura)
+    candidato = base
+    n = 2
+    while os.path.exists(os.path.join(cartella_archivi, candidato)):
+        candidato = f"{base}-{n}"
+        n += 1
+    return candidato
+
+
+def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
+                       single_struttura=False):
+    """Scrive un archivio della struttura e ne restituisce il percorso.
+
+    L'archivio ha la forma di un'installazione MedInventory, quindi si
+    reimporta con lo strumento che esiste gia' (importa_installazione.py):
+    nessun formato nuovo da mantenere, e nessun lettore nuovo da scrivere.
+
+    Lo snapshot si prende con sqlite3.backup(), che e' coerente anche con
+    l'applicazione in esercizio. La copia viene poi svuotata di TUTTE LE ALTRE
+    strutture con la stessa primitiva che cancella: il predicato e' invertito,
+    il codice e' lo stesso.
+
+    single_struttura deve rispecchiare la modalita' dell'installazione
+    sorgente: importa_installazione.py, in fase di reimporto, ricostruisce il
+    percorso di ogni allegato unendo la propria cartella uploads al percorso
+    relativo salvato nel database (documenti.file_path e affini), che in
+    single-struttura non ha il prefisso 'strutture/<id>/'. L'archivio deve
+    quindi mettere i file esattamente li' dove quel percorso relativo li va a
+    cercare, non sotto 'uploads/strutture/<id>/' a prescindere dalla modalita'.
+    """
+    sorgente = sqlite3.connect(db_path)
+    try:
+        nome = sorgente.execute("SELECT nome FROM strutture WHERE id = ?",
+                                (struttura_id,)).fetchone()
+        if nome is None:
+            raise ValueError(f"Struttura {struttura_id} inesistente")
+        nome = nome[0]
+        altre = [r[0] for r in sorgente.execute(
+            "SELECT id FROM strutture WHERE id != ?", (struttura_id,))]
+
+        destinazione = os.path.join(
+            cartella_archivi, _cartella_esportazione_libera(cartella_archivi, nome))
+        os.makedirs(os.path.join(destinazione, 'data'), exist_ok=True)
+        percorso_copia = os.path.join(destinazione, 'data', 'medinventory.db')
+
+        copia = sqlite3.connect(percorso_copia)
+        try:
+            sorgente.backup(copia)
+            copia.execute("PRAGMA foreign_keys = ON")
+            rimuovi_strutture(copia, altre)
+            copia.commit()
+            contenuto = contenuto_struttura(copia, struttura_id, uploads_base,
+                                            single_struttura)
+            copia.execute("VACUUM")
+            copia.commit()
+        finally:
+            copia.close()
+    finally:
+        sorgente.close()
+
+    origine_file = cartella_struttura(uploads_base, struttura_id, single_struttura)
+    if os.path.isdir(origine_file):
+        if single_struttura:
+            # cartella_struttura restituisce gia' uploads_base: e' l'intera
+            # cartella (non c'e' un sottoalbero per-struttura da isolare), va
+            # travasata cosi' com'e' sotto 'uploads/'.
+            destinazione_file = os.path.join(destinazione, 'uploads')
+        else:
+            destinazione_file = os.path.join(
+                destinazione, 'uploads', 'strutture', str(struttura_id))
+        shutil.copytree(origine_file, destinazione_file)
+
+    with open(os.path.join(destinazione, 'ESPORTAZIONE.txt'), 'w', encoding='utf-8') as f:
+        f.write("MedInventory - archivio di una struttura\n\n")
+        f.write(f"Struttura:  {nome} (id {struttura_id})\n")
+        f.write(f"Esportata:  {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n")
+        for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
+                       'accessori', 'divisioni', 'utenti', 'file'):
+            f.write(f"  {chiave:14} {contenuto[chiave]}\n")
+        f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
+        f.write("Per reimportare questo archivio in un'installazione MedInventory:\n\n")
+        f.write(f"  python importa_installazione.py \"{destinazione}\"\n")
+
+    return destinazione

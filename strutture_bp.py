@@ -415,6 +415,38 @@ def riattiva(struttura_id):
     return redirect(url_for('strutture.index'))
 
 
+@strutture_bp.route('/<int:struttura_id>/esporta', methods=['POST'])
+@superadmin_required
+def esporta(struttura_id):
+    from struttura_service import esporta_struttura
+
+    struttura = query_one("SELECT id, nome FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    try:
+        destinazione = esporta_struttura(
+            current_app.config['DATABASE_PATH'],
+            current_app.config['UPLOADS_PATH'],
+            struttura_id,
+            os.path.join(current_app.config['BACKUPS_PATH'], 'strutture'),
+            single_struttura=single,
+        )
+    except Exception as e:
+        current_app.logger.error(f'Esportazione struttura {struttura_id} fallita: {e}',
+                                 exc_info=True)
+        flash('Esportazione fallita. Controlla il log.', 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    log_attivita(g.user['id'], 'esportazione', 'strutture', struttura_id,
+                 f'Struttura "{struttura["nome"]}" esportata in {destinazione}',
+                 request.remote_addr)
+    flash(f'Archivio creato in {destinazione}', 'success')
+    return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+
 def _fetch_anthropic_models(api_key):
     """Fetch available Anthropic models via /v1/models API. Falls back to hardcoded list on network errors.
     Raises on HTTP errors (invalid key, server error) so the caller can return ok: False."""
