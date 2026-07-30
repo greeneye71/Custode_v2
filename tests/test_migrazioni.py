@@ -125,3 +125,56 @@ def test_migrazione_v22_scarta_colonne_assenti_nella_nuova_tabella(app):
         colonne = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
         assert 'nota_personalizzata' not in colonne
         assert 'struttura_id' in colonne
+
+
+def test_avvio_su_database_non_migrato_dice_di_eseguire_migrate(app, tmp_path):
+    """Un'installazione che non ha ancora ricevuto le migrazioni autonome muore
+    in init_db(), perche' schema.sql crea un indice su apparecchi.descrizione,
+    che migrate_v1_2.py deve ancora ottenere rinominando codice_interno.
+    L'errore di SQLite - "no such column: descrizione" - non dice all'operatore
+    cosa fare, e l'applicazione non parte affatto.
+
+    Le migrazioni NON vanno applicate qui: fanno un backup, rinominano colonne
+    e sono una scelta dell'operatore. Indovinarle rischierebbe di aggiungere una
+    descrizione vuota accanto a un codice_interno popolato, e di lasciare quei
+    dati dove il rinomino non li cerchera' piu'. Quello che si deve pretendere
+    e' che il messaggio dica cosa fare."""
+    import pytest
+    from models import get_db, init_db
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("DROP INDEX IF EXISTS idx_apparecchi_descrizione")
+        db.execute("ALTER TABLE apparecchi RENAME COLUMN descrizione TO codice_interno")
+        db.commit()
+
+        with pytest.raises(RuntimeError) as errore:
+            init_db()
+
+        messaggio = str(errore.value)
+        assert 'migrate.py --check' in messaggio
+        assert 'no such column' in messaggio
+        assert 'README' in messaggio
+
+
+def test_un_errore_di_schema_diverso_non_viene_mascherato(app):
+    """Il messaggio nuovo copre un caso preciso: una colonna che le migrazioni
+    autonome devono ancora portare. Qualunque altro errore in schema.sql e' un
+    guasto da far vedere com'e', non da tradurre in un consiglio sbagliato."""
+    import sqlite3
+    import pytest
+    from models import get_db, init_db
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("DROP TABLE apparecchi")
+        # Una vista al posto della tabella: CREATE TABLE IF NOT EXISTS la vede
+        # e non fa nulla, poi il primo CREATE INDEX su di essa fallisce con
+        # "views may not be indexed", che non e' "no such column".
+        db.execute("CREATE VIEW apparecchi AS SELECT 1 AS id, 1 AS divisione_id")
+        db.commit()
+
+        with pytest.raises(sqlite3.OperationalError) as errore:
+            init_db()
+        assert 'no such column' not in str(errore.value)
+        assert 'migrate.py' not in str(errore.value)

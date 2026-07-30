@@ -60,6 +60,21 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
 - Il logo precedente viene cancellato quando se ne carica uno nuovo, e
   `percorso_logo_struttura()` verifica che il percorso resti dentro `uploads/`.
 
+- **L'avvio su un database non ancora migrato dice cosa fare.** Le migrazioni
+  autonome (`migrate.py` e i singoli `migrate_v*.py`) restano una scelta
+  dell'operatore — fanno un backup e possono rinominare colonne, quindi non vengono
+  applicate da sole all'avvio. Ma finora, se non erano state eseguite, l'applicazione
+  moriva in `init_db()` con `no such column: descrizione`, perche' `schema.sql` crea
+  un indice su una colonna che `migrate_v1_2.py` deve ancora ottenere rinominando
+  `codice_interno`. Un messaggio che non dice nulla, nel momento peggiore: ora
+  l'errore nomina `python migrate.py --check` e rimanda al README. Nessun
+  cambiamento su cosa riesce e cosa no.
+
+### Limiti noti
+
+- Il reimporto di un archivio non ripristina logo e storico import (vedi
+  l'esportazione qui sopra).
+
 ---
 
 ## [2.5.2] - 2026-07-30
@@ -67,6 +82,13 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
 Release correttiva urgente, un solo difetto. Chi ha gia' installato la 2.5.x su un
 database aggiornato non e' interessato; chi aggiorna da una versione anteriore alla
 2.2 deve passare da qui.
+
+> **Precisazione aggiunta il 30/07/2026.** Questa correzione riguarda la migrazione
+> incrementale che `apply_schema_updates()` applica all'avvio. Non sostituisce le
+> migrazioni autonome: un'installazione anteriore alla v2.0 va prima portata avanti
+> con `python migrate.py` (che crea un backup e, fra le altre cose, rinomina
+> `apparecchi.codice_interno` in `descrizione`), altrimenti l'avvio si interrompe
+> prima di arrivare qui. Fino alla 2.6.0 lo faceva con un messaggio criptico.
 
 ### Corretto
 

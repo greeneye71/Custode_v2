@@ -94,7 +94,29 @@ def init_db():
         # Split by semicolons and execute each statement
         # (needed because executescript doesn't support PRAGMA in all cases)
         sql = f.read()
-    db.executescript(sql)
+    try:
+        db.executescript(sql)
+    except sqlite3.OperationalError as e:
+        # Un database che non ha ancora ricevuto le migrazioni autonome muore
+        # qui, perche' schema.sql crea indici su colonne che quelle migrazioni
+        # devono ancora aggiungere o rinominare (per esempio descrizione, che
+        # migrate_v1_2.py ottiene rinominando codice_interno). Il messaggio di
+        # SQLite - "no such column: descrizione" - non dice all'operatore cosa
+        # fare, e l'applicazione non parte affatto: e' il momento peggiore per
+        # un errore criptico. Le migrazioni NON vengono eseguite qui: sono
+        # scelte deliberate dell'operatore, fanno un backup e possono
+        # rinominare colonne, quindi indovinarle rischierebbe di lasciare i
+        # dati dove nessuno li cerchera' piu'.
+        if 'no such column' in str(e):
+            raise RuntimeError(
+                f"Il database non e' aggiornato allo schema di questa versione "
+                f"({e}). Le migrazioni non vengono applicate automaticamente. "
+                f"Esegui prima:\n"
+                f"    python migrate.py --check    (analizza, non modifica nulla)\n"
+                f"    python migrate.py            (applica, con backup)\n"
+                f"Vedi la sezione \"Migrazioni\" del README."
+            ) from e
+        raise
     db.commit()
 
 
