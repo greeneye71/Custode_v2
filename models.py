@@ -71,8 +71,19 @@ def percorso_logo_struttura(struttura):
     """
     if not struttura or not struttura.get('logo_path'):
         return None
-    return os.path.join(current_app.config['UPLOADS_PATH'],
-                        struttura['logo_path'].replace('/', os.sep))
+    base = current_app.config['UPLOADS_PATH']
+    percorso = os.path.join(base, struttura['logo_path'].replace('/', os.sep))
+    radice = os.path.realpath(base)
+    assoluto = os.path.realpath(percorso)
+    # Stesso controllo di struttura_service._allegato_nel_perimetro (Task 7):
+    # un percorso composto da un dato del database va verificato prima di
+    # essere usato, non solo composto. Il confronto tiene conto del caso in
+    # cui il risolto COINCIDE con la radice: un semplice
+    # startswith(radice + os.sep) da solo tratterebbe quel caso come "fuori",
+    # perche' la stringa uguale non inizia con se stessa piu' un separatore.
+    if assoluto != radice and not assoluto.startswith(radice + os.sep):
+        return None
+    return percorso
 
 
 def init_db():

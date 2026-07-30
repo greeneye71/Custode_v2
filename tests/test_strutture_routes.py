@@ -299,3 +299,56 @@ def test_la_cancellazione_registra_l_operazione_anche_se_fallisce_dopo_il_commit
             "SELECT * FROM log_attivita WHERE azione='eliminazione' AND entita_id=?",
             (dati['s'],))
         assert riga_log is not None
+
+
+# ============================================================================
+# LOGO DELLA STRUTTURA
+# ============================================================================
+
+def test_caricare_un_nuovo_logo_cancella_il_precedente(client, app, dati):
+    """Senza questo, ogni sostituzione del logo lascia un orfano su disco -
+    esattamente cio' che pulisci_uploads.py esiste per ripulire dopo che e'
+    gia' successo. Qui si verifica che non succeda affatto."""
+    import io
+    import os
+    from models import percorso_logo_struttura, query_one
+
+    entra(client, 'super@x.it')
+
+    primo = client.post(f"/strutture/{dati['s']}/logo",
+                         data={'logo': (io.BytesIO(b'primo logo'), 'primo.png')},
+                         content_type='multipart/form-data', follow_redirects=True)
+    assert primo.status_code == 200
+
+    with app.app_context():
+        struttura = query_one("SELECT logo_path FROM strutture WHERE id=?", (dati['s'],))
+        percorso_primo = percorso_logo_struttura(struttura)
+    assert percorso_primo is not None
+    assert os.path.isfile(percorso_primo)
+
+    secondo = client.post(f"/strutture/{dati['s']}/logo",
+                          data={'logo': (io.BytesIO(b'secondo logo'), 'secondo.png')},
+                          content_type='multipart/form-data', follow_redirects=True)
+    assert secondo.status_code == 200
+
+    with app.app_context():
+        struttura = query_one("SELECT logo_path FROM strutture WHERE id=?", (dati['s'],))
+        percorso_secondo = percorso_logo_struttura(struttura)
+    assert percorso_secondo is not None
+    assert percorso_secondo != percorso_primo
+    assert os.path.isfile(percorso_secondo)
+    # Il file del logo precedente non deve essere rimasto sul disco.
+    assert not os.path.exists(percorso_primo)
+
+
+def test_caricare_il_primo_logo_non_tenta_di_cancellare_nulla(client, app, dati):
+    """Non c'e' un logo precedente: il ramo di cancellazione non deve essere
+    imboccato (ne' fallire cercando di rimuovere un percorso inesistente)."""
+    import io
+
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/logo",
+                           data={'logo': (io.BytesIO(b'unico logo'), 'unico.png')},
+                           content_type='multipart/form-data', follow_redirects=True)
+    assert risposta.status_code == 200
+    assert 'Logo aggiornato' in risposta.get_data(as_text=True)

@@ -99,6 +99,28 @@ def righe_inventario():
     ]
 
 
+def test_percorso_logo_rifiuta_un_percorso_fuori_da_uploads(app):
+    """logo_path arriva dal database. Oggi l'unico scrittore passa da
+    upload_subdir e secure_filename, ma la funzione non deve dipendere dal
+    fatto che nessuno scriva mai in quella colonna in altro modo: gli altri
+    punti del progetto che compongono percorsi da dati (app.py, manutenzioni.py,
+    verifiche.py) il controllo lo fanno."""
+    from models import percorso_logo_struttura
+    with app.app_context():
+        assert percorso_logo_struttura({'logo_path': '../../etc/passwd'}) is None
+        assert percorso_logo_struttura({'logo_path': 'strutture/1/loghi/l.png'}) is not None
+
+
+def test_percorso_logo_non_rifiuta_la_radice_stessa(app):
+    """Stesso caso limite di struttura_service._allegato_nel_perimetro: un
+    controllo scritto come 'startswith(radice + separatore)' da solo tratta
+    come 'fuori' anche il percorso che COINCIDE con la radice, perche' la
+    stringa uguale non inizia con se stessa piu' un separatore."""
+    from models import percorso_logo_struttura
+    with app.app_context():
+        assert percorso_logo_struttura({'logo_path': '.'}) is not None
+
+
 def test_il_logo_resta_entro_i_due_tetti_mantenendo_le_proporzioni(tmp_path):
     """La specifica pone due limiti, 15 mm di altezza e 40 di larghezza.
     Vincolare la sola altezza lascia passare un logo a banda largo 150 mm, che

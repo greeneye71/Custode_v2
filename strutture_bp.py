@@ -18,7 +18,7 @@ from werkzeug.utils import secure_filename
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config, \
-    upload_subdir
+    upload_subdir, percorso_logo_struttura
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
@@ -957,11 +957,26 @@ def carica_logo(struttura_id):
         flash('Formato non supportato. Usa PNG o JPG.', 'danger')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
+    precedente = query_one("SELECT logo_path FROM strutture WHERE id = ?", (struttura_id,))
+    vecchio_logo_path = (precedente or {}).get('logo_path')
+
     cartella, prefisso = upload_subdir('loghi', struttura_id)
     nome = secure_filename(f"{int(datetime.now().timestamp())}_{file.filename}")
+    nuovo_logo_path = f"{prefisso}/{nome}"
     file.save(os.path.join(cartella, nome))
     execute("UPDATE strutture SET logo_path = ? WHERE id = ?",
-            (f"{prefisso}/{nome}", struttura_id))
+            (nuovo_logo_path, struttura_id))
+
+    # Il file precedente non serve piu': senza questo, ogni sostituzione del
+    # logo lascia un orfano su disco (e' cio' che pulisci_uploads.py esiste
+    # per ripulire quando e' gia' successo altrove - qui si evita che succeda).
+    if vecchio_logo_path and vecchio_logo_path != nuovo_logo_path:
+        vecchio_percorso = percorso_logo_struttura({'logo_path': vecchio_logo_path})
+        if vecchio_percorso and os.path.exists(vecchio_percorso):
+            try:
+                os.remove(vecchio_percorso)
+            except OSError:
+                current_app.logger.warning(f'Logo precedente non rimosso: {vecchio_percorso}')
 
     log_attivita(g.user['id'], 'modifica', 'strutture', struttura_id,
                  'Logo aggiornato', request.remote_addr, struttura_id=struttura_id)
