@@ -470,7 +470,8 @@ def conferma_eliminazione(struttura_id):
     # DAVVERO cancellati, non il totale su disco: altrimenti promette la
     # cancellazione di file che sopravvivono.
     anteprima = anteprima_cancellazione_file(get_db(), struttura_id,
-                                             current_app.config['UPLOADS_PATH'])
+                                             current_app.config['UPLOADS_PATH'],
+                                             single_struttura=single)
     return render_template('strutture/elimina.html',
                            struttura=struttura, contenuto=contenuto,
                            anteprima=anteprima)

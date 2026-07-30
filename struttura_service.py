@@ -274,7 +274,45 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
     return contenuto
 
 
-def anteprima_cancellazione_file(conn, struttura_id, uploads_base):
+def radice_allegati(uploads_base, struttura_id, single_struttura=False):
+    """Cartella oltre la quale un percorso di allegato non deve uscire.
+
+    In multi e' il sottoalbero della struttura; in single e' uploads_base,
+    perche' li' l'albero e' condiviso e non esiste un confine per struttura.
+    """
+    if single_struttura:
+        return os.path.realpath(uploads_base)
+    return os.path.realpath(cartella_struttura(uploads_base, struttura_id, False))
+
+
+def _allegato_nel_perimetro(uploads_base, radice, relativo):
+    """Percorso assoluto dell'allegato se e' un file dentro la radice, o None.
+
+    I valori delle colonne *_path arrivano dal database, non da chi chiama, e
+    la cancellazione li usa per decidere cosa togliere dal disco: prima di
+    cancellare vanno risolti e verificati, non composti e usati. Un valore con
+    una risalita ('strutture/1/foto/../../2/foto/B.jpg') porterebbe la
+    cancellazione della struttura 1 a portarsi via un allegato della 2, e la
+    riga della 2 resterebbe a puntare a un file che non c'e' piu'. Un valore
+    che punta a una cartella invece che a un file la farebbe conteggiare fra
+    i file da cancellare senza che venga mai cancellata.
+
+    Nessuno scrittore nel codice puo' produrre questi valori: l'applicazione
+    compone i percorsi con secure_filename e importa_installazione.py li
+    ricompone dai loro pezzi invece di riusarli. Serve un valore scritto a
+    mano nel database. Ma questa e' l'unica operazione irreversibile del
+    programma, e verificare costa una realpath.
+    """
+    assoluto = os.path.realpath(os.path.join(uploads_base, relativo.replace('/', os.sep)))
+    if assoluto != radice and not assoluto.startswith(radice + os.sep):
+        return None
+    if not os.path.isfile(assoluto):
+        return None
+    return assoluto
+
+
+def anteprima_cancellazione_file(conn, struttura_id, uploads_base,
+                                 single_struttura=False):
     """Quanti file (e byte) la cancellazione di questa struttura liberera'
     DAVVERO: solo quelli referenziati da una riga (_percorsi_allegati), gli
     stessi che elimina_struttura elenca per cancellarli uno per uno.
@@ -295,12 +333,20 @@ def anteprima_cancellazione_file(conn, struttura_id, uploads_base):
     In modalita' single i due numeri coincidono sempre: contenuto_struttura
     usa gia' questa stessa selezione in quella modalita', perche' li' non
     esiste un sottoalbero da isolare con un os.walk.
+
+    Conta solo i percorsi che elimina_struttura cancellera' davvero, con lo
+    stesso criterio (_allegato_nel_perimetro): un percorso che esce dalla
+    cartella della struttura, o che punta a una cartella, non viene cancellato
+    e quindi non va promesso.
     """
+    radice = radice_allegati(uploads_base, struttura_id, single_struttura)
     numero, byte = 0, 0
     for relativo in _percorsi_allegati(conn, struttura_id):
-        percorso = os.path.join(uploads_base, relativo.replace('/', os.sep))
+        assoluto = _allegato_nel_perimetro(uploads_base, radice, relativo)
+        if assoluto is None:
+            continue
         try:
-            byte += os.path.getsize(percorso)
+            byte += os.path.getsize(assoluto)
             numero += 1
         except OSError:
             pass
@@ -494,7 +540,10 @@ def elimina_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
     permessi) non fa fallire l'operazione - a quel punto database e archivio
     sono gia' a posto - ma finisce nella chiave 'file_non_rimossi' del
     risultato, cosi' il chiamante puo' loggarlo invece di perderlo come
-    farebbe ignore_errors=True.
+    farebbe ignore_errors=True. Ci finisce anche cio' che si e' scelto di non
+    toccare perche' fuori perimetro (vedi _allegato_nel_perimetro) ed e'
+    ancora sul disco: dal punto di vista di chi legge sono la stessa cosa,
+    file che la cancellazione ha lasciato indietro.
 
     Restituisce i conteggi di rimuovi_strutture piu' 'nome', 'archivio'
     (percorso dell'archivio) e 'file_non_rimossi' (elenco di percorsi
@@ -519,11 +568,19 @@ def elimina_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
     finally:
         conn.close()
 
+    radice = radice_allegati(uploads_base, struttura_id, single_struttura)
     file_non_rimossi = []
     for relativo in percorsi:
-        assoluto = os.path.join(uploads_base, relativo.replace('/', os.sep))
-        if not os.path.isfile(assoluto):
-            continue  # gia' assente: non e' un fallimento da segnalare
+        assoluto = _allegato_nel_perimetro(uploads_base, radice, relativo)
+        if assoluto is None:
+            # Fuori dalla cartella della struttura, oppure non e' un file.
+            # Se qualcosa esiste ancora a quel percorso va segnalato: e'
+            # rimasto sul disco e non lo abbiamo toccato per scelta. Se non
+            # esiste, era gia' assente e non c'e' nulla da dire.
+            grezzo = os.path.join(uploads_base, relativo.replace('/', os.sep))
+            if os.path.exists(grezzo):
+                file_non_rimossi.append(relativo)
+            continue
         try:
             os.remove(assoluto)
         except OSError:

@@ -364,7 +364,8 @@ def test_anteprima_cancellazione_coincide_con_contenuto_struttura_in_modalita_si
     (cartella / 'referenziato.jpg').write_bytes(b'0' * 42)
     (cartella / 'orfano.jpg').write_bytes(b'0' * 999)
 
-    anteprima = anteprima_cancellazione_file(con, a, str(tmp_path / 'uploads'))
+    anteprima = anteprima_cancellazione_file(con, a, str(tmp_path / 'uploads'),
+                                             single_struttura=True)
     contenuto = contenuto_struttura(con, a, str(tmp_path / 'uploads'), single_struttura=True)
     assert anteprima['file'] == contenuto['file'] == 1
     assert anteprima['byte'] == contenuto['byte'] == 42
@@ -998,3 +999,101 @@ def test_ogni_colonna_di_percorso_dello_schema_e_registrata(app):
         f"COLONNE_ALLEGATI nomina colonne che lo schema non ha: "
         f"{sorted(inesistenti)}"
     )
+
+
+def _prepara_eliminazione(conn, tmp_path):
+    """Database chiuso su file, piu' un albero uploads in modalita' multi con
+    un allegato per ciascuna delle due strutture."""
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    uploads = tmp_path / 'uploads'
+    for etichetta in ('a', 'b'):
+        cartella = uploads / 'strutture' / str(ids[etichetta]['struttura']) / 'foto'
+        cartella.mkdir(parents=True)
+        (cartella / f'{etichetta}.jpg').write_bytes(b'x' * 50)
+        con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+                    (f"strutture/{ids[etichetta]['struttura']}/foto/{etichetta}.jpg",
+                     ids[etichetta]['apparecchio']))
+    con.commit()
+    con.close()
+    return percorso_db, uploads, ids
+
+
+def test_un_percorso_con_risalita_non_porta_via_un_file_di_un_altra_struttura(conn, tmp_path):
+    """I valori delle colonne *_path arrivano dal database e la cancellazione
+    li usa per decidere cosa togliere dal disco. Un valore con una risalita
+    farebbe cancellare alla struttura A un allegato della B, e la riga della B
+    resterebbe a puntare a un file che non esiste piu'. Nessuno scrittore nel
+    codice puo' produrlo (l'applicazione compone con secure_filename,
+    importa_installazione.py ricompone i percorsi dai loro pezzi), ma questa e'
+    l'unica operazione irreversibile del programma."""
+    from struttura_service import elimina_struttura
+    percorso_db, uploads, ids = _prepara_eliminazione(conn, tmp_path)
+    id_a, id_b = ids['a']['struttura'], ids['b']['struttura']
+
+    con = sqlite3.connect(percorso_db)
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+                (f'strutture/{id_a}/foto/../../{id_b}/foto/b.jpg', ids['a']['apparecchio']))
+    con.commit()
+    con.close()
+
+    file_b = uploads / 'strutture' / str(id_b) / 'foto' / 'b.jpg'
+    assert file_b.exists()
+
+    esito = elimina_struttura(percorso_db, str(uploads), id_a, str(tmp_path / 'archivi'))
+
+    assert file_b.exists(), "la cancellazione della A ha portato via un file della B"
+    # E non in silenzio: e' rimasto sul disco, l'operatore deve saperlo.
+    assert esito['file_non_rimossi'] == [f'strutture/{id_a}/foto/../../{id_b}/foto/b.jpg']
+
+    vivo = sqlite3.connect(percorso_db)
+    assert vivo.execute("SELECT COUNT(*) FROM strutture").fetchone()[0] == 1
+    vivo.close()
+
+
+def test_un_percorso_che_punta_a_una_cartella_viene_segnalato_non_ignorato(conn, tmp_path):
+    """os.path.getsize su una cartella riesce e vale 0: senza il controllo che
+    sia un file, l'anteprima la conta fra i file da cancellare mentre la
+    cancellazione la salta, e la pagina di conferma promette un file in piu' di
+    quelli che spariranno."""
+    from struttura_service import elimina_struttura, anteprima_cancellazione_file
+    percorso_db, uploads, ids = _prepara_eliminazione(conn, tmp_path)
+    id_a = ids['a']['struttura']
+
+    (uploads / 'strutture' / str(id_a) / 'foto' / 'CARTELLA').mkdir()
+    relativo = f'strutture/{id_a}/foto/CARTELLA'
+    con = sqlite3.connect(percorso_db)
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?", (relativo, ids['a']['apparecchio']))
+    con.commit()
+    anteprima = anteprima_cancellazione_file(con, id_a, str(uploads))
+    con.close()
+
+    assert anteprima['file'] == 0, "una cartella non e' un file da cancellare"
+
+    esito = elimina_struttura(percorso_db, str(uploads), id_a, str(tmp_path / 'archivi'))
+
+    assert (uploads / 'strutture' / str(id_a) / 'foto' / 'CARTELLA').is_dir()
+    assert esito['file_non_rimossi'] == [relativo]
+
+
+def test_in_modalita_single_il_perimetro_e_l_intera_cartella_uploads(conn, tmp_path):
+    """In single non esiste una cartella per struttura: il confine e'
+    uploads_base. Un allegato legittimo sotto uploads/<tipo>/ deve essere
+    cancellato, non rifiutato dal controllo di perimetro."""
+    from struttura_service import elimina_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    uploads = tmp_path / 'uploads'
+    (uploads / 'foto').mkdir(parents=True)
+    (uploads / 'foto' / 'a.jpg').write_bytes(b'x' * 50)
+    con.execute("UPDATE apparecchi SET foto_path='foto/a.jpg' WHERE id=?",
+                (ids['a']['apparecchio'],))
+    con.commit()
+    con.close()
+
+    esito = elimina_struttura(percorso_db, str(uploads), ids['a']['struttura'],
+                              str(tmp_path / 'archivi'), single_struttura=True)
+
+    assert not (uploads / 'foto' / 'a.jpg').exists()
+    assert esito['file_non_rimossi'] == []
+    assert uploads.is_dir()
