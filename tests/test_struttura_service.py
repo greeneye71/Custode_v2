@@ -216,6 +216,18 @@ def test_config_e_token_vengono_cancellati_solo_per_la_struttura_indicata(conn):
     assert conta(con, 'api_tokens', 'WHERE struttura_id=?', (ids['b']['struttura'],)) == 1
 
 
+def test_cartella_struttura_rifiuta_la_modalita_single(tmp_path):
+    """In single-struttura non esiste un sottoalbero uploads/ per struttura
+    da isolare: upload_subdir() scrive tutto sotto uploads_base/<subdir>/,
+    condivisa da ogni struttura del database. cartella_struttura non deve
+    fingere che ne esista uno restituendo uploads_base stessa: quel valore,
+    passato per errore a un futuro shutil.rmtree (es. dal Task 7), cancella
+    gli allegati dell'intero deployment invece di una struttura sola."""
+    from struttura_service import cartella_struttura
+    with pytest.raises(ValueError, match='_percorsi_allegati'):
+        cartella_struttura(str(tmp_path / 'uploads'), 1, single_struttura=True)
+
+
 def test_contenuto_conta_dati_utenti_e_tecnici(conn, tmp_path):
     from struttura_service import contenuto_struttura
     con, ids = conn
@@ -247,7 +259,15 @@ def test_contenuto_in_modalita_single_struttura(conn, tmp_path):
     senza il prefisso strutture/<id>/: contenuto_struttura deve guardare li',
     non nel percorso multi-struttura. Nessuna cartella strutture/<id>/ esiste
     qui: un'implementazione che ignorasse il flag e cercasse comunque nel
-    percorso multi troverebbe zero file e il test fallirebbe."""
+    percorso multi troverebbe zero file e il test fallirebbe.
+
+    Nella cartella c'e' anche un secondo file NON referenziato da nessuna
+    riga (orfano/di un'altra struttura): serve a distinguere la selezione
+    per riferimento (conta solo y.jpg) da un os.walk cieco sull'intera
+    cartella (conterebbe anche l'orfano). Senza di esso questo test non
+    intercetta la reintroduzione dell'os.walk cieco: la cartella
+    conterrebbe comunque un solo file, e le due implementazioni
+    darebbero lo stesso risultato per coincidenza."""
     from struttura_service import contenuto_struttura
     con, ids = conn
     con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
@@ -256,6 +276,7 @@ def test_contenuto_in_modalita_single_struttura(conn, tmp_path):
     cartella = tmp_path / 'uploads' / 'foto'
     cartella.mkdir(parents=True)
     (cartella / 'y.jpg').write_bytes(b'0' * 500)
+    (cartella / 'non-referenziato.jpg').write_bytes(b'0' * 999)
 
     c = contenuto_struttura(con, ids['a']['struttura'], str(tmp_path / 'uploads'),
                             single_struttura=True)
@@ -382,7 +403,14 @@ def test_esportazione_in_modalita_single_struttura_include_gli_allegati(conn, tm
     senza il prefisso strutture/<id>/ (vedi contenuto_struttura). Se
     esporta_struttura non propagasse single_struttura a cartella_struttura,
     cercherebbe gli allegati nel posto sbagliato e l'archivio uscirebbe senza
-    foto pur avendone una sul disco."""
+    foto pur avendone una sul disco.
+
+    La cartella contiene anche un file NON referenziato da nessuna riga:
+    senza di esso il test non distingue la selezione per riferimento da un
+    copytree cieco dell'intera cartella, perche' un copytree copierebbe
+    comunque l'unico file presente per coincidenza (difetto scoperto dal
+    revisore nel giro di correzioni 2, sul test gemello di
+    contenuto_struttura - lo stesso vale qui)."""
     from struttura_service import esporta_struttura
     con, ids = conn
     con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
@@ -394,12 +422,14 @@ def test_esportazione_in_modalita_single_struttura_include_gli_allegati(conn, tm
     cartella = uploads / 'foto'
     cartella.mkdir(parents=True)
     (cartella / 'unica.jpg').write_bytes(b'immagine-single')
+    (cartella / 'non-referenziato.jpg').write_bytes(b'altro-file')
 
     destinazione = esporta_struttura(percorso_db, str(uploads), ids['a']['struttura'],
                                      str(tmp_path / 'archivi'), single_struttura=True)
 
     atteso = os.path.join(destinazione, 'uploads', 'foto', 'unica.jpg')
     assert os.path.exists(atteso)
+    assert not os.path.exists(os.path.join(destinazione, 'uploads', 'foto', 'non-referenziato.jpg'))
 
 
 def test_esportazione_in_modalita_single_non_include_gli_allegati_di_altre_strutture(conn, tmp_path):
@@ -579,3 +609,93 @@ def test_esportazione_txt_elenca_tutte_le_chiavi_di_contenuto_struttura(conn, tm
     for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti', 'accessori',
                   'import', 'divisioni', 'utenti', 'tecnici', 'file', 'byte'):
         assert f"  {chiave:14}" in testo, chiave
+
+
+# ---------------------------------------------------------------------------
+# Parita' single/multi degli allegati (rilievo 1 del giro di correzioni 2)
+# ---------------------------------------------------------------------------
+
+def _leggi_conteggi_file_byte(destinazione):
+    """'file' e 'byte' da ESPORTAZIONE.txt, per confrontare due archivi senza
+    ripetere il parsing in ogni test."""
+    with open(os.path.join(destinazione, 'ESPORTAZIONE.txt'), encoding='utf-8') as f:
+        testo = f.read()
+    valori = {}
+    for riga in testo.splitlines():
+        parti = riga.split()
+        if len(parti) == 2 and parti[0] in ('file', 'byte'):
+            valori[parti[0]] = int(parti[1])
+    return valori
+
+
+def test_esportazione_single_e_multi_producono_gli_stessi_allegati(conn, tmp_path):
+    """La stessa struttura, con un percorso valorizzato per OGNI colonna di
+    COLONNE_ALLEGATI, esportata prima in multi e poi in single: l'insieme
+    degli allegati (a meno del prefisso strutture/<id>/) e i conteggi
+    file/byte di ESPORTAZIONE.txt devono coincidere. Una colonna presente
+    in una modalita' e dimenticata nell'altra (il difetto del giro 1 per
+    import_history.filepath e strutture.logo_path) fa divergere gli insiemi
+    senza che nessuno dei due test 'a colonna singola' se ne accorga da
+    solo: qui la stessa struttura produce due archivi che devono essere
+    lo stesso archivio."""
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    a = ids['a']['struttura']
+    apparecchio = ids['a']['apparecchio']
+
+    manutenzione_id = con.execute(
+        "SELECT id FROM manutenzioni WHERE apparecchio_id=?", (apparecchio,)).fetchone()[0]
+    verifica_id = con.execute(
+        "SELECT id FROM verifiche WHERE apparecchio_id=?", (apparecchio,)).fetchone()[0]
+    import_id = con.execute(
+        "SELECT id FROM import_history WHERE struttura_id=?", (a,)).fetchone()[0]
+
+    # Un percorso per ciascuna riga di COLONNE_ALLEGATI: se una viene
+    # dimenticata in futuro, questo test smette di essere vuoto per quella
+    # colonna e la differenza emerge nel confronto finale.
+    percorsi = {
+        ('apparecchi', 'foto_path', apparecchio): 'foto/A.jpg',
+        ('documenti', 'filepath', apparecchio): 'documenti/A.pdf',
+        ('manutenzioni', 'verbale_path', manutenzione_id): 'verbali/A.pdf',
+        ('verifiche', 'documento_path', verifica_id): 'verifiche/A.pdf',
+        ('import_history', 'filepath', import_id): 'import/A.xlsx',
+        ('strutture', 'logo_path', a): 'loghi/A.png',
+    }
+    for (tabella, colonna, riga_id), relativo in percorsi.items():
+        con.execute(f"UPDATE {tabella} SET {colonna}=? WHERE id=?", (relativo, riga_id))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    relativi = set(percorsi.values())
+
+    uploads_multi = tmp_path / 'multi'
+    for rel in relativi:
+        p = uploads_multi / 'strutture' / str(a) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b'contenuto-' + rel.encode())
+    dest_multi = esporta_struttura(percorso_db, str(uploads_multi), a, str(tmp_path / 'archivi-multi'))
+
+    uploads_single = tmp_path / 'single'
+    for rel in relativi:
+        p = uploads_single / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b'contenuto-' + rel.encode())
+    dest_single = esporta_struttura(percorso_db, str(uploads_single), a,
+                                    str(tmp_path / 'archivi-single'), single_struttura=True)
+
+    radice_multi = os.path.join(dest_multi, 'uploads', 'strutture', str(a))
+    trovati_multi = {
+        os.path.relpath(os.path.join(dirpath, f), radice_multi).replace(os.sep, '/')
+        for dirpath, _sotto, file_presenti in os.walk(radice_multi)
+        for f in file_presenti
+    }
+    radice_single = os.path.join(dest_single, 'uploads')
+    trovati_single = {
+        os.path.relpath(os.path.join(dirpath, f), radice_single).replace(os.sep, '/')
+        for dirpath, _sotto, file_presenti in os.walk(radice_single)
+        for f in file_presenti
+    }
+
+    assert trovati_multi == relativi
+    assert trovati_single == relativi
+    assert _leggi_conteggi_file_byte(dest_multi) == _leggi_conteggi_file_byte(dest_single)

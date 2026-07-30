@@ -52,16 +52,27 @@ COLONNE_ALLEGATI = (
      'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
     ('verifiche', 'documento_path',
      'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
+    ('import_history', 'filepath', 'struttura_id = ?'),
+    # strutture non ha una colonna struttura_id: E' la struttura, la
+    # condizione e' sulla sua stessa chiave primaria.
+    ('strutture', 'logo_path', 'id = ?'),
 )
 
 
 def _percorsi_allegati(conn, struttura_id):
     """Percorsi relativi (colonne *_path) referenziati dalle righe di una
-    struttura: apparecchi.foto_path, documenti.filepath,
-    manutenzioni.verbale_path, verifiche.documento_path.
+    struttura. L'elenco delle colonne e' in COLONNE_ALLEGATI, non qui: questo
+    docstring non ne ripete i nomi apposta, per non poter piu' divergere da
+    quella tupla come e' successo con import_history.filepath e
+    strutture.logo_path (mancanti nel giro 1, aggiunti nel giro 2).
 
     Unico punto che sa quali colonne contengono un percorso di allegato:
-    chi ne aggiunge una nuova la aggiunge qui, non in due posti diversi.
+    chi ne aggiunge una nuova la aggiunge in COLONNE_ALLEGATI, non altrove.
+    Una colonna dimenticata qui non manca solo dall'archivio in modalita'
+    single: se un domani un'operazione di cancellazione usasse questa
+    funzione per sapere quali file sono ancora referenziati prima di
+    ripulire il disco, quella colonna dimenticata diventerebbe un file
+    orfano cancellato per errore.
     """
     percorsi = set()
     for tabella, colonna, dove in COLONNE_ALLEGATI:
@@ -166,15 +177,32 @@ def rimuovi_strutture(conn, ids):
 
 
 def cartella_struttura(uploads_base, struttura_id, single_struttura=False):
-    """Albero dei file di una struttura, come lo compone models.upload_subdir.
+    """Sottoalbero uploads/strutture/<id>/ di UNA struttura, in modalita' multi.
 
     Le due funzioni devono restare d'accordo: upload_subdir() decide dove un
-    upload viene *scritto* (uploads_base/<subdir> in single-struttura,
-    uploads_base/strutture/<id>/<subdir> in multi-struttura), questa decide
-    dove lo si va a *cercare*. Chi cambia l'una deve controllare l'altra.
+    upload viene *scritto* (uploads_base/strutture/<id>/<subdir> in
+    multi-struttura), questa decide dove lo si va a *cercare*. Chi cambia
+    l'una deve controllare l'altra.
+
+    In modalita' single-struttura solleva un'eccezione invece di restituire
+    un percorso: in single upload_subdir() scrive sotto uploads_base/<subdir>/
+    SENZA alcun prefisso per struttura (vedi models.upload_subdir), quindi
+    quella cartella e' condivisa da ogni struttura del database, non isola
+    nulla. Fino al giro di correzioni 2 questa funzione restituiva
+    uploads_base stessa in quel caso: un valore che sembra "la cartella
+    della struttura" ma e' l'intera cartella allegati del deployment, e che
+    un chiamante ignaro (una futura cancellazione con shutil.rmtree, per
+    esempio) userebbe per cancellare i file di TUTTE le strutture credendo
+    di cancellarne una sola. Chi ha bisogno degli allegati di UNA struttura
+    in modalita' single deve usare _percorsi_allegati(), che seleziona per
+    riferimento (le colonne *_path), non per cartella.
     """
     if single_struttura:
-        return uploads_base
+        raise ValueError(
+            "cartella_struttura non e' utilizzabile in modalita' single-struttura "
+            "(non esiste un sottoalbero da isolare: uploads_base e' condivisa da "
+            "tutte le strutture). Usa _percorsi_allegati() per selezionare gli "
+            "allegati di una struttura per riferimento.")
     return os.path.join(uploads_base, 'strutture', str(struttura_id))
 
 
