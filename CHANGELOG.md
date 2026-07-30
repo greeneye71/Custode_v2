@@ -22,8 +22,8 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   `models.py`, e l'assenza di scope significa nessun dato.
 - Lo stesso difetto in `models.apparecchio_accessibile()`, il controllo che protegge i
   download degli allegati.
-- **Lo stesso difetto in dodici rotte per singolo record — e li' si poteva anche
-  scrivere e cancellare.** Le rotte di dettaglio, modifica, dismissione, caricamento
+- **Lo stesso difetto in nove rotte per singolo record (dodici query) — e li' si poteva
+  anche scrivere e cancellare.** Le rotte di dettaglio, modifica, dismissione, caricamento
   foto e documenti di un apparecchio, e di modifica ed eliminazione di manutenzioni e
   verifiche, avevano ciascuna la propria copia del controllo, scritta come
   `AND (struttura_id = ? OR ? IS NULL)`: senza struttura attiva la condizione era vera
@@ -33,8 +33,11 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   minuti fra il login e la scelta della struttura, poteva leggere e dismettere
   apparecchi di una struttura a cui non era assegnato**, ed eliminare manutenzioni e
   verifiche altrui. Un admin la cui struttura fosse stata disattivata poteva fare
-  altrettanto. Ora tutte e dodici passano da `apparecchio_accessibile()`, che era gia'
-  l'unico posto in cui la regola andava scritta.
+  altrettanto. Ora tutte passano da `apparecchio_accessibile()`, che era gia' l'unico
+  posto in cui la regola andava scritta. I due caricamenti — foto e documenti — il
+  controllo di divisione non l'avevano affatto, nemmeno per gli utenti semplici: ora
+  ce l'hanno, quindi un utente non puo' piu' allegare file a un apparecchio di una
+  divisione che non gli e' assegnata, pur restando nella sua struttura.
 - La stessa famiglia negli import: `import_bp.analizza()` saltava il controllo di
   divisione per il ruolo `admin` (che poteva cosi' attribuire un import alla divisione
   di un'altra struttura, file compreso), passava al thread di analisi la struttura
@@ -162,6 +165,14 @@ Dove l'isolamento non arriva ancora — noto, misurato, non corretto in questa r
 - **Gli allegati sotto `uploads/import/` non sono isolati per struttura.** `/uploads/`
   sa proteggere solo i percorsi nella forma `strutture/<id>/...`: i documenti caricati
   per un import sono leggibili da qualunque utente autenticato, di qualunque struttura.
+- **Un utente spostato da una struttura a un'altra lascia la propria email nel registro
+  dell'archivio.** L'esportazione non annota piu' le identita' che rimuove (vedi sopra),
+  ma la primitiva di cancellazione, che l'esportazione riusa per togliere le altre
+  strutture, continua a farlo: un admin che ha lavorato sulla struttura A e oggi
+  appartiene alla B lascia il proprio indirizzo nelle voci di registro della A. Il
+  contenuto e' molto piu' debole del caso chiuso in questa release — e' l'indirizzo di
+  chi quella struttura l'ha davvero amministrata, non di un estraneo — ma resta un dato
+  personale che esce dal deployment.
 - **`importa_installazione.py` assegna una struttura anche agli utenti `tecnico` che
   importa**, e non importa `tecnici_strutture`. Quel tecnico non riesce ad accedere
   finche' un admin non lo riassegna, e — avendo una struttura — verrebbe cancellato
