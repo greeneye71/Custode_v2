@@ -242,8 +242,12 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
 
     numero, byte = 0, 0
     if single_struttura:
-        # cartella_struttura restituisce qui l'INTERA cartella uploads: non
-        # esiste un sottoalbero per struttura da isolare con un os.walk.
+        # In modalita' single non esiste un sottoalbero per struttura da
+        # isolare con un os.walk: i file stanno direttamente sotto
+        # uploads/<tipo>/. Per questo cartella_struttura, che qui dovrebbe
+        # restituire l'intera cartella uploads, in single rifiuta invece di
+        # rispondere: un percorso del genere non e' isolabile e chi lo
+        # cancellasse porterebbe via gli allegati dell'intero deployment.
         # Se il database contenesse piu' strutture nonostante il flag single
         # (installazione promossa, o due importazioni successive su un
         # target single privo di guardia) un os.walk conterebbe anche i

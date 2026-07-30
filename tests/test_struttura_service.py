@@ -699,3 +699,63 @@ def test_esportazione_single_e_multi_producono_gli_stessi_allegati(conn, tmp_pat
     assert trovati_multi == relativi
     assert trovati_single == relativi
     assert _leggi_conteggi_file_byte(dest_multi) == _leggi_conteggi_file_byte(dest_single)
+
+
+# COLONNE_ALLEGATI e' l'elenco delle colonne che contengono un percorso di
+# allegato. Il test qui sotto lo confronta con lo schema per introspezione,
+# invece di ripetere a mano un elenco che divergerebbe alla prima colonna
+# nuova: e' esattamente cosi' che import_history.filepath e strutture.logo_path
+# sono rimasti fuori. Una colonna di percorso non registrata resta fuori
+# dall'archivio in modalita' single mentre la riga che la referenzia ci entra,
+# e la cancellazione di una struttura la lascia orfana sul disco dopo aver
+# dichiarato di averla salvata.
+#
+# Se una colonna con 'path' nel nome NON e' un allegato della struttura, va
+# messa qui con la sua ragione: una riga in piu' in un test e' il prezzo per
+# non poter piu' dimenticare quella importante.
+COLONNE_PATH_NON_ALLEGATI = {
+    # (tabella, colonna): perche' non e' un allegato di una struttura
+}
+
+
+def test_ogni_colonna_di_percorso_dello_schema_e_registrata(app):
+    """Introspezione dello schema migrato, non un elenco letterale.
+
+    Gira sul database che l'applicazione costruisce davvero all'avvio
+    (schema.sql piu' le migrazioni incrementali di apply_schema_updates), non
+    su schema.sql da solo: logo_path, una delle due colonne dimenticate, e'
+    aggiunta da una migrazione oltre che presente nello schema, e una colonna
+    introdotta solo da una migrazione futura non comparirebbe altrimenti.
+    """
+    from struttura_service import COLONNE_ALLEGATI
+    from models import get_db
+
+    with app.app_context():
+        db = get_db()
+        tabelle = [r[0] for r in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'").fetchall()]
+        colonne_schema = {
+            (tabella, r[1])
+            for tabella in tabelle
+            for r in db.execute(f"PRAGMA table_info({tabella})").fetchall()
+        }
+
+    candidate = {(t, c) for t, c in colonne_schema if 'path' in c.lower()}
+    registrate = {(t, c) for t, c, _dove in COLONNE_ALLEGATI}
+
+    dimenticate = candidate - registrate - set(COLONNE_PATH_NON_ALLEGATI)
+    assert not dimenticate, (
+        f"colonne di percorso non registrate in COLONNE_ALLEGATI: "
+        f"{sorted(dimenticate)}. Se non sono allegati di una struttura, "
+        f"aggiungile a COLONNE_PATH_NON_ALLEGATI con la ragione."
+    )
+
+    # E il verso opposto: una riga di COLONNE_ALLEGATI che nomina una colonna
+    # inesistente non fallisce, viene ignorata dal try/except di
+    # _percorsi_allegati. Sarebbe una copertura solo apparente.
+    inesistenti = registrate - colonne_schema
+    assert not inesistenti, (
+        f"COLONNE_ALLEGATI nomina colonne che lo schema non ha: "
+        f"{sorted(inesistenti)}"
+    )
