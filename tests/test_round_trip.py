@@ -41,12 +41,33 @@ IMPORTATORE = os.path.join(RADICE, 'importa_installazione.py')
 def _stato_repository_reale():
     db_reale = os.path.join(RADICE, 'data', 'database.sqlite')
     uploads_reale = os.path.join(RADICE, 'uploads')
-    con = sqlite3.connect(f'file:{db_reale}?mode=ro', uri=True)
-    try:
-        conteggio = con.execute("SELECT COUNT(*) FROM strutture").fetchone()[0]
-    finally:
-        con.close()
-    voci_uploads = sorted(os.listdir(uploads_reale)) if os.path.isdir(uploads_reale) else None
+
+    # Su un clone appena fatto, o in integrazione continua, il database di
+    # sviluppo non esiste: senza questa guardia tutti i test del file
+    # andrebbero in errore nel setup, per un motivo che non c'entra nulla con
+    # cio' che provano. Nessun database significa nulla da proteggere.
+    conteggio = None
+    if os.path.exists(db_reale):
+        con = sqlite3.connect(f'file:{db_reale}?mode=ro', uri=True)
+        try:
+            conteggio = con.execute("SELECT COUNT(*) FROM strutture").fetchone()[0]
+        except sqlite3.Error:
+            conteggio = 'illeggibile'
+        finally:
+            con.close()
+
+    # os.walk e non os.listdir: un import copia gli allegati DENTRO le
+    # sottocartelle (uploads/<tipo>/ quando il target e' in modalita' single,
+    # uploads/strutture/<id>/<tipo>/ in multi), che qui esistono gia'. Un
+    # confronto sul solo primo livello non vedrebbe nessuna di quelle
+    # scritture, cioe' proprio quelle che questa rete esiste per intercettare.
+    voci_uploads = None
+    if os.path.isdir(uploads_reale):
+        voci_uploads = sorted(
+            os.path.relpath(os.path.join(cartella, nome), uploads_reale)
+            for cartella, _sotto, file_presenti in os.walk(uploads_reale)
+            for nome in file_presenti
+        )
     return conteggio, voci_uploads
 
 
@@ -195,6 +216,17 @@ def _verifica_giro_completo(archivio, destinazione):
     da Beta, e - il punto per cui questo test esiste - gli allegati PRESENTI
     SUL DISCO ai percorsi che il database dichiara, non solo la colonna
     valorizzata."""
+    # L'ARCHIVIO per primo, prima di guardare la destinazione. L'isolamento
+    # della destinazione non dimostra quello dell'archivio: importa_installazione
+    # copia solo i file referenziati dalle righe che importa, quindi un allegato
+    # estraneo nell'archivio non arriverebbe mai a destinazione qualunque cosa
+    # ci sia dentro. Ma l'archivio e' l'artefatto che si consegna a terzi, ed e'
+    # li' che un file di un altro tenant fa danno.
+    file_archivio = {f for _, _, presenti in os.walk(os.path.join(archivio, 'uploads'))
+                     for f in presenti}
+    assert 'beta.pdf' not in file_archivio, (
+        f"l'archivio contiene un allegato di un'altra struttura: {sorted(file_archivio)}")
+
     esito = _reimporta(archivio, destinazione)
     assert esito.returncode == 0, f"import fallito:\n{esito.stdout}\n{esito.stderr}"
 
@@ -225,14 +257,22 @@ def _verifica_giro_completo(archivio, destinazione):
     finally:
         con.close()
 
+    # Nota sul valore di questa asserzione: NON e' falsificabile rompendo
+    # l'esportazione. Se l'archivio esce senza allegati, importa_installazione
+    # azzera anche le colonne, quindi cade prima len(percorsi_*) == 3 e questo
+    # ciclo non viene raggiunto. Uno stato "colonna valorizzata ma file
+    # assente" lo puo' produrre solo l'importatore, che decide le due cose
+    # insieme. Vale quindi come guardia contro una regressione DI
+    # importa_installazione.py, non dell'esportazione.
     uploads_dest = str(destinazione / 'uploads')
     for rel in percorsi_manutenzioni + percorsi_verifiche:
         assoluto = os.path.join(uploads_dest, rel.replace('/', os.sep))
         assert os.path.isfile(assoluto), f"allegato non ricreato al percorso dichiarato: {rel}"
 
-    # L'allegato di Beta non deve esistere da nessuna parte nella
-    # destinazione, sotto nessun nome rimappato: e' l'isolamento esteso agli
-    # allegati che il brief del Task 8 chiede, oltre alla matricola.
+    # E nemmeno nella destinazione, sotto nessun nome rimappato. Questa meta'
+    # e' piu' debole di quella sull'archivio (vedi sopra): la destinazione non
+    # puo' ricevere un file estraneo per costruzione, quindi da sola non
+    # dimostrerebbe l'isolamento.
     nomi_file_dest = {f for _, _, file_presenti in os.walk(uploads_dest) for f in file_presenti}
     assert 'beta.pdf' not in nomi_file_dest
     assert len(nomi_file_dest) == 6  # 3 verbali + 3 verifiche di Alfa, nient'altro
