@@ -28,6 +28,16 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   alla 2.6): se esiste esattamente una struttura attiva vengono assegnati a quella;
   se non ce n'e' nessuna restano cosi, con un avviso nel log; con due o piu'
   strutture attive vengono disattivati, segnalati anch'essi nel log.
+- **L'archivio di una struttura conteneva il superadmin del deployment ed ogni
+  tecnico, hash della password compreso, anche senza alcun rapporto con la
+  struttura esportata.** `esporta_struttura` riusa la primitiva di cancellazione
+  con il predicato invertito: quella lascia intenzionalmente fuori chi ha
+  `struttura_id NULL` (superadmin e tecnici), perche' nella direzione
+  cancellazione quell'account non deve sparire. Nella direzione esportazione
+  significava che finiva nell'archivio consegnato a terzi. Ora l'esportazione
+  toglie anche questi account dalla copia (`tecnici_strutture` segue in
+  cascata): un archivio contiene solo gli utenti della struttura esportata,
+  tecnici compresi, a prescindere da un'eventuale assegnazione.
 - **Un'installazione promossa da single a multi-struttura con `toggle_modalita.py`**
   (che cambia solo il flag di configurazione, senza spostare gli allegati)
   produceva un archivio senza quegli allegati — il sottoalbero
@@ -93,6 +103,12 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
 
 - Il reimporto di un archivio non ripristina logo e storico import (vedi
   l'esportazione qui sopra).
+- L'archivio di una struttura non contiene mai il superadmin ne' i tecnici (nemmeno
+  quelli effettivamente assegnati): dopo un reimporto le assegnazioni vanno rifatte a
+  mano dal nuovo deployment. Scelta deliberata (vedi il punto sopra): un tecnico e' un
+  account condiviso fra strutture, non di proprieta' di una sola, e portarne l'hash
+  della password fuori dal deployment per il rapporto di assegnazione — disponibile,
+  non di proprieta' — non sembra un compromesso ragionevole.
 - **Il travaso degli allegati di un'installazione promossa da single a multi resta da
   fare**: `toggle_modalita.py` cambia solo il flag. Fino a quando gli allegati non
   vengono spostati a mano sotto `uploads/strutture/<id>/`, l'esportazione e la

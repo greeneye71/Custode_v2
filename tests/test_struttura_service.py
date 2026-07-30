@@ -381,11 +381,27 @@ def test_esportazione_contiene_solo_la_struttura_richiesta(conn, tmp_path):
     un'altra struttura. Verifica sia il database (righe) sia il filesystem
     (l'intero sottoalbero di B non deve esistere nell'archivio) sia il
     registro attivita' e i tentativi di login, che non hanno una FK di
-    struttura e potrebbero sopravvivere per l'intero deployment."""
+    struttura e potrebbero sopravvivere per l'intero deployment.
+
+    Estesa (Critico 3 della revisione finale) per guardare anche 'utenti':
+    rimuovi_strutture(altre), usato con predicato invertito, lascia fuori
+    chi ha struttura_id NULL per costruzione - superadmin e OGNI tecnico,
+    anche 'tecnico.solo.b', che il fixture assegna SOLO alla B e non ha
+    alcun rapporto con la A che stiamo esportando. Il test originale non
+    guardava 'utenti' ne' 'tecnici_strutture': la falla del Critico 3 ci
+    sarebbe passata sotto senza far fallire nulla."""
     import sqlite3
     from struttura_service import esporta_struttura
     con, ids = conn
     con.execute("INSERT INTO login_attempts (ip_address,email,esito) VALUES ('9.9.9.9','b@b.it','riuscito')")
+    con.execute(
+        "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id) "
+        "VALUES ('super@studio.it','HASH-DEL-SUPERADMIN','S','S','superadmin',NULL)")
+    tecnico_solo_b = con.execute(
+        "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id) "
+        "VALUES ('tecnico.solo.b@x.it','HASH-TEC-B','T','B','tecnico',NULL)").lastrowid
+    con.execute("INSERT INTO tecnici_strutture (tecnico_id,struttura_id) VALUES (?,?)",
+                (tecnico_solo_b, ids['b']['struttura']))
     con.commit()
     percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
     con.close()
@@ -409,6 +425,11 @@ def test_esportazione_contiene_solo_la_struttura_richiesta(conn, tmp_path):
     assert copia.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == 0
     righe_log = copia.execute("SELECT struttura_id FROM log_attivita").fetchall()
     assert all(r[0] == ids['a']['struttura'] for r in righe_log)
+    # Nessun utente senza rapporto con la A: ne' il superadmin del
+    # deployment, ne' un tecnico assegnato SOLO a un'altra struttura.
+    email_archivio = {r[0] for r in copia.execute("SELECT email FROM utenti")}
+    assert email_archivio == {'admin@A.it'}
+    assert copia.execute("SELECT COUNT(*) FROM tecnici_strutture").fetchone()[0] == 0
     copia.close()
 
     atteso = os.path.join(destinazione, 'uploads', 'strutture',
@@ -417,6 +438,30 @@ def test_esportazione_contiene_solo_la_struttura_richiesta(conn, tmp_path):
     non_atteso = os.path.join(destinazione, 'uploads', 'strutture', str(ids['b']['struttura']))
     assert not os.path.exists(non_atteso)
     assert os.path.exists(os.path.join(destinazione, 'ESPORTAZIONE.txt'))
+
+
+def test_esportazione_non_contiene_il_tecnico_assegnato_alla_struttura_esportata(conn, tmp_path):
+    """Decisione lasciata dal brief: il tecnico ASSEGNATO alla struttura che
+    si esporta (ids['tecnico'], creato dal fixture con un legame verso
+    entrambe A e B) resta comunque fuori dall'archivio. E' un account
+    condiviso con altre strutture (qui letteralmente con la B): tenerlo
+    porterebbe fuori dal deployment un hash di password che serve ad altre
+    strutture, per un rapporto (l'assegnazione) che la cancellazione stessa
+    tratta come non di proprieta' ("il tecnico perde l'assegnazione, non
+    l'account"). Vedi il rapporto per l'argomentazione completa."""
+    import sqlite3
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    destinazione = esporta_struttura(percorso_db, str(tmp_path / 'uploads'),
+                                     ids['a']['struttura'], str(tmp_path / 'archivi'))
+
+    copia = sqlite3.connect(os.path.join(destinazione, 'data', 'database.sqlite'))
+    assert copia.execute("SELECT COUNT(*) FROM utenti WHERE ruolo='tecnico'").fetchone()[0] == 0
+    assert copia.execute("SELECT COUNT(*) FROM tecnici_strutture").fetchone()[0] == 0
+    copia.close()
 
 
 def test_esportazione_non_tocca_il_database_vivo(conn, tmp_path):

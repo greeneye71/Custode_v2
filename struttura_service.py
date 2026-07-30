@@ -94,6 +94,34 @@ def _percorsi_allegati(conn, struttura_id):
     return percorsi
 
 
+def _rimuovi_utenti(conn, ids_utenti):
+    """Libera ogni riferimento (RIFERIMENTI_UTENTE) verso gli utenti indicati,
+    anonimizza la loro identita' nel registro attivita' invece di lasciare un
+    utente_id orfano, poi cancella le righe.
+
+    Isolata da rimuovi_strutture perche' serve anche a esporta_struttura, su
+    un insieme di utenti diverso: rimuovi_strutture la usa per gli utenti di
+    UNA struttura (struttura_id = quella cancellata), esporta_struttura la
+    usa in piu' per gli utenti senza struttura (superadmin e tecnici), che
+    rimuovi_strutture lascia intenzionalmente fuori perche' nella direzione
+    cancellazione quegli account non devono sparire (vedi il commento al
+    passo 6 qui sotto)."""
+    if not ids_utenti:
+        return
+    seg = ','.join('?' * len(ids_utenti))
+    utenti = conn.execute(
+        f"SELECT id, email FROM utenti WHERE id IN ({seg})", ids_utenti).fetchall()
+    for riga in utenti:
+        uid, email = riga[0], riga[1]
+        conn.execute(
+            "UPDATE log_attivita SET utente_id = NULL, "
+            "dettagli = COALESCE(dettagli, '') || ' [utente eliminato: ' || ? || ']' "
+            "WHERE utente_id = ?", (email, uid))
+        for tabella, colonna in RIFERIMENTI_UTENTE:
+            conn.execute(f"UPDATE {tabella} SET {colonna} = NULL WHERE {colonna} = ?", (uid,))
+    conn.execute(f"DELETE FROM utenti WHERE id IN ({seg})", ids_utenti)
+
+
 def rimuovi_strutture(conn, ids):
     """Cancella dal database tutto cio' che appartiene alle strutture indicate.
 
@@ -162,21 +190,14 @@ def rimuovi_strutture(conn, ids):
     #    la cosa che non deve sparire insieme ai dati.
     conn.execute(f"UPDATE log_attivita SET struttura_id = NULL WHERE struttura_id IN ({seg})", ids)
 
-    # 6. Utenti. Prima si libera ogni riferimento che sopravvive a loro, poi si
-    #    conserva la loro identita' nel registro in forma testuale.
-    utenti = conn.execute(
-        f"SELECT id, email FROM utenti WHERE struttura_id IN ({seg})", ids).fetchall()
-    for riga in utenti:
-        uid, email = riga[0], riga[1]
-        conn.execute(
-            "UPDATE log_attivita SET utente_id = NULL, "
-            "dettagli = COALESCE(dettagli, '') || ' [utente eliminato: ' || ? || ']' "
-            "WHERE utente_id = ?", (email, uid))
-        for tabella, colonna in RIFERIMENTI_UTENTE:
-            conn.execute(f"UPDATE {tabella} SET {colonna} = NULL WHERE {colonna} = ?", (uid,))
-    # I tecnici hanno struttura_id NULL (admin.py li crea cosi'): restano fuori
-    # da questa DELETE per costruzione, non per un controllo dimenticabile.
-    conn.execute(f"DELETE FROM utenti WHERE struttura_id IN ({seg})", ids)
+    # 6. Utenti. _rimuovi_utenti libera ogni riferimento che sopravvive a
+    #    loro e conserva la loro identita' nel registro in forma testuale.
+    #    I tecnici hanno struttura_id NULL (admin.py li crea cosi', e cosi'
+    #    ha superadmin): restano fuori da questa selezione per costruzione,
+    #    non per un controllo dimenticabile - qui l'account non deve sparire.
+    ids_utenti = [r[0] for r in conn.execute(
+        f"SELECT id FROM utenti WHERE struttura_id IN ({seg})", ids).fetchall()]
+    _rimuovi_utenti(conn, ids_utenti)
 
     # 7. La struttura: divisioni, strutture_config, api_tokens e
     #    tecnici_strutture vanno in cascata. Il tecnico perde l'assegnazione,
@@ -550,6 +571,23 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                 copia.execute(
                     "DELETE FROM log_attivita WHERE struttura_id IS NULL OR struttura_id != ?",
                     (struttura_id,))
+                # rimuovi_strutture(altre) lascia intenzionalmente fuori chi ha
+                # struttura_id NULL (superadmin e tecnici): nella direzione
+                # cancellazione quell'account non deve sparire (vedi il passo
+                # 6 di rimuovi_strutture). Ma questo e' un archivio che si
+                # CONSEGNA a terzi: un account che non appartiene alla
+                # struttura esportata - hash della password compreso - non ci
+                # deve stare, a prescindere da un'eventuale assegnazione in
+                # tecnici_strutture. Quell'assegnazione e' un rapporto
+                # disponibile, non di proprieta': la cancellazione stessa la
+                # tratta cosi' ("il tecnico perde l'assegnazione, non
+                # l'account"), quindi non e' un motivo per far uscire
+                # l'account dal deployment insieme all'archivio.
+                # tecnici_strutture segue in cascata (ON DELETE CASCADE su
+                # tecnico_id): non serve azzerarla a parte.
+                non_del_deployment = [r[0] for r in copia.execute(
+                    "SELECT id FROM utenti WHERE struttura_id IS NULL").fetchall()]
+                _rimuovi_utenti(copia, non_del_deployment)
                 copia.commit()
                 contenuto = contenuto_struttura(copia, struttura_id, uploads_base,
                                                 single_struttura)
@@ -591,6 +629,12 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                                'accessori', 'import', 'divisioni', 'utenti', 'tecnici', 'file'):
                     f.write(f"  {chiave:14} {contenuto[chiave]}\n")
                 f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
+                f.write(
+                    "Non incluso in questo archivio: il superadmin del deployment e i\n"
+                    "tecnici (sono account condivisi con altre strutture, non di proprieta'\n"
+                    "di questa, anche quando risultano assegnati). Dopo il reimporto vanno\n"
+                    "ricreati e riassegnati a mano, se servono.\n\n"
+                )
                 f.write("Per reimportare questo archivio in un'installazione MedInventory:\n\n")
                 f.write(f"  python importa_installazione.py \"{destinazione}\"\n")
 
