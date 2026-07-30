@@ -6,6 +6,7 @@ non li va a cercare in current_app. Cosi' la stessa funzione lavora sul
 database vivo dentro una richiesta e su una copia temporanea dentro un test.
 """
 
+import json
 import os
 import shutil
 import sqlite3
@@ -28,6 +29,48 @@ RIFERIMENTI_UTENTE = (
 
 CHIAVI_CONTEGGIO = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
                     'accessori', 'import', 'divisioni', 'utenti', 'strutture')
+
+# Tabelle che importa_installazione.py dichiara esplicitamente di non
+# importare (vedi CLAUDE.md): appartengono al deployment sorgente (sessioni
+# attive, tentativi di login, token API, configurazione email) o sono dati
+# di lavorazione di un import mai concluso (import_preview). Il criterio e'
+# lo stesso in entrambe le direzioni: se l'importatore non le legge,
+# l'esportatore non deve portarle in un archivio consegnabile.
+TABELLE_DEPLOYMENT_SORGENTE = ('sessioni', 'login_attempts', 'api_tokens',
+                              'email_config', 'import_preview')
+
+# Colonna che contiene un percorso relativo di un allegato, per tabella, con
+# la condizione che la lega alla struttura. Serve sia a contenuto_struttura
+# (conteggio file/byte) sia a esporta_struttura (selezione degli allegati in
+# modalita' single, dove non esiste un sottoalbero uploads/ per struttura da
+# isolare con un copytree).
+COLONNE_ALLEGATI = (
+    ('apparecchi', 'foto_path', 'struttura_id = ?'),
+    ('documenti', 'filepath',
+     'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
+    ('manutenzioni', 'verbale_path',
+     'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
+    ('verifiche', 'documento_path',
+     'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
+)
+
+
+def _percorsi_allegati(conn, struttura_id):
+    """Percorsi relativi (colonne *_path) referenziati dalle righe di una
+    struttura: apparecchi.foto_path, documenti.filepath,
+    manutenzioni.verbale_path, verifiche.documento_path.
+
+    Unico punto che sa quali colonne contengono un percorso di allegato:
+    chi ne aggiunge una nuova la aggiunge qui, non in due posti diversi.
+    """
+    percorsi = set()
+    for tabella, colonna, dove in COLONNE_ALLEGATI:
+        righe = conn.execute(
+            f"SELECT {colonna} FROM {tabella} WHERE {dove} "
+            f"AND {colonna} IS NOT NULL AND {colonna} != ''",
+            (struttura_id,))
+        percorsi.update(r[0] for r in righe)
+    return percorsi
 
 
 def rimuovi_strutture(conn, ids):
@@ -170,14 +213,30 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
     }
 
     numero, byte = 0, 0
-    radice = cartella_struttura(uploads_base, struttura_id, single_struttura)
-    for cartella, _sotto, file_presenti in os.walk(radice):
-        for nome in file_presenti:
-            numero += 1
+    if single_struttura:
+        # cartella_struttura restituisce qui l'INTERA cartella uploads: non
+        # esiste un sottoalbero per struttura da isolare con un os.walk.
+        # Se il database contenesse piu' strutture nonostante il flag single
+        # (installazione promossa, o due importazioni successive su un
+        # target single privo di guardia) un os.walk conterebbe anche i
+        # file di un'altra struttura. Si selezionano invece i soli file
+        # referenziati dalle righe di QUESTA struttura.
+        for relativo in _percorsi_allegati(conn, struttura_id):
+            percorso = os.path.join(uploads_base, relativo.replace('/', os.sep))
             try:
-                byte += os.path.getsize(os.path.join(cartella, nome))
+                byte += os.path.getsize(percorso)
+                numero += 1
             except OSError:
                 pass
+    else:
+        radice = cartella_struttura(uploads_base, struttura_id, single_struttura)
+        for cartella, _sotto, file_presenti in os.walk(radice):
+            for nome in file_presenti:
+                numero += 1
+                try:
+                    byte += os.path.getsize(os.path.join(cartella, nome))
+                except OSError:
+                    pass
     contenuto['file'] = numero
     contenuto['byte'] = byte
     return contenuto
@@ -217,11 +276,21 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
     L'archivio ha la forma di un'installazione MedInventory, quindi si
     reimporta con lo strumento che esiste gia' (importa_installazione.py):
     nessun formato nuovo da mantenere, e nessun lettore nuovo da scrivere.
+    Il nome del database ('data/database.sqlite') e il config.json con
+    database_path/uploads_path/structure_name sono la forma che
+    importa_installazione.Sorgente si aspetta di trovare senza bisogno di
+    --db esplicito: senza structure_name, nome_struttura_suggerito() ricade
+    sul nome della cartella (timestamp incluso).
 
     Lo snapshot si prende con sqlite3.backup(), che e' coerente anche con
     l'applicazione in esercizio. La copia viene poi svuotata di TUTTE LE ALTRE
     strutture con la stessa primitiva che cancella: il predicato e' invertito,
-    il codice e' lo stesso.
+    il codice e' lo stesso. Le tabelle che importa_installazione.py dichiara
+    di non importare (TABELLE_DEPLOYMENT_SORGENTE) appartengono al deployment
+    sorgente, non a una struttura: rimuovi_strutture(altre) non le tocca se
+    riguardano la struttura esportata, quindi si svuotano qui esplicitamente.
+    Il registro attivita' viene ridotto alle sole righe della struttura
+    esportata, per lo stesso motivo.
 
     single_struttura deve rispecchiare la modalita' dell'installazione
     sorgente: importa_installazione.py, in fase di reimporto, ricostruisce il
@@ -230,6 +299,17 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
     single-struttura non ha il prefisso 'strutture/<id>/'. L'archivio deve
     quindi mettere i file esattamente li' dove quel percorso relativo li va a
     cercare, non sotto 'uploads/strutture/<id>/' a prescindere dalla modalita'.
+    In single-struttura cartella_struttura restituisce l'INTERA cartella
+    uploads (non isola un sottoalbero per struttura): un copytree di quella
+    cartella travaserebbe anche gli allegati di altre strutture eventualmente
+    presenti nello stesso database (installazione promossa, o due importazioni
+    successive su un target single, che non ha guardie contro il caso). Si
+    copiano quindi i soli file referenziati dalle righe della struttura.
+
+    Se l'esportazione fallisce a qualunque passo dopo la creazione della
+    cartella di destinazione, quella cartella (che a quel punto puo' contenere
+    un backup INTEGRALE di tutti i tenant, prima ancora di essere ripulita)
+    viene rimossa: non deve restare sul disco a tempo indeterminato.
     """
     sorgente = sqlite3.connect(db_path)
     try:
@@ -243,45 +323,67 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
 
         destinazione = os.path.join(
             cartella_archivi, _cartella_esportazione_libera(cartella_archivi, nome))
-        os.makedirs(os.path.join(destinazione, 'data'), exist_ok=True)
-        percorso_copia = os.path.join(destinazione, 'data', 'medinventory.db')
-
-        copia = sqlite3.connect(percorso_copia)
         try:
-            sorgente.backup(copia)
-            copia.execute("PRAGMA foreign_keys = ON")
-            rimuovi_strutture(copia, altre)
-            copia.commit()
-            contenuto = contenuto_struttura(copia, struttura_id, uploads_base,
-                                            single_struttura)
-            copia.execute("VACUUM")
-            copia.commit()
-        finally:
-            copia.close()
+            os.makedirs(os.path.join(destinazione, 'data'), exist_ok=True)
+            percorso_copia = os.path.join(destinazione, 'data', 'database.sqlite')
+
+            copia = sqlite3.connect(percorso_copia)
+            try:
+                sorgente.backup(copia)
+                copia.execute("PRAGMA foreign_keys = ON")
+                rimuovi_strutture(copia, altre)
+                for tabella in TABELLE_DEPLOYMENT_SORGENTE:
+                    copia.execute(f"DELETE FROM {tabella}")
+                copia.execute(
+                    "DELETE FROM log_attivita WHERE struttura_id IS NULL OR struttura_id != ?",
+                    (struttura_id,))
+                copia.commit()
+                contenuto = contenuto_struttura(copia, struttura_id, uploads_base,
+                                                single_struttura)
+                percorsi_allegati = _percorsi_allegati(copia, struttura_id)
+                copia.execute("VACUUM")
+                copia.commit()
+            finally:
+                copia.close()
+
+            if single_struttura:
+                # Nessun sottoalbero per struttura da travasare con
+                # copytree: si copiano i soli file che le righe della
+                # struttura referenziano davvero.
+                for relativo in percorsi_allegati:
+                    origine = os.path.join(uploads_base, relativo.replace('/', os.sep))
+                    if os.path.isfile(origine):
+                        dest = os.path.join(destinazione, 'uploads', relativo.replace('/', os.sep))
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        shutil.copy2(origine, dest)
+            else:
+                origine_file = cartella_struttura(uploads_base, struttura_id, single_struttura)
+                if os.path.isdir(origine_file):
+                    destinazione_file = os.path.join(
+                        destinazione, 'uploads', 'strutture', str(struttura_id))
+                    shutil.copytree(origine_file, destinazione_file)
+
+            with open(os.path.join(destinazione, 'config.json'), 'w', encoding='utf-8') as f:
+                json.dump({
+                    'database_path': 'data/database.sqlite',
+                    'uploads_path': 'uploads',
+                    'structure_name': nome,
+                }, f, ensure_ascii=False, indent=2)
+
+            with open(os.path.join(destinazione, 'ESPORTAZIONE.txt'), 'w', encoding='utf-8') as f:
+                f.write("MedInventory - archivio di una struttura\n\n")
+                f.write(f"Struttura:  {nome} (id {struttura_id})\n")
+                f.write(f"Esportata:  {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n")
+                for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
+                               'accessori', 'import', 'divisioni', 'utenti', 'tecnici', 'file'):
+                    f.write(f"  {chiave:14} {contenuto[chiave]}\n")
+                f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
+                f.write("Per reimportare questo archivio in un'installazione MedInventory:\n\n")
+                f.write(f"  python importa_installazione.py \"{destinazione}\"\n")
+
+            return destinazione
+        except Exception:
+            shutil.rmtree(destinazione, ignore_errors=True)
+            raise
     finally:
         sorgente.close()
-
-    origine_file = cartella_struttura(uploads_base, struttura_id, single_struttura)
-    if os.path.isdir(origine_file):
-        if single_struttura:
-            # cartella_struttura restituisce gia' uploads_base: e' l'intera
-            # cartella (non c'e' un sottoalbero per-struttura da isolare), va
-            # travasata cosi' com'e' sotto 'uploads/'.
-            destinazione_file = os.path.join(destinazione, 'uploads')
-        else:
-            destinazione_file = os.path.join(
-                destinazione, 'uploads', 'strutture', str(struttura_id))
-        shutil.copytree(origine_file, destinazione_file)
-
-    with open(os.path.join(destinazione, 'ESPORTAZIONE.txt'), 'w', encoding='utf-8') as f:
-        f.write("MedInventory - archivio di una struttura\n\n")
-        f.write(f"Struttura:  {nome} (id {struttura_id})\n")
-        f.write(f"Esportata:  {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n")
-        for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
-                       'accessori', 'divisioni', 'utenti', 'file'):
-            f.write(f"  {chiave:14} {contenuto[chiave]}\n")
-        f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
-        f.write("Per reimportare questo archivio in un'installazione MedInventory:\n\n")
-        f.write(f"  python importa_installazione.py \"{destinazione}\"\n")
-
-    return destinazione

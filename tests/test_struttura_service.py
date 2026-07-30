@@ -250,6 +250,9 @@ def test_contenuto_in_modalita_single_struttura(conn, tmp_path):
     percorso multi troverebbe zero file e il test fallirebbe."""
     from struttura_service import contenuto_struttura
     con, ids = conn
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/y.jpg', ids['a']['apparecchio']))
+    con.commit()
     cartella = tmp_path / 'uploads' / 'foto'
     cartella.mkdir(parents=True)
     (cartella / 'y.jpg').write_bytes(b'0' * 500)
@@ -282,31 +285,44 @@ def test_contenuto_di_default_resta_in_modalita_multi(conn, tmp_path):
 def test_esportazione_contiene_solo_la_struttura_richiesta(conn, tmp_path):
     """L'archivio deve essere una installazione con dentro una struttura sola:
     se ci finisse anche la B, consegnandolo si consegnerebbero i dati di
-    un'altra struttura."""
+    un'altra struttura. Verifica sia il database (righe) sia il filesystem
+    (l'intero sottoalbero di B non deve esistere nell'archivio) sia il
+    registro attivita' e i tentativi di login, che non hanno una FK di
+    struttura e potrebbero sopravvivere per l'intero deployment."""
     import sqlite3
     from struttura_service import esporta_struttura
     con, ids = conn
+    con.execute("INSERT INTO login_attempts (ip_address,email,esito) VALUES ('9.9.9.9','b@b.it','riuscito')")
+    con.commit()
     percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
     con.close()
 
     uploads = tmp_path / 'uploads'
-    cartella = uploads / 'strutture' / str(ids['a']['struttura']) / 'foto'
-    cartella.mkdir(parents=True)
-    (cartella / 'foto.jpg').write_bytes(b'immagine')
+    cartella_a = uploads / 'strutture' / str(ids['a']['struttura']) / 'foto'
+    cartella_a.mkdir(parents=True)
+    (cartella_a / 'foto.jpg').write_bytes(b'immagine')
+    cartella_b = uploads / 'strutture' / str(ids['b']['struttura']) / 'foto'
+    cartella_b.mkdir(parents=True)
+    (cartella_b / 'foto-b.jpg').write_bytes(b'immagine-b')
 
     destinazione = esporta_struttura(percorso_db, str(uploads),
                                      ids['a']['struttura'], str(tmp_path / 'archivi'))
 
-    copia = sqlite3.connect(os.path.join(destinazione, 'data', 'medinventory.db'))
+    copia = sqlite3.connect(os.path.join(destinazione, 'data', 'database.sqlite'))
     nomi = [r[0] for r in copia.execute("SELECT nome FROM strutture")]
     assert nomi == ['Clinica A']
     assert copia.execute("SELECT COUNT(*) FROM apparecchi").fetchone()[0] == 1
     assert copia.execute("SELECT matricola FROM apparecchi").fetchone()[0] == 'A-1'
+    assert copia.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == 0
+    righe_log = copia.execute("SELECT struttura_id FROM log_attivita").fetchall()
+    assert all(r[0] == ids['a']['struttura'] for r in righe_log)
     copia.close()
 
     atteso = os.path.join(destinazione, 'uploads', 'strutture',
                           str(ids['a']['struttura']), 'foto', 'foto.jpg')
     assert os.path.exists(atteso)
+    non_atteso = os.path.join(destinazione, 'uploads', 'strutture', str(ids['b']['struttura']))
+    assert not os.path.exists(non_atteso)
     assert os.path.exists(os.path.join(destinazione, 'ESPORTAZIONE.txt'))
 
 
@@ -369,6 +385,9 @@ def test_esportazione_in_modalita_single_struttura_include_gli_allegati(conn, tm
     foto pur avendone una sul disco."""
     from struttura_service import esporta_struttura
     con, ids = conn
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/unica.jpg', ids['a']['apparecchio']))
+    con.commit()
     percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
 
     uploads = tmp_path / 'uploads'
@@ -381,3 +400,182 @@ def test_esportazione_in_modalita_single_struttura_include_gli_allegati(conn, tm
 
     atteso = os.path.join(destinazione, 'uploads', 'foto', 'unica.jpg')
     assert os.path.exists(atteso)
+
+
+def test_esportazione_in_modalita_single_non_include_gli_allegati_di_altre_strutture(conn, tmp_path):
+    """Riproduce lo scenario del rilievo di revisione: flag single_struttura
+    ma piu' strutture nel database (es. due importa_installazione.py di
+    fila su un target single, che non ha alcuna guardia contro il caso).
+    In single-struttura cartella_struttura restituisce l'INTERA cartella
+    uploads, perche' non esiste un sottoalbero per struttura da isolare: un
+    copytree di quella cartella travasa anche gli allegati della clinica B
+    nell'archivio della clinica A. La selezione corretta e' sui percorsi
+    referenziati dalle righe della struttura (apparecchi.foto_path,
+    documenti.filepath, manutenzioni.verbale_path, verifiche.documento_path),
+    non su un albero."""
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/A.jpg', ids['a']['apparecchio']))
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/B.jpg', ids['b']['apparecchio']))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'A.jpg').write_bytes(b'immagine-a')
+    (cartella / 'B.jpg').write_bytes(b'immagine-b')
+
+    destinazione = esporta_struttura(percorso_db, str(uploads), ids['a']['struttura'],
+                                     str(tmp_path / 'archivi'), single_struttura=True)
+
+    assert os.path.exists(os.path.join(destinazione, 'uploads', 'foto', 'A.jpg'))
+    assert not os.path.exists(os.path.join(destinazione, 'uploads', 'foto', 'B.jpg'))
+
+
+def test_contenuto_in_modalita_single_non_conta_i_file_di_altre_strutture(conn, tmp_path):
+    """Stesso difetto della copia (vedi test sopra), visto dal lato dei
+    conteggi che finiscono in ESPORTAZIONE.txt: un os.walk cieco sull'intera
+    cartella uploads conterebbe anche i file della clinica B."""
+    from struttura_service import contenuto_struttura
+    con, ids = conn
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/A.jpg', ids['a']['apparecchio']))
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/B.jpg', ids['b']['apparecchio']))
+    con.commit()
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'A.jpg').write_bytes(b'0' * 100)
+    (cartella / 'B.jpg').write_bytes(b'0' * 250)
+
+    c = contenuto_struttura(con, ids['a']['struttura'], str(uploads), single_struttura=True)
+    assert c['file'] == 1
+    assert c['byte'] == 100
+
+
+# ---------------------------------------------------------------------------
+# Isolamento dei dati del deployment sorgente (rilievi 1/5 della revisione)
+# ---------------------------------------------------------------------------
+
+def test_esportazione_svuota_le_tabelle_del_deployment_sorgente(conn, tmp_path):
+    """importa_installazione.py dichiara esplicitamente (vedi CLAUDE.md) di
+    non importare sessioni, login_attempts, api_tokens, email_config e
+    import_preview: appartengono al deployment sorgente o sono transitorie.
+    rimuovi_strutture(copia, altre), da sola, non le tocca affatto se
+    riguardano la struttura ESPORTATA (non e' 'un'altra struttura'), e
+    login_attempts non ha nemmeno una FK verso strutture. L'archivio non deve
+    portarsele dietro: nessuno le reimportera' mai."""
+    import sqlite3
+    from struttura_service import esporta_struttura
+    con, ids = conn
+
+    con.execute("INSERT INTO sessioni (utente_id,token,expires_at) VALUES (?,?,datetime('now','+1 day'))",
+               (ids['a']['utente'], 'tok-a'))
+    con.execute("INSERT INTO login_attempts (ip_address,email,esito) VALUES ('1.2.3.4','x@x.it','riuscito')")
+    con.execute("INSERT INTO api_tokens (struttura_id,nome,token_hash,created_by) VALUES (?,?,?,?)",
+               (ids['a']['struttura'], 'Token A', 'hash-a', ids['a']['utente']))
+    con.execute("INSERT INTO email_config (divisione_id,email_account,email_password_encrypted,imap_server) "
+               "VALUES (NULL,'imap@x.it','cifrato','imap.x.it')")
+    import_id = con.execute(
+        "INSERT INTO import_history (struttura_id,divisione_id,tipo_import,filename,filepath,imported_by) "
+        "VALUES (?,?,'inventario','y.xlsx','y/y.xlsx',?)",
+        (ids['a']['struttura'], ids['a']['divisione'], ids['a']['utente'])).lastrowid
+    con.execute("INSERT INTO import_preview (import_id,stato) VALUES (?,'pending')", (import_id,))
+    con.commit()
+
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    destinazione = esporta_struttura(percorso_db, str(tmp_path / 'uploads'),
+                                     ids['a']['struttura'], str(tmp_path / 'archivi'))
+
+    copia = sqlite3.connect(os.path.join(destinazione, 'data', 'database.sqlite'))
+    for tabella in ('sessioni', 'login_attempts', 'api_tokens', 'email_config', 'import_preview'):
+        assert copia.execute(f"SELECT COUNT(*) FROM {tabella}").fetchone()[0] == 0, tabella
+    # Il registro resta, ma solo per la struttura esportata: non deve
+    # contenere la voce di B, ne' l'email di B travestita da voce "globale".
+    righe = copia.execute("SELECT struttura_id FROM log_attivita").fetchall()
+    assert len(righe) == 1
+    assert righe[0][0] == ids['a']['struttura']
+    copia.close()
+
+
+# ---------------------------------------------------------------------------
+# Reimportabilita' dell'archivio (rilievo 2 della revisione)
+# ---------------------------------------------------------------------------
+
+def test_esportazione_e_reimportabile_dallo_strumento_di_importazione(conn, tmp_path):
+    """L'archivio deve avere la forma che importa_installazione.py si
+    aspetta senza bisogno di --db esplicito: nome del database e config.json
+    con database_path/uploads_path/nome struttura."""
+    from struttura_service import esporta_struttura
+    from importa_installazione import Sorgente
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    destinazione = esporta_struttura(percorso_db, str(tmp_path / 'uploads'),
+                                     ids['a']['struttura'], str(tmp_path / 'archivi'))
+
+    sorgente = Sorgente(destinazione)
+    assert os.path.normpath(sorgente.db_path) == os.path.join(destinazione, 'data', 'database.sqlite')
+    assert os.path.exists(sorgente.db_path)
+    assert sorgente.nome_struttura_suggerito() == 'Clinica A'
+    sorgente.chiudi()
+
+
+# ---------------------------------------------------------------------------
+# Pulizia dopo un'esportazione fallita (rilievo 4 della revisione)
+# ---------------------------------------------------------------------------
+
+def test_esportazione_fallita_non_lascia_una_copia_integrale_su_disco(conn, tmp_path, monkeypatch):
+    """Se l'esportazione fallisce a meta' (qui: rimuovi_strutture solleva),
+    sul disco resta gia' una cartella con dentro il backup COMPLETO di tutti
+    i tenant (rimuovi_strutture non e' ancora girata). Deve essere rimossa,
+    non lasciata a tempo indeterminato indistinguibile da un archivio buono
+    tranne che per l'assenza di ESPORTAZIONE.txt."""
+    import struttura_service as svc
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    class OrologioFermo(svc.datetime):
+        @classmethod
+        def now(cls):
+            return svc.datetime(2026, 2, 2, 10, 0, 0)
+    monkeypatch.setattr(svc, 'datetime', OrologioFermo)
+
+    def rompi(*a, **k):
+        raise RuntimeError('backup interrotto')
+    monkeypatch.setattr(svc, 'rimuovi_strutture', rompi)
+
+    cartella_archivi = str(tmp_path / 'archivi')
+    atteso = os.path.join(cartella_archivi, svc._nome_cartella('Clinica A'))
+
+    with pytest.raises(RuntimeError):
+        svc.esporta_struttura(percorso_db, str(tmp_path / 'uploads'), ids['a']['struttura'],
+                              cartella_archivi)
+
+    assert not os.path.exists(atteso)
+
+
+# ---------------------------------------------------------------------------
+# ESPORTAZIONE.txt completo (rilievo 6 della revisione)
+# ---------------------------------------------------------------------------
+
+def test_esportazione_txt_elenca_tutte_le_chiavi_di_contenuto_struttura(conn, tmp_path):
+    """contenuto_struttura restituisce 10 chiavi (piu' 'byte'): ESPORTAZIONE.txt
+    ne elencava solo 8, mancavano 'import' e 'tecnici'."""
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    destinazione = esporta_struttura(percorso_db, str(tmp_path / 'uploads'),
+                                     ids['a']['struttura'], str(tmp_path / 'archivi'))
+
+    with open(os.path.join(destinazione, 'ESPORTAZIONE.txt'), encoding='utf-8') as f:
+        testo = f.read()
+    for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti', 'accessori',
+                  'import', 'divisioni', 'utenti', 'tecnici', 'file', 'byte'):
+        assert f"  {chiave:14}" in testo, chiave
