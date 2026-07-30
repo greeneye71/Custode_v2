@@ -493,7 +493,13 @@ ORDER BY prossima_scadenza ASC""",
             # quello della tabella nuova. Una utenti di uno schema v1.x (senza
             # struttura_id) ne ha di meno e l'INSERT fallirebbe — nel modo
             # peggiore, perché RENAME e CREATE TABLE sono DDL già in autocommit
-            # e il rollback dell'except sotto non li annulla.
+            # e il rollback dell'except sotto non li annulla: resterebbe una
+            # utenti vuota con i dati intrappolati in utenti_old_v22, e l'app
+            # si avvia comunque, senza che nessuno riesca più ad accedere.
+            # cols_vecchie può anche contenere colonne che la tabella nuova non
+            # conosce (installazione personalizzata, o colonna rimossa fra le
+            # versioni): si scartano e si segnalano, perché un dato che sparisce
+            # in silenzio è peggio di un errore.
             cols_nuove = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
             cols_comuni = [c for c in cols_vecchie if c in cols_nuove]
             cols_scartate = [c for c in cols_vecchie if c not in cols_nuove]
