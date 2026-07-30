@@ -6,6 +6,34 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.5.2] - 2026-07-30
+
+Release correttiva urgente, un solo difetto. Chi ha gia' installato la 2.5.x su un
+database aggiornato non e' interessato; chi aggiorna da una versione anteriore alla
+2.2 deve passare da qui.
+
+### Corretto
+
+- **La migrazione v2.2 svuotava la tabella `utenti`** partendo da uno schema anteriore
+  alla 2.0. `INSERT INTO utenti SELECT ...` non nominava le colonne di destinazione:
+  con una `utenti` vecchia che ha meno colonne della nuova (manca `struttura_id`)
+  SQLite rifiuta l'inserimento, e siccome `ALTER TABLE RENAME` e `CREATE TABLE` sono
+  DDL gia' in autocommit, il rollback del gestore d'errore non li annullava. Restava
+  una `utenti` vuota con i dati reali in `utenti_old_v22`: l'applicazione si avviava
+  regolarmente e nessuno riusciva piu' ad accedere, amministratori compresi.
+  Quando invece i conteggi coincidevano per caso — una colonna aggiunta a mano
+  nell'installazione di partenza al posto di `struttura_id` — l'inserimento riusciva
+  disallineando i valori, e il contenuto di quella colonna finiva in `struttura_id`.
+  Ora le colonne di destinazione sono nominate esplicitamente e l'elenco e' ridotto
+  all'intersezione fra vecchia e nuova tabella, con le colonne scartate segnalate nel
+  log invece di essere perse in silenzio.
+
+  Se l'aggiornamento e' gia' stato tentato e la tabella `utenti_old_v22` esiste ancora
+  nel database, i dati sono recuperabili: ripristinare il backup precedente
+  all'aggiornamento e ripetere l'aggiornamento con questa versione.
+
+---
+
 ## [2.5.1] - 2026-07-28
 
 Release di rifinitura delle stampe: correzioni emerse dalla revisione finale del
