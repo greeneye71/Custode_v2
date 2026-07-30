@@ -22,6 +22,26 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   `models.py`, e l'assenza di scope significa nessun dato.
 - Lo stesso difetto in `models.apparecchio_accessibile()`, il controllo che protegge i
   download degli allegati.
+- **Lo stesso difetto in dodici rotte per singolo record — e li' si poteva anche
+  scrivere e cancellare.** Le rotte di dettaglio, modifica, dismissione, caricamento
+  foto e documenti di un apparecchio, e di modifica ed eliminazione di manutenzioni e
+  verifiche, avevano ciascuna la propria copia del controllo, scritta come
+  `AND (struttura_id = ? OR ? IS NULL)`: senza struttura attiva la condizione era vera
+  per qualunque riga di qualunque struttura, e il controllo di divisione che seguiva
+  escludeva esplicitamente i ruoli `admin`, `superadmin` e `tecnico`. Non serviva
+  alcuno stato anomalo per arrivarci: **un tecnico assegnato a piu' strutture, nei
+  minuti fra il login e la scelta della struttura, poteva leggere e dismettere
+  apparecchi di una struttura a cui non era assegnato**, ed eliminare manutenzioni e
+  verifiche altrui. Un admin la cui struttura fosse stata disattivata poteva fare
+  altrettanto. Ora tutte e dodici passano da `apparecchio_accessibile()`, che era gia'
+  l'unico posto in cui la regola andava scritta.
+- La stessa famiglia negli import: `import_bp.analizza()` saltava il controllo di
+  divisione per il ruolo `admin` (che poteva cosi' attribuire un import alla divisione
+  di un'altra struttura, file compreso), passava al thread di analisi la struttura
+  della sessione invece di quella dell'import, e l'apparecchio individuato
+  automaticamente dall'AI veniva usato senza verificarne lo scope — mentre
+  l'associazione scelta a mano accanto veniva verificata. Il risultato poteva essere
+  una manutenzione di una struttura scritta su un apparecchio di un'altra.
 - `utenti.struttura_id` passa da `ON DELETE SET NULL` a `RESTRICT`: una cancellazione
   diretta sul database non puo' piu' lasciare un admin o un utente senza struttura.
   Per chi ne aveva gia' una NULL (installazioni aggiornate da uno schema anteriore
@@ -124,6 +144,30 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   vengono spostati a mano sotto `uploads/strutture/<id>/`, l'esportazione e la
   cancellazione di quella struttura si rifiutano (vedi sopra) invece di procedere su
   un archivio incompleto.
+
+Dove l'isolamento non arriva ancora — noto, misurato, non corretto in questa release:
+
+- **`pulisci_uploads.py --elimina` cancella le pagine di un import in attesa di
+  revisione.** Gli import multipagina salvano le pagine sotto `uploads/import/pages_*`
+  e le referenziano da `import_preview.dati_estratti`, che non e' una colonna di
+  percorso: lo strumento le dichiara orfane. Se poi si conferma quell'import, la
+  manutenzione nasce senza verbale allegato, **senza errore e senza avviso**. Il PDF
+  di partenza resta in `import_history`, quindi si recupera rifacendo l'import.
+  Conviene chiudere gli import in sospeso prima di usare `--elimina`.
+- **`email_monitor` puo' agganciare un verbale ricevuto via email all'apparecchio di
+  un'altra struttura.** La ricerca parte con lo scope giusto, ma se dentro la struttura
+  non trova nulla prosegue senza filtro; il risultato alimenta un inserimento
+  automatico, senza revisione umana. E' il piu' insidioso dei tre perche' non c'e'
+  nessuno a guardare.
+- **Gli allegati sotto `uploads/import/` non sono isolati per struttura.** `/uploads/`
+  sa proteggere solo i percorsi nella forma `strutture/<id>/...`: i documenti caricati
+  per un import sono leggibili da qualunque utente autenticato, di qualunque struttura.
+- **`importa_installazione.py` assegna una struttura anche agli utenti `tecnico` che
+  importa**, e non importa `tecnici_strutture`. Quel tecnico non riesce ad accedere
+  finche' un admin non lo riassegna, e — avendo una struttura — verrebbe cancellato
+  insieme ad essa, contro la garanzia che i tecnici sopravvivono. Non riguarda gli
+  archivi prodotti da questa applicazione, che non contengono tecnici; riguarda
+  l'assorbimento di un'installazione estranea.
 
 ---
 

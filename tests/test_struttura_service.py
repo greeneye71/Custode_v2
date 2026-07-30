@@ -1315,3 +1315,55 @@ def test_in_modalita_single_il_perimetro_e_l_intera_cartella_uploads(conn, tmp_p
     assert not (uploads / 'foto' / 'a.jpg').exists()
     assert esito['file_non_rimossi'] == []
     assert uploads.is_dir()
+
+
+def test_l_archivio_non_contiene_le_email_del_deployment_nel_registro(conn, tmp_path):
+    """Togliere superadmin e tecnici dalla tabella utenti non basta: la stessa
+    funzione che li rimuove annota l'email nel testo della voce di registro, e
+    la potatura di log_attivita lascia nell'archivio le voci della struttura
+    esportata. Le voci create da un superadmin (nuovo_token, carica_logo,
+    test_ai_config, elimina_divisione sono tutte @superadmin_required e passano
+    struttura_id) si ritrovavano cosi' l'email del superadmin del deployment
+    dentro l'archivio consegnabile, dopo che era stata tolta da utenti.
+
+    Nella direzione CANCELLAZIONE l'annotazione resta giusta e un altro test la
+    difende: il registro rimane nel deployment, e li' sapere chi ha fatto cosa
+    e' proprio cio' che non deve sparire con l'account."""
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    a = ids['a']['struttura']
+
+    # Un superadmin del deployment e un tecnico esterno che hanno lasciato
+    # traccia nel registro DELLA struttura esportata: e' il caso ordinario.
+    sup = con.execute(
+        "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id) "
+        "VALUES ('super@studiobergamaschi.net','x','S','S','superadmin',NULL)").lastrowid
+    con.execute(
+        "INSERT INTO log_attivita (utente_id,azione,entita,struttura_id,dettagli) "
+        "VALUES (?,'crea_token','api_tokens',?,'Token \"backup\" creato')", (sup, a))
+    con.execute(
+        "INSERT INTO log_attivita (utente_id,azione,entita,struttura_id,dettagli) "
+        "VALUES (?,'modifica','apparecchi',?,'Intervento del tecnico')",
+        (ids['tecnico'], a))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    archivio = esporta_struttura(percorso_db, str(tmp_path / 'uploads'), a,
+                                 str(tmp_path / 'archivi'))
+
+    copia = sqlite3.connect(os.path.join(archivio, 'data', 'database.sqlite'))
+    testo_registro = ' '.join(
+        r[0] or '' for r in copia.execute("SELECT dettagli FROM log_attivita"))
+    utenti_archivio = {r[0] for r in copia.execute("SELECT email FROM utenti")}
+    orfane = copia.execute(
+        "SELECT COUNT(*) FROM log_attivita WHERE utente_id IS NOT NULL "
+        "AND utente_id NOT IN (SELECT id FROM utenti)").fetchone()[0]
+    copia.close()
+
+    assert 'super@studiobergamaschi.net' not in testo_registro
+    assert 'tec@x.it' not in testo_registro
+    assert utenti_archivio == {'admin@A.it'}
+    # E il registro resta utilizzabile: nessuna voce punta a un utente che
+    # nell'archivio non esiste piu'.
+    assert orfane == 0

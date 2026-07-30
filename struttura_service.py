@@ -109,9 +109,9 @@ def _percorsi_allegati(conn, struttura_id):
     return percorsi
 
 
-def _rimuovi_utenti(conn, ids_utenti):
+def _rimuovi_utenti(conn, ids_utenti, annota_email=True):
     """Libera ogni riferimento (RIFERIMENTI_UTENTE) verso gli utenti indicati,
-    anonimizza la loro identita' nel registro attivita' invece di lasciare un
+    slega la loro identita' dal registro attivita' invece di lasciare un
     utente_id orfano, poi cancella le righe.
 
     Isolata da rimuovi_strutture perche' serve anche a esporta_struttura, su
@@ -120,7 +120,20 @@ def _rimuovi_utenti(conn, ids_utenti):
     usa in piu' per gli utenti senza struttura (superadmin e tecnici), che
     rimuovi_strutture lascia intenzionalmente fuori perche' nella direzione
     cancellazione quegli account non devono sparire (vedi il commento al
-    passo 6 qui sotto)."""
+    passo 6 qui sotto).
+
+    annota_email decide se scrivere l'email nel testo della voce di registro,
+    ed e' l'unica differenza fra le due direzioni. Nella CANCELLAZIONE serve:
+    il registro resta nel deployment, e su un registro di apparecchi
+    elettromedicali sapere chi ha fatto cosa e' proprio la cosa che non deve
+    sparire con l'account. Nell'ESPORTAZIONE no: la potatura di log_attivita
+    lascia nell'archivio le voci della struttura esportata, e annotarle qui
+    ci scriverebbe dentro le email del superadmin del deployment e dei
+    tecnici esterni - rimettendo nell'archivio consegnabile esattamente le
+    identita' che toglierle dalla tabella utenti voleva tenerne fuori.
+    Riordinare le due operazioni non basterebbe: l'annotazione seleziona per
+    utente_id, non per struttura, quindi tocca le voci superstiti in
+    qualunque ordine."""
     if not ids_utenti:
         return
     seg = ','.join('?' * len(ids_utenti))
@@ -128,10 +141,14 @@ def _rimuovi_utenti(conn, ids_utenti):
         f"SELECT id, email FROM utenti WHERE id IN ({seg})", ids_utenti).fetchall()
     for riga in utenti:
         uid, email = riga[0], riga[1]
-        conn.execute(
-            "UPDATE log_attivita SET utente_id = NULL, "
-            "dettagli = COALESCE(dettagli, '') || ' [utente eliminato: ' || ? || ']' "
-            "WHERE utente_id = ?", (email, uid))
+        if annota_email:
+            conn.execute(
+                "UPDATE log_attivita SET utente_id = NULL, "
+                "dettagli = COALESCE(dettagli, '') || ' [utente eliminato: ' || ? || ']' "
+                "WHERE utente_id = ?", (email, uid))
+        else:
+            conn.execute(
+                "UPDATE log_attivita SET utente_id = NULL WHERE utente_id = ?", (uid,))
         for tabella, colonna in RIFERIMENTI_UTENTE:
             conn.execute(f"UPDATE {tabella} SET {colonna} = NULL WHERE {colonna} = ?", (uid,))
     conn.execute(f"DELETE FROM utenti WHERE id IN ({seg})", ids_utenti)
@@ -401,9 +418,14 @@ def _percorsi_legacy_fuori_multi(uploads_base, struttura_id, percorsi):
 def percorsi_installazione_non_migrata(conn, uploads_base, struttura_id):
     """Percorsi referenziati dalla struttura che _percorsi_legacy_fuori_multi
     giudica un sintomo di installazione promossa da single a multi senza
-    travaso dei file. Sempre vuoto in modalita' single: non ha senso, non
-    esiste un perimetro piu' stretto di uploads_base da cui poter uscire
-    restando comunque dentro uploads_base.
+    travaso dei file.
+
+    Non filtra da se' la modalita': in single restituisce comunque i percorsi
+    che non stanno sotto uploads/strutture/, cioe' in pratica tutti. Sono i
+    CHIAMANTI a interrogarla solo in modalita' multi, dove la domanda ha senso
+    — in single non esiste un perimetro per struttura da cui uscire restando
+    dentro uploads_base. Chi la usasse altrove senza quella guardia otterrebbe
+    un rifiuto su ogni installazione single sana.
 
     Uso: esporta_struttura si rifiuta (InstallazioneNonMigrataError) se
     questo elenco non e' vuoto, PRIMA di scrivere qualunque cosa su disco;
@@ -584,8 +606,9 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                     "sposta i file. Esportazione e cancellazione si fermano qui per non "
                     "produrre un archivio incompleto: sposta manualmente questi file sotto "
                     f"uploads/strutture/{struttura_id}/<tipo>/ (facendo corrispondere i "
-                    "percorsi salvati nel database), oppure ripristina temporaneamente la "
-                    "modalita' single-struttura, prima di riprovare.")
+                    "percorsi salvati nel database), poi riprova. Tornare in modalita' "
+                    "single-struttura sblocca la sola esportazione: la cancellazione di "
+                    "una struttura in quella modalita' non e' disponibile.")
 
         destinazione = os.path.join(
             cartella_archivi, _cartella_esportazione_libera(cartella_archivi, nome))
@@ -619,7 +642,7 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                 # tecnico_id): non serve azzerarla a parte.
                 non_del_deployment = [r[0] for r in copia.execute(
                     "SELECT id FROM utenti WHERE struttura_id IS NULL").fetchall()]
-                _rimuovi_utenti(copia, non_del_deployment)
+                _rimuovi_utenti(copia, non_del_deployment, annota_email=False)
                 # Le chiavi AI globali e le credenziali SMTP non sono della
                 # struttura anche se la riga e' formalmente sua (vedi
                 # FRAMMENTI_CONFIG_SENSIBILE): un archivio consegnabile non
