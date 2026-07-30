@@ -6,6 +6,62 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.6.0] - 2026-07-30
+
+Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttura.
+
+### Corretto
+
+- **Un admin o tecnico senza struttura attiva vedeva gli apparecchi di tutte le
+  strutture.** `_get_divisione_filter()` restituiva "nessun filtro" invece di "nessun
+  dato", in quattro copie divergenti (apparecchi, manutenzioni, verifiche, export). Lo
+  stato si raggiungeva sia eliminando una struttura sia semplicemente disattivandola.
+  Il caso piu' grave era l'esportazione: per un superadmin non impersonante
+  restituiva davvero "nessun filtro", cioe' i dati di tutte le strutture; le altre tre
+  rotte fallivano gia' chiuse (nessun risultato). Ora il filtro e' uno solo, in
+  `models.py`, e l'assenza di scope significa nessun dato.
+- Lo stesso difetto in `models.apparecchio_accessibile()`, il controllo che protegge i
+  download degli allegati.
+- `utenti.struttura_id` passa da `ON DELETE SET NULL` a `RESTRICT`: una cancellazione
+  diretta sul database non puo' piu' lasciare un admin o un utente senza struttura.
+  Per chi ne aveva gia' una NULL (installazioni aggiornate da uno schema anteriore
+  alla 2.6): se esiste esattamente una struttura attiva vengono assegnati a quella;
+  se non ce n'e' nessuna restano cosi, con un avviso nel log; con due o piu'
+  strutture attive vengono disattivati, segnalati anch'essi nel log.
+
+### Aggiunto
+
+- **Scheda della struttura** (`/strutture/<id>`): conteggi, spazio occupato, utenti e
+  tecnici assegnati. Riattivazione di una struttura disattivata dall'elenco.
+- **Esportazione** di una struttura in un archivio con la forma di un'installazione,
+  reimportabile con `importa_installazione.py`. Disponibile anche da sola, non solo
+  come passaggio della cancellazione. Limite noto: il reimporto non ripristina il
+  logo (`strutture.logo_path` e il relativo file) ne' lo storico import
+  (`import_history`, dietro il flag opt-in `--con-import-history`) — i dati restano
+  nell'archivio, solo non vengono riscritti automaticamente in questi due punti.
+- **Cancellazione completa** di una struttura: apparecchi, manutenzioni, verifiche,
+  documenti, accessori, import, divisioni, configurazione, token, utenti e allegati.
+  Tre freni in serie: la struttura dev'essere gia' disattivata, l'archivio viene
+  prodotto prima di toccare qualsiasi cosa, e il nome va scritto a mano. I tecnici
+  sopravvivono, perdendo solo l'assegnazione. Il registro attivita' sopravvive,
+  slegato dalla struttura. La cancellazione dei file segue le righe del database, non
+  un `rmtree` dell'intero albero: un file gia' fuori dal perimetro della struttura
+  (per esempio lasciato da un'importazione interrotta) non viene toccato e resta sul
+  disco — per questo `pulisci_uploads.py`, qui sotto, fa parte di questa stessa
+  release e non della prossima.
+- **`pulisci_uploads.py`**: elenca i file sotto `uploads/` che nessuna riga del
+  database referenzia. Elenca soltanto, salvo `--elimina` — che chiede comunque
+  conferma e si rifiuta se il database non referenzia alcun percorso pur essendoci
+  file sotto `uploads/`: e' il segno di un database vuoto o di un percorso
+  configurato male, non di un'installazione senza allegati.
+
+### Modificato
+
+- Il logo precedente viene cancellato quando se ne carica uno nuovo, e
+  `percorso_logo_struttura()` verifica che il percorso resti dentro `uploads/`.
+
+---
+
 ## [2.5.2] - 2026-07-30
 
 Release correttiva urgente, un solo difetto. Chi ha gia' installato la 2.5.x su un
