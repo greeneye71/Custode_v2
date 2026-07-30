@@ -59,6 +59,16 @@ COLONNE_ALLEGATI = (
 )
 
 
+class InstallazioneNonMigrataError(Exception):
+    """Sollevata da esporta_struttura quando la struttura ha allegati che
+    esistono su disco ma fuori dallo schema multi-struttura
+    (uploads_base/strutture/<id>/...): sintomo di un'installazione promossa
+    da single a multi con toggle_modalita.py, che cambia solo il flag e non
+    sposta i file (vedi CHANGELOG). Fermare qui evita di produrre un archivio
+    vuoto o incompleto - e di far precedere quell'archivio a una
+    cancellazione che si crede coperta da un backup che non lo e'."""
+
+
 def _percorsi_allegati(conn, struttura_id):
     """Percorsi relativi (colonne *_path) referenziati dalle righe di una
     struttura. L'elenco delle colonne e' in COLONNE_ALLEGATI, non qui: questo
@@ -304,11 +314,68 @@ def _allegato_nel_perimetro(uploads_base, radice, relativo):
     programma, e verificare costa una realpath.
     """
     assoluto = os.path.realpath(os.path.join(uploads_base, relativo.replace('/', os.sep)))
-    if assoluto != radice and not assoluto.startswith(radice + os.sep):
+    if _fuori_dal_perimetro(radice, assoluto):
         return None
     if not os.path.isfile(assoluto):
         return None
     return assoluto
+
+
+def _fuori_dal_perimetro(radice, assoluto):
+    """True se il percorso assoluto (gia' risolto con realpath) non ricade
+    dentro radice. Estratta da _allegato_nel_perimetro perche' serve anche a
+    _percorsi_legacy_fuori_multi, con una radice diversa (l'intero albero
+    uploads_base/strutture/, non il sottoalbero di una singola struttura)."""
+    return assoluto != radice and not assoluto.startswith(radice + os.sep)
+
+
+def _percorsi_legacy_fuori_multi(uploads_base, struttura_id, percorsi):
+    """Fra i percorsi passati (quelli di _percorsi_allegati), quelli che
+    esistono davvero su disco ma non ricadono ne' nel perimetro della
+    struttura ne', piu' in generale, nell'intero schema multi-struttura
+    (uploads_base/strutture/...).
+
+    Non e' lo stesso controllo di _allegato_nel_perimetro/_fuori_dal_perimetro
+    da solo: un percorso che esce dal perimetro della struttura ma resta
+    dentro uploads_base/strutture/ (una risalita verso un'altra struttura, o
+    un riferimento incrociato scritto per errore) e' un'anomalia isolata di
+    UNA riga - _allegato_nel_perimetro la rifiuta gia' e la cancellazione la
+    segnala in 'file_non_rimossi' senza toccarla, comportamento verificato e
+    voluto (vedi test_un_percorso_con_risalita_non_porta_via_un_file_di_un_
+    altra_struttura). Qui invece si cerca il sintomo opposto: un file che
+    esiste, appartiene a questa struttura (una riga la referenzia), ma non e'
+    MAI stato scritto secondo lo schema multi-struttura - il segno di
+    un'installazione promossa da single a multi con toggle_modalita.py, che
+    cambia solo il flag di configurazione e non sposta i file (vedi
+    CHANGELOG). Continuare comunque produrrebbe un archivio vuoto o
+    incompleto, silenziosamente."""
+    radice = os.path.realpath(cartella_struttura(uploads_base, struttura_id, False))
+    radice_multi = os.path.realpath(os.path.join(uploads_base, 'strutture'))
+    fuori = []
+    for relativo in sorted(percorsi):
+        grezzo = os.path.join(uploads_base, relativo.replace('/', os.sep))
+        if not os.path.exists(grezzo):
+            continue
+        assoluto = os.path.realpath(grezzo)
+        if _fuori_dal_perimetro(radice, assoluto) and _fuori_dal_perimetro(radice_multi, assoluto):
+            fuori.append(relativo)
+    return fuori
+
+
+def percorsi_installazione_non_migrata(conn, uploads_base, struttura_id):
+    """Percorsi referenziati dalla struttura che _percorsi_legacy_fuori_multi
+    giudica un sintomo di installazione promossa da single a multi senza
+    travaso dei file. Sempre vuoto in modalita' single: non ha senso, non
+    esiste un perimetro piu' stretto di uploads_base da cui poter uscire
+    restando comunque dentro uploads_base.
+
+    Uso: esporta_struttura si rifiuta (InstallazioneNonMigrataError) se
+    questo elenco non e' vuoto, PRIMA di scrivere qualunque cosa su disco;
+    la rotta della scheda/pagina di conferma lo interroga per lo stesso
+    motivo, prima di mostrare conteggi che sarebbero silenziosamente
+    sbagliati (vedi strutture_bp.conferma_eliminazione)."""
+    return _percorsi_legacy_fuori_multi(
+        uploads_base, struttura_id, _percorsi_allegati(conn, struttura_id))
 
 
 def anteprima_cancellazione_file(conn, struttura_id, uploads_base,
@@ -417,6 +484,24 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
     successive su un target single, che non ha guardie contro il caso). Si
     copiano quindi i soli file referenziati dalle righe della struttura.
 
+    In modalita' multi, se la struttura ha allegati che percorsi_installazione_
+    non_migrata giudica scritti secondo il vecchio schema single-struttura (il
+    caso vero: un'installazione promossa con toggle_modalita.py, che cambia
+    solo il flag e non sposta i file), la funzione si RIFIUTA sollevando
+    InstallazioneNonMigrataError, prima di scrivere qualunque cosa su disco.
+    Senza questo controllo l'archivio uscirebbe privo di quegli allegati (il
+    copytree del sottoalbero uploads/strutture/<id>/ non li trova, perche' non
+    sono li'): un archivio incompleto consegnato come se fosse buono, e se
+    l'esportazione precede una cancellazione (elimina_struttura la chiama per
+    prima) quei file diventerebbero orfani cancellabili da pulisci_uploads.py
+    senza che ne esista copia da nessuna parte. Un singolo riferimento
+    incrociato a un'altra struttura (una risalita, o un percorso scritto per
+    errore) non basta a far scattare il rifiuto: resta dentro lo schema
+    multi-struttura (uploads/strutture/...), e' un'anomalia isolata di UNA
+    riga, ed e' gia' gestita da _allegato_nel_perimetro/file_non_rimossi senza
+    bisogno di bloccare l'intera operazione (vedi il docstring di
+    _percorsi_legacy_fuori_multi).
+
     Se l'esportazione fallisce a qualunque passo dopo la creazione della
     cartella di destinazione, quella cartella (che a quel punto puo' contenere
     un backup INTEGRALE di tutti i tenant, prima ancora di essere ripulita)
@@ -431,6 +516,23 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
         nome = nome[0]
         altre = [r[0] for r in sorgente.execute(
             "SELECT id FROM strutture WHERE id != ?", (struttura_id,))]
+
+        if not single_struttura:
+            non_migrati = percorsi_installazione_non_migrata(sorgente, uploads_base, struttura_id)
+            if non_migrati:
+                elenco = ', '.join(non_migrati[:10])
+                if len(non_migrati) > 10:
+                    elenco += f", ... (+{len(non_migrati) - 10})"
+                raise InstallazioneNonMigrataError(
+                    f'La struttura "{nome}" ha {len(non_migrati)} allegati che esistono su '
+                    "disco ma fuori dallo schema multi-struttura (uploads/strutture/"
+                    f"{struttura_id}/...): {elenco}. E' il segno di un'installazione promossa "
+                    "da single a multi con toggle_modalita.py, che cambia solo il flag e non "
+                    "sposta i file. Esportazione e cancellazione si fermano qui per non "
+                    "produrre un archivio incompleto: sposta manualmente questi file sotto "
+                    f"uploads/strutture/{struttura_id}/<tipo>/ (facendo corrispondere i "
+                    "percorsi salvati nel database), oppure ripristina temporaneamente la "
+                    "modalita' single-struttura, prima di riprovare.")
 
         destinazione = os.path.join(
             cartella_archivi, _cartella_esportazione_libera(cartella_archivi, nome))

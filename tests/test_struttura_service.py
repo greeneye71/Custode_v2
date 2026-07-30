@@ -774,6 +774,133 @@ def test_esportazione_single_e_multi_producono_gli_stessi_allegati(conn, tmp_pat
 
 
 # ---------------------------------------------------------------------------
+# Installazione promossa da single a multi (Critico 2 della revisione finale)
+# ---------------------------------------------------------------------------
+#
+# toggle_modalita.py cambia solo il flag di configurazione: un'installazione
+# nata single, promossa a multi, tiene i suoi allegati nel vecchio percorso
+# (uploads/<tipo>/, senza il prefisso strutture/<id>/) mentre il codice in
+# modalita' multi li cerca sotto uploads/strutture/<id>/. Prima di questo
+# fix l'esportazione produceva un archivio senza quegli allegati (il
+# copytree del sottoalbero, che non esiste, non trova nulla) e la
+# cancellazione che la segue perdeva i file per sempre: non c'e' copia da
+# nessuna parte, e pulisci_uploads.py li cancella perche' non sono piu'
+# referenziati da nessuna riga dopo la cancellazione della struttura.
+
+def _prepara_installazione_promossa(conn, tmp_path):
+    """Struttura A con 3 allegati scritti secondo il vecchio schema single
+    (uploads/<tipo>/<file>, senza 'strutture/<id>/'), riferiti dalle righe
+    con lo stesso percorso: esattamente cio' che upload_subdir scrive quando
+    single_struttura era True. Nessuna cartella 'strutture/' esiste ancora:
+    la promozione ha cambiato solo il flag, non i file."""
+    con, ids = conn
+    a = ids['a']['struttura']
+    apparecchio = ids['a']['apparecchio']
+    manutenzione_id = con.execute(
+        "SELECT id FROM manutenzioni WHERE apparecchio_id=?", (apparecchio,)).fetchone()[0]
+
+    uploads = tmp_path / 'uploads'
+    (uploads / 'foto').mkdir(parents=True)
+    (uploads / 'verbali').mkdir(parents=True)
+    (uploads / 'foto' / 'app1.jpg').write_bytes(b'foto-vecchia')
+    (uploads / 'verbali' / 'verbale1.pdf').write_bytes(b'verbale-vecchio')
+
+    con.execute("UPDATE apparecchi SET foto_path='foto/app1.jpg' WHERE id=?", (apparecchio,))
+    con.execute("UPDATE manutenzioni SET verbale_path='verbali/verbale1.pdf' WHERE id=?",
+                (manutenzione_id,))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+    return percorso_db, str(uploads), a
+
+
+def test_esportazione_rifiuta_un_installazione_promossa_non_migrata(conn, tmp_path):
+    """Il difetto dimostrato dal revisore: senza questo controllo l'archivio
+    usciva con 'file: 0' pur avendo 2 allegati referenziati e reali sul
+    disco. Ora esporta_struttura si rifiuta PRIMA di scrivere qualunque cosa:
+    niente cartella di destinazione, cosi' un archivio incompleto non puo'
+    nascere e non puo' precedere una cancellazione che si crede al sicuro."""
+    from struttura_service import esporta_struttura, InstallazioneNonMigrataError
+    percorso_db, uploads, a = _prepara_installazione_promossa(conn, tmp_path)
+    cartella_archivi = str(tmp_path / 'archivi')
+
+    with pytest.raises(InstallazioneNonMigrataError, match='foto/app1.jpg'):
+        esporta_struttura(percorso_db, uploads, a, cartella_archivi)
+
+    assert not os.path.exists(cartella_archivi), \
+        "il rifiuto deve arrivare prima di creare qualunque cartella di destinazione"
+
+
+def test_la_cancellazione_di_un_installazione_promossa_si_ferma_prima_di_toccare_il_database(conn, tmp_path):
+    """elimina_struttura chiama esporta_struttura per prima: se questa si
+    rifiuta, la cancellazione non deve nemmeno arrivare a rimuovi_strutture.
+    Senza questo la struttura sparirebbe dal database mentre l'archivio che
+    doveva salvarne gli allegati non e' mai stato scritto - il caso peggiore
+    demolito dalla revisione."""
+    from struttura_service import elimina_struttura, InstallazioneNonMigrataError
+    percorso_db, uploads, a = _prepara_installazione_promossa(conn, tmp_path)
+
+    with pytest.raises(InstallazioneNonMigrataError):
+        elimina_struttura(percorso_db, uploads, a, str(tmp_path / 'archivi'))
+
+    vivo = sqlite3.connect(percorso_db)
+    assert vivo.execute("SELECT COUNT(*) FROM strutture WHERE id=?", (a,)).fetchone()[0] == 1
+    assert vivo.execute("SELECT COUNT(*) FROM apparecchi WHERE struttura_id=?", (a,)).fetchone()[0] == 1
+    vivo.close()
+    # E i file di partenza sono ancora li': nessuno li ha toccati.
+    assert os.path.exists(os.path.join(uploads, 'foto', 'app1.jpg'))
+    assert os.path.exists(os.path.join(uploads, 'verbali', 'verbale1.pdf'))
+
+
+def test_percorsi_installazione_non_migrata_e_vuoto_in_modalita_single(conn, tmp_path):
+    """Lo stesso stato di prima ma con single_struttura=True (il caso
+    davvero legittimo, prima della promozione): non deve scattare nulla,
+    perche' in single non c'e' un perimetro piu' stretto di uploads_base da
+    cui un file possa 'uscire'."""
+    from struttura_service import esporta_struttura
+    percorso_db, uploads, a = _prepara_installazione_promossa(conn, tmp_path)
+
+    destinazione = esporta_struttura(percorso_db, uploads, a, str(tmp_path / 'archivi'),
+                                     single_struttura=True)
+    assert os.path.exists(os.path.join(destinazione, 'uploads', 'foto', 'app1.jpg'))
+    assert os.path.exists(os.path.join(destinazione, 'uploads', 'verbali', 'verbale1.pdf'))
+
+
+def test_un_riferimento_incrociato_a_un_altra_struttura_non_fa_scattare_il_rifiuto(conn, tmp_path):
+    """Il caso che il brief chiede esplicitamente di non rompere: in
+    un'installazione multi altrimenti normale, un singolo allegato
+    referenziato fuori dal perimetro della propria struttura (qui: una
+    risalita verso la cartella della B) resta un'anomalia isolata di UNA
+    riga, gia' coperta da _allegato_nel_perimetro/file_non_rimossi. Non deve
+    diventare un rifiuto dell'intera esportazione: la differenza rispetto al
+    test sopra e' che questo percorso, pur fuori dal SUO perimetro, resta
+    dentro l'albero uploads/strutture/ (e' della B, non un residuo single)."""
+    from struttura_service import esporta_struttura, percorsi_installazione_non_migrata
+    con, ids = conn
+    a, b = ids['a']['struttura'], ids['b']['struttura']
+
+    uploads = tmp_path / 'uploads'
+    for etichetta, struttura_id in (('a', a), ('b', b)):
+        cartella = uploads / 'strutture' / str(struttura_id) / 'foto'
+        cartella.mkdir(parents=True)
+        (cartella / f'{etichetta}.jpg').write_bytes(b'x' * 10)
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+                (f'strutture/{a}/foto/../../{b}/foto/b.jpg', ids['a']['apparecchio']))
+    con.commit()
+
+    assert percorsi_installazione_non_migrata(con, str(uploads), a) == [], \
+        "una risalita verso un'altra struttura non e' un'installazione non migrata"
+
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+    # Non deve sollevare: l'esportazione prosegue (il file resta fuori
+    # dall'archivio, ma per la stessa ragione di sempre - non e' un file
+    # della A - non per il nuovo rifiuto).
+    destinazione = esporta_struttura(percorso_db, str(uploads), a, str(tmp_path / 'archivi'))
+    assert os.path.isdir(destinazione)
+
+
+# ---------------------------------------------------------------------------
 # elimina_struttura
 # ---------------------------------------------------------------------------
 

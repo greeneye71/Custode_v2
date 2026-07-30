@@ -418,7 +418,7 @@ def riattiva(struttura_id):
 @strutture_bp.route('/<int:struttura_id>/esporta', methods=['POST'])
 @superadmin_required
 def esporta(struttura_id):
-    from struttura_service import esporta_struttura
+    from struttura_service import esporta_struttura, InstallazioneNonMigrataError
 
     struttura = query_one("SELECT id, nome FROM strutture WHERE id = ?", (struttura_id,))
     if not struttura:
@@ -434,6 +434,14 @@ def esporta(struttura_id):
             os.path.join(current_app.config['BACKUPS_PATH'], 'strutture'),
             single_struttura=single,
         )
+    except InstallazioneNonMigrataError as e:
+        # Non e' un errore imprevisto: e' esporta_struttura che si rifiuta
+        # apposta di produrre un archivio incompleto. L'operatore deve sapere
+        # cosa sta succedendo e cosa fare, non solo "controlla il log".
+        current_app.logger.warning(
+            f'Esportazione struttura {struttura_id} rifiutata: {e}')
+        flash(str(e), 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
     except Exception as e:
         current_app.logger.error(f'Esportazione struttura {struttura_id} fallita: {e}',
                                  exc_info=True)
@@ -450,7 +458,8 @@ def esporta(struttura_id):
 @strutture_bp.route('/<int:struttura_id>/elimina', methods=['GET'])
 @superadmin_required
 def conferma_eliminazione(struttura_id):
-    from struttura_service import contenuto_struttura, anteprima_cancellazione_file
+    from struttura_service import (contenuto_struttura, anteprima_cancellazione_file,
+                                   percorsi_installazione_non_migrata)
 
     struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
     if not struttura:
@@ -461,6 +470,31 @@ def conferma_eliminazione(struttura_id):
         return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
 
     single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    # scheda.html nasconde il pulsante Elimina in modalita' single (non
+    # esiste un sottoalbero uploads/ da isolare per struttura): la rotta deve
+    # rifiutare allo stesso modo, non solo il template nascondere il link.
+    if single:
+        flash("L'eliminazione di una struttura non e' disponibile in modalita' "
+             "single-struttura.", 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    non_migrati = percorsi_installazione_non_migrata(
+        get_db(), current_app.config['UPLOADS_PATH'], struttura_id)
+    if non_migrati:
+        # Mostrare comunque la pagina significherebbe promettere un conteggio
+        # di file che l'esportazione (chiamata dalla POST che segue) non
+        # potrebbe onorare: si rifiuta qui, PRIMA di far scrivere all'operatore
+        # il nome di conferma di una cancellazione che non puo' completarsi
+        # in sicurezza.
+        flash(
+            f"Impossibile procedere: {len(non_migrati)} allegati di questa struttura "
+            "esistono su disco ma fuori dallo schema multi-struttura (probabile "
+            "installazione promossa da single a multi con toggle_modalita.py, che "
+            "non sposta i file). Sposta manualmente questi allegati sotto "
+            f"uploads/strutture/{struttura_id}/<tipo>/ prima di esportare o cancellare "
+            "questa struttura.", 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
     contenuto = contenuto_struttura(get_db(), struttura_id,
                                     current_app.config['UPLOADS_PATH'],
                                     single_struttura=single)
@@ -480,7 +514,7 @@ def conferma_eliminazione(struttura_id):
 @strutture_bp.route('/<int:struttura_id>/elimina', methods=['POST'])
 @superadmin_required
 def elimina(struttura_id):
-    from struttura_service import elimina_struttura
+    from struttura_service import elimina_struttura, InstallazioneNonMigrataError
 
     struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
     if not struttura:
@@ -489,11 +523,18 @@ def elimina(struttura_id):
     if struttura['attiva']:
         flash('Per eliminare la struttura, disattivala prima dalla modifica.', 'warning')
         return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    # Stessa guardia della GET/scheda.html: in single il pulsante non c'e',
+    # la rotta non deve restare raggiungibile lo stesso (POST diretta).
+    if single:
+        flash("L'eliminazione di una struttura non e' disponibile in modalita' "
+             "single-struttura.", 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
     if request.form.get('conferma_nome', '').strip() != struttura['nome']:
         flash('Il nome scritto non corrisponde: la struttura non e\' stata eliminata.', 'danger')
         return redirect(url_for('strutture.conferma_eliminazione', struttura_id=struttura_id))
-
-    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
 
     # elimina_struttura apre una propria connessione sullo stesso file per
     # cancellare le righe: commit qui per non lasciare scritture pendenti
@@ -508,6 +549,16 @@ def elimina(struttura_id):
             os.path.join(current_app.config['BACKUPS_PATH'], 'strutture'),
             single_struttura=single,
         )
+    except InstallazioneNonMigrataError as e:
+        # elimina_struttura chiama esporta_struttura per prima: questo arriva
+        # PRIMA di toccare il database, quindi "nulla e' stato cancellato" e'
+        # vero qui, a differenza del ramo sotto (che copre un fallimento a
+        # meta' operazione). L'operatore deve sapere cosa fare, non solo che
+        # e' fallito.
+        current_app.logger.warning(
+            f'Eliminazione struttura {struttura_id} rifiutata: {e}')
+        flash(str(e), 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
     except Exception as e:
         current_app.logger.error(f'Eliminazione struttura {struttura_id} fallita: {e}',
                                  exc_info=True)

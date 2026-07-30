@@ -18,13 +18,21 @@
         ({{ (anteprima.byte / 1048576) | round(1) }} MB)</li>
       <li>{{ contenuto.utenti }} utenti della struttura</li>
     </ul>
-    {% if contenuto.file > anteprima.file %}
+    {% set non_toccati = contenuto.file - anteprima.file %}
+    {% if non_toccati > 0 %}
     <p class="text-warning mb-3">
       <i class="bi bi-exclamation-circle me-1"></i>
-      Inoltre, {{ contenuto.file - anteprima.file }} file presenti nella cartella
+      Inoltre, {{ non_toccati }} file presenti nella cartella
       della struttura non sono collegati a nessun apparecchio, manutenzione,
       verifica, documento o import: <strong>non</strong> verranno cancellati ora e
       resteranno sul disco. Usa <code>pulisci_uploads.py</code> per individuarli.
+    </p>
+    {% elif non_toccati < 0 %}
+    <p class="text-danger mb-3">
+      <i class="bi bi-exclamation-octagon me-1"></i>
+      Attenzione: il conteggio degli allegati non torna ({{ contenuto.file }} nella
+      cartella della struttura, {{ anteprima.file }} da cancellare): verifica
+      manualmente prima di procedere, non fidarti dei numeri qui sopra.
     </p>
     {% endif %}
     {% if contenuto.tecnici %}
@@ -35,8 +43,12 @@
     </p>
     {% endif %}
     <p class="text-muted">
-      Prima di cancellare verra' esportato un archivio reimportabile sotto
-      <code>backups/strutture/</code>.
+      Prima di cancellare verra' esportato un archivio della struttura sotto
+      <code>backups/strutture/</code>, reimportabile con
+      <code>importa_installazione.py</code>. Non porta con se' il logo, lo storico
+      degli import, il superadmin, i tecnici ne' la configurazione sensibile
+      (chiavi delle API AI, password SMTP): vedi <code>ESPORTAZIONE.txt</code>
+      dentro l'archivio.
     </p>
   </div>
 </div>

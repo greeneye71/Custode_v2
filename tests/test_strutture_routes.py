@@ -352,3 +352,103 @@ def test_caricare_il_primo_logo_non_tenta_di_cancellare_nulla(client, app, dati)
                            content_type='multipart/form-data', follow_redirects=True)
     assert risposta.status_code == 200
     assert 'Logo aggiornato' in risposta.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# Giro finale: Critico 2 (installazione promossa) e Minore (single/rotta)
+# ---------------------------------------------------------------------------
+
+def _prepara_struttura_disattivata_con_foto_legacy(app, struttura_id, nome_file, contenuto_file):
+    """Come _prepara_struttura_disattivata_con_foto, ma scrive il percorso
+    SENZA il prefisso strutture/<id>/ (uploads/foto/<nome>): lo schema che
+    upload_subdir usa in modalita' single. Riproduce un'installazione
+    promossa a multi con toggle_modalita.py senza travasare gli allegati."""
+    import os
+    from models import execute, query_one
+    with app.app_context():
+        execute("UPDATE strutture SET attiva=0 WHERE id=?", (struttura_id,))
+        apparecchio_id = query_one(
+            "SELECT id FROM apparecchi WHERE struttura_id=?", (struttura_id,))['id']
+        execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+                (f"foto/{nome_file}", apparecchio_id))
+
+    cartella = os.path.join(app.config['UPLOADS_PATH'], 'foto')
+    os.makedirs(cartella, exist_ok=True)
+    percorso = os.path.join(cartella, nome_file)
+    with open(percorso, 'wb') as f:
+        f.write(contenuto_file)
+    return percorso
+
+
+def test_la_pagina_di_conferma_si_rifiuta_su_un_installazione_non_migrata(client, app, dati):
+    """Critico 2: senza questo controllo la pagina mostrava '0 file allegati
+    saranno cancellati' pur avendo un allegato vero sul disco, e il messaggio
+    finale della cancellazione avrebbe indirizzato a pulisci_uploads.py, che
+    lo avrebbe cancellato senza che ne esistesse copia in nessun archivio."""
+    _prepara_struttura_disattivata_con_foto_legacy(app, dati['s'], 'vecchia.jpg', b'x' * 10)
+
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['s']}/elimina", follow_redirects=True)
+    testo = risposta.get_data(as_text=True)
+    assert 'Cancella definitivamente' not in testo
+    assert 'schema multi-struttura' in testo.lower()
+
+
+def test_l_esportazione_si_rifiuta_su_un_installazione_non_migrata(client, app, dati):
+    """Stessa garanzia sulla sola esportazione (senza cancellazione): non
+    deve uscire un archivio vuoto spacciato per buono."""
+    import os
+    _prepara_struttura_disattivata_con_foto_legacy(app, dati['s'], 'vecchia.jpg', b'x' * 10)
+
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/esporta", follow_redirects=True)
+    testo = risposta.get_data(as_text=True)
+    assert 'schema multi-struttura' in testo.lower()
+    with app.app_context():
+        from flask import current_app
+        radice = os.path.join(current_app.config['BACKUPS_PATH'], 'strutture')
+        assert not os.path.isdir(radice) or len(os.listdir(radice)) == 0
+
+
+def test_la_cancellazione_si_rifiuta_su_un_installazione_non_migrata(client, app, dati):
+    """La POST che cancella davvero non deve nemmeno tentare: elimina_struttura
+    chiama esporta_struttura per prima, che si rifiuta prima di toccare il
+    database. La struttura deve restare intatta."""
+    from models import query_one
+    _prepara_struttura_disattivata_con_foto_legacy(app, dati['s'], 'vecchia.jpg', b'x' * 10)
+
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                           data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    testo = risposta.get_data(as_text=True)
+    assert 'schema multi-struttura' in testo.lower()
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is not None
+
+
+def test_la_pagina_di_conferma_si_rifiuta_in_modalita_single(client, app, dati):
+    """Minore: scheda.html nasconde il pulsante Elimina in modalita' single,
+    ma la rotta restava raggiungibile lo stesso (GET diretta). Interfaccia e
+    rotta devono concordare."""
+    app.config['APP_CONFIG']['single_struttura'] = True
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['spenta']}/elimina", follow_redirects=True)
+    testo = risposta.get_data(as_text=True)
+    assert 'Cancella definitivamente' not in testo
+    assert 'non' in testo.lower() and 'single-struttura' in testo.lower()
+
+
+def test_la_cancellazione_si_rifiuta_in_modalita_single(client, app, dati):
+    """Stessa guardia sulla POST diretta: senza, la rotta rimarrebbe
+    raggiungibile aggirando il pulsante nascosto dalla scheda."""
+    from models import execute, query_one
+    with app.app_context():
+        execute("UPDATE strutture SET attiva=0 WHERE id=?", (dati['s'],))
+    app.config['APP_CONFIG']['single_struttura'] = True
+
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                           data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    assert 'single-struttura' in risposta.get_data(as_text=True).lower()
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is not None

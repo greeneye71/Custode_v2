@@ -28,6 +28,25 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   alla 2.6): se esiste esattamente una struttura attiva vengono assegnati a quella;
   se non ce n'e' nessuna restano cosi, con un avviso nel log; con due o piu'
   strutture attive vengono disattivati, segnalati anch'essi nel log.
+- **Un'installazione promossa da single a multi-struttura con `toggle_modalita.py`**
+  (che cambia solo il flag di configurazione, senza spostare gli allegati)
+  produceva un archivio senza quegli allegati — il sottoalbero
+  `uploads/strutture/<id>/` che l'esportazione copia non esiste ancora — e la
+  pagina di conferma della cancellazione diceva "0 file allegati saranno
+  cancellati" mentre le righe referenziavano ancora i verbali di manutenzione: la
+  cancellazione che seguiva li perdeva per sempre, perche' l'unica copia
+  (l'archivio) non li aveva mai avuti, e il messaggio finale indirizzava a
+  `pulisci_uploads.py`, che li cancellava perche' non piu' referenziati da
+  nessuna riga. Ora l'esportazione e la cancellazione si rifiutano (e la scheda
+  non arriva nemmeno a mostrare la pagina di conferma) finche' quegli allegati
+  non vengono spostati manualmente sotto `uploads/strutture/<id>/`. Un singolo
+  riferimento incrociato a un'altra struttura (per esempio una risalita nel
+  percorso) resta invece un'anomalia isolata di una riga, segnalata come prima
+  senza bloccare l'operazione.
+- `toggle_modalita.py` dichiarava "single-struttura" quando la chiave di
+  configurazione mancava, mentre il resto del progetto (compreso il punto sopra)
+  tratta l'assenza della chiave come "multi": uno strumento e l'applicazione
+  potevano descrivere due modalita' diverse per la stessa installazione.
 
 ### Aggiunto
 
@@ -74,6 +93,11 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
 
 - Il reimporto di un archivio non ripristina logo e storico import (vedi
   l'esportazione qui sopra).
+- **Il travaso degli allegati di un'installazione promossa da single a multi resta da
+  fare**: `toggle_modalita.py` cambia solo il flag. Fino a quando gli allegati non
+  vengono spostati a mano sotto `uploads/strutture/<id>/`, l'esportazione e la
+  cancellazione di quella struttura si rifiutano (vedi sopra) invece di procedere su
+  un archivio incompleto.
 
 ---
 
