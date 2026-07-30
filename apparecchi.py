@@ -399,7 +399,14 @@ def nuovo():
 @login_required
 def dettaglio(id):
     """Show apparecchio detail page."""
-    struttura_id = getattr(g, 'struttura_id', None)
+    # Cancello di accesso (struttura + divisione): se non si apre, l'apparecchio
+    # non e' raggiungibile da qui. La query di visualizzazione sotto non deve
+    # ripetere il filtro di struttura: apparecchio_accessibile e' l'unico posto
+    # che decide.
+    if not apparecchio_accessibile(id):
+        flash('Apparecchio non trovato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
     apparecchio = query_one(
         """SELECT a.*, d.nome as divisione_nome, d.colore as divisione_colore,
                   u1.nome || ' ' || u1.cognome as creato_da,
@@ -408,20 +415,9 @@ def dettaglio(id):
            LEFT JOIN divisioni d ON a.divisione_id = d.id
            LEFT JOIN utenti u1 ON a.created_by = u1.id
            LEFT JOIN utenti u2 ON a.updated_by = u2.id
-           WHERE a.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE a.id = ?""",
+        (id,)
     )
-
-    if not apparecchio:
-        flash('Apparecchio non trovato.', 'danger')
-        return redirect(url_for('apparecchi.lista'))
-
-    # Check division access for utenti (admin già limitato dalla query struttura_id)
-    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if apparecchio['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato a questo apparecchio.', 'danger')
-            return redirect(url_for('apparecchi.lista'))
 
     # Get maintenance history
     manutenzioni = query_all(
@@ -536,20 +532,10 @@ def qr_code(id):
 @login_required
 def modifica(id):
     """Edit an apparecchio."""
-    struttura_id = getattr(g, 'struttura_id', None)
-    apparecchio = query_one(
-        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
-        (id, struttura_id, struttura_id)
-    )
+    apparecchio = apparecchio_accessibile(id)
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
-
-    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if apparecchio['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato a questo apparecchio.', 'danger')
-            return redirect(url_for('apparecchi.lista'))
 
     if request.method == 'GET':
         accessori = query_all(
@@ -576,7 +562,7 @@ def modifica(id):
            hostname=?, porta=?, protocollo=?, url_interfaccia=?,
            fornitore=?, codice_fornitore=?, garanzia_scadenza=?,
            contratto_manutenzione=?, note=?, updated_by=?, updated_at=datetime('now')
-           WHERE id=? AND (struttura_id = ? OR ? IS NULL)""",
+           WHERE id=?""",
         (data['divisione_id'], data['descrizione'], data['matricola'],
          data['numero_inventario'], data['marca'], data['modello'],
          data['anno_fabbricazione'], data['classificazione'],
@@ -584,7 +570,7 @@ def modifica(id):
          data['connesso_rete'], data['ip_address'], data['mac_address'], data['hostname'],
          data['porta'], data['protocollo'], data['url_interfaccia'],
          data['fornitore'], data['codice_fornitore'], data['garanzia_scadenza'],
-         data['contratto_manutenzione'], data['note'], g.user['id'], id, struttura_id, struttura_id)
+         data['contratto_manutenzione'], data['note'], g.user['id'], id)
     )
 
     _save_accessori(id, request.form, g.user['id'])
@@ -604,19 +590,15 @@ def dismetti(id):
     if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
         flash('Non autorizzato a dismettere apparecchi.', 'danger')
         return redirect(url_for('apparecchi.lista'))
-    struttura_id = getattr(g, 'struttura_id', None)
-    apparecchio = query_one(
-        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
-        (id, struttura_id, struttura_id)
-    )
+    apparecchio = apparecchio_accessibile(id)
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
     execute(
         """UPDATE apparecchi SET stato = 'dismesso', updated_by = ?, updated_at = datetime('now')
-           WHERE id = ? AND (struttura_id = ? OR ? IS NULL)""",
-        (g.user['id'], id, struttura_id, struttura_id)
+           WHERE id = ?""",
+        (g.user['id'], id)
     )
 
     log_attivita(g.user['id'], 'dismissione', 'apparecchi', id,
@@ -631,11 +613,7 @@ def dismetti(id):
 @login_required
 def upload_foto(id):
     """Upload a photo for an apparecchio."""
-    struttura_id = getattr(g, 'struttura_id', None)
-    apparecchio = query_one(
-        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
-        (id, struttura_id, struttura_id)
-    )
+    apparecchio = apparecchio_accessibile(id)
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
@@ -660,8 +638,8 @@ def upload_foto(id):
     # Update database
     execute(
         """UPDATE apparecchi SET foto_path = ?, updated_by = ?, updated_at = datetime('now')
-           WHERE id = ? AND (struttura_id = ? OR ? IS NULL)""",
-        (f"{rel_prefix}/{filename}", g.user['id'], id, struttura_id, struttura_id)
+           WHERE id = ?""",
+        (f"{rel_prefix}/{filename}", g.user['id'], id)
     )
 
     flash('Foto caricata con successo.', 'success')
@@ -672,11 +650,7 @@ def upload_foto(id):
 @login_required
 def upload_documento(id):
     """Upload a document for an apparecchio."""
-    struttura_id = getattr(g, 'struttura_id', None)
-    apparecchio = query_one(
-        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
-        (id, struttura_id, struttura_id)
-    )
+    apparecchio = apparecchio_accessibile(id)
     if not apparecchio:
         flash('Apparecchio non trovato.', 'danger')
         return redirect(url_for('apparecchi.lista'))

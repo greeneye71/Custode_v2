@@ -248,23 +248,20 @@ def nuova():
 @login_required
 def modifica(id):
     """Edit a maintenance record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     manutenzione = query_one(
         """SELECT m.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
-           WHERE m.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE m.id = ?""",
+        (id,)
     )
-    if not manutenzione:
+    # Il cancello e' apparecchio_accessibile: verifica struttura e divisione
+    # sull'apparecchio a cui appartiene la manutenzione. Stesso messaggio,
+    # stesso redirect di "non trovata" quando la riga non si trova e quando
+    # non e' accessibile: chi tenta non deve poter distinguere i due casi.
+    if not manutenzione or not apparecchio_accessibile(manutenzione['apparecchio_id']):
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
-
-    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if manutenzione['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('manutenzioni.lista'))
 
     if request.method == 'GET':
         apparecchi = _get_accessible_apparecchi()
@@ -310,14 +307,13 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a maintenance record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     manutenzione = query_one(
         """SELECT m.*, a.divisione_id FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
-           WHERE m.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE m.id = ?""",
+        (id,)
     )
-    if not manutenzione:
+    if not manutenzione or not apparecchio_accessibile(manutenzione['apparecchio_id']):
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 

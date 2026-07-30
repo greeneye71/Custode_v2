@@ -359,3 +359,212 @@ def test_migrazione_v26_scarta_colonne_assenti_nella_nuova_tabella(app):
         )
         assert riga is not None and riga['email'] == 'admin@custom.it'
         _ = utente_id  # inserito per il conteggio, non serve altro riferimento
+
+
+# ---------------------------------------------------------------------------
+# Critico 1 (revisione finale 2.6): le rotte per-id di apparecchi.py,
+# manutenzioni.py e verifiche.py avevano una copia inline del filtro di
+# struttura — "AND (struttura_id = ? OR ? IS NULL)" — invece di passare da
+# models.apparecchio_accessibile(). Con g.struttura_id None quella copia
+# accetta qualunque riga di qualunque struttura. Si raggiunge senza alcuno
+# stato anomalo: un tecnico assegnato a piu' strutture, subito dopo il login
+# (prima che scelga quale impersonare), oppure un admin la cui struttura e'
+# stata disattivata (il login controlla solo utenti.attivo, non lo stato
+# della struttura). I due scenari sotto riproducono esattamente questi casi.
+# ---------------------------------------------------------------------------
+
+def disattiva_struttura(app, struttura_id):
+    """Scenario 2: la struttura viene disattivata (es. cessata l'attivita'),
+    ma il login (auth.py, query 'WHERE email=? AND attivo=1' sugli utenti)
+    non verifica lo stato della struttura dell'utente. L'admin resta
+    autenticato; in _load_user_from_session il ramo che risolve la struttura
+    non trova nulla ('WHERE id=? AND attiva=1') e g.struttura_id diventa
+    None — esattamente come per l'admin orfano di 'due_strutture', ma per
+    una via diversa e altrettanto raggiungibile."""
+    from models import execute
+    with app.app_context():
+        execute("UPDATE strutture SET attiva = 0 WHERE id = ?", (struttura_id,))
+
+
+@pytest.fixture
+def tecnico_appena_entrato(app):
+    """Scenario 1: un tecnico assegnato a due strutture (A e B). Subito dopo
+    il login, prima che scelga quale impersonare, la sessione non ha
+    struttura_impersonata_id: g.struttura_id e' None. I dati bersaglio vivono
+    in una terza struttura (C), a cui il tecnico non e' affatto assegnato —
+    cosi' il test dimostra che l'assenza di scope si comporta da lasciapassare
+    universale, non solo verso A o B."""
+    from models import execute
+    with app.app_context():
+        a = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica A','TA',1)").lastrowid
+        b = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica B','TB',1)").lastrowid
+        c = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica C','TC',1)").lastrowid
+        dc = execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Div C','DVC',?)", (c,)).lastrowid
+        hash_pw = generate_password_hash('Passw0rd!')
+        tecnico_id = execute(
+            "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,primo_accesso) "
+            "VALUES ('tecnico@t.it',?,'T','T','tecnico',0)", (hash_pw,)
+        ).lastrowid
+        execute("INSERT INTO tecnici_strutture (tecnico_id,struttura_id) VALUES (?,?)", (tecnico_id, a))
+        execute("INSERT INTO tecnici_strutture (tecnico_id,struttura_id) VALUES (?,?)", (tecnico_id, b))
+        app_c = execute(
+            "INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato) "
+            "VALUES (?,?,'SEGRETO-C','SIEMENS','C1','funzionante')", (dc, c)
+        ).lastrowid
+        manutenzione_c = execute(
+            "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,prossima_scadenza,descrizione) "
+            "VALUES (?,'preventiva',date('now','-1 year'),date('now','+30 days'),'SEGRETO-C-MANUTENZIONE')",
+            (app_c,)
+        ).lastrowid
+        verifica_c = execute(
+            "INSERT INTO verifiche (apparecchio_id,data_verifica,prossima_scadenza,esito,note) "
+            "VALUES (?,date('now','-1 year'),date('now','+60 days'),'positivo','SEGRETO-C-VERIFICA')",
+            (app_c,)
+        ).lastrowid
+    return {
+        'a': a, 'b': b, 'c': c, 'app_c': app_c,
+        'manutenzione_c': manutenzione_c, 'verifica_c': verifica_c,
+    }
+
+
+def test_tecnico_appena_entrato_va_alla_scelta_struttura(client, tecnico_appena_entrato):
+    """Precondizione dello scenario 1, dimostrata dalla revisione: il login
+    di un tecnico con piu' strutture assegnate rediretta alla scelta, non
+    imposta alcuna struttura di default."""
+    risposta = client.post('/login', data={'email': 'tecnico@t.it', 'password': 'Passw0rd!'})
+    assert risposta.status_code == 302
+    assert '/tecnico/seleziona-struttura' in risposta.headers['Location']
+
+
+def test_tecnico_appena_entrato_non_legge_apparecchio_di_struttura_estranea(client, tecnico_appena_entrato):
+    """Lettura (apparecchi.py, dettaglio): senza scope, la rotta deve
+    comportarsi come se l'apparecchio non esistesse, non mostrarlo."""
+    entra(client, 'tecnico@t.it')
+    risposta = client.get(f"/apparecchi/{tecnico_appena_entrato['app_c']}")
+    assert risposta.status_code == 302
+
+
+def test_tecnico_appena_entrato_non_dismette_apparecchio_di_struttura_estranea(client, app, tecnico_appena_entrato):
+    """Cancellazione (apparecchi.py, dismetti): senza scope, il tecnico non
+    deve poter dismettere un apparecchio di una struttura a cui non e'
+    nemmeno assegnato."""
+    from models import query_one
+    entra(client, 'tecnico@t.it')
+    client.post(f"/apparecchi/{tecnico_appena_entrato['app_c']}/dismetti")
+    with app.app_context():
+        riga = query_one("SELECT stato FROM apparecchi WHERE id=?", (tecnico_appena_entrato['app_c'],))
+    assert riga['stato'] == 'funzionante'
+
+
+def test_tecnico_appena_entrato_non_legge_manutenzione_di_struttura_estranea(client, tecnico_appena_entrato):
+    """Lettura (manutenzioni.py, modifica GET): la riga appartiene a un
+    apparecchio di una struttura estranea, il cancello e' l'apparecchio."""
+    entra(client, 'tecnico@t.it')
+    risposta = client.get(f"/manutenzioni/{tecnico_appena_entrato['manutenzione_c']}/modifica")
+    assert risposta.status_code == 302
+
+
+def test_tecnico_appena_entrato_non_legge_verifica_di_struttura_estranea(client, tecnico_appena_entrato):
+    """Lettura (verifiche.py, modifica GET): stessa forma della precedente,
+    file gemello."""
+    entra(client, 'tecnico@t.it')
+    risposta = client.get(f"/verifiche/{tecnico_appena_entrato['verifica_c']}/modifica")
+    assert risposta.status_code == 302
+
+
+def test_admin_struttura_disattivata_non_modifica_apparecchio_altrui(client, app, due_strutture):
+    """Scrittura (apparecchi.py, modifica POST): e' l'esploit dimostrato dalla
+    revisione — 'SCRITTO DA A' diventava 'RISCRITTO' sulla riga della
+    Clinica B. Qui verifichiamo che la marca non cambi."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    disattiva_struttura(app, due_strutture['a'])
+    with app.app_context():
+        prima = query_one("SELECT divisione_id FROM apparecchi WHERE id=?", (due_strutture['app_b'],))
+    client.post(f"/apparecchi/{due_strutture['app_b']}/modifica", data={
+        'matricola': 'SEGRETO-B',
+        'marca': 'RISCRITTO',
+        'modello': 'Y1',
+        'divisione_id': str(prima['divisione_id']),
+    })
+    with app.app_context():
+        dopo = query_one("SELECT marca FROM apparecchi WHERE id=?", (due_strutture['app_b'],))
+    assert dopo['marca'] == 'SIEMENS'
+
+
+def test_admin_struttura_disattivata_non_scrive_manutenzione_altrui(client, app, due_strutture):
+    """Scrittura (manutenzioni.py, modifica POST): senza scope la rotta deve
+    rifiutare subito (redirect), non arrivare fino alla validazione del
+    form — e in nessun caso deve modificare la riga."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    disattiva_struttura(app, due_strutture['a'])
+    with app.app_context():
+        manutenzione_b = query_one(
+            "SELECT id, tipo FROM manutenzioni WHERE apparecchio_id=?", (due_strutture['app_b'],)
+        )
+    risposta = client.post(f"/manutenzioni/{manutenzione_b['id']}/modifica", data={
+        'apparecchio_id': str(due_strutture['app_b']),
+        'tipo': 'correttiva',
+        'data_intervento': '2026-01-01',
+    })
+    assert risposta.status_code == 302
+    with app.app_context():
+        dopo = query_one("SELECT tipo FROM manutenzioni WHERE id=?", (manutenzione_b['id'],))
+    assert dopo['tipo'] == manutenzione_b['tipo']
+
+
+def test_admin_struttura_disattivata_non_elimina_manutenzione_altrui(client, app, due_strutture):
+    """Cancellazione (manutenzioni.py, elimina POST): e' l'esploit dimostrato
+    dalla revisione — la manutenzione della Clinica B veniva cancellata da un
+    admin della Clinica A senza scope. La DELETE non ha un proprio filtro di
+    struttura: e' il cancello iniziale a dover fermarla."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    disattiva_struttura(app, due_strutture['a'])
+    with app.app_context():
+        manutenzione_b = query_one(
+            "SELECT id FROM manutenzioni WHERE apparecchio_id=?", (due_strutture['app_b'],)
+        )
+    client.post(f"/manutenzioni/{manutenzione_b['id']}/elimina")
+    with app.app_context():
+        esiste = query_one("SELECT id FROM manutenzioni WHERE id=?", (manutenzione_b['id'],))
+    assert esiste is not None
+
+
+def test_admin_struttura_disattivata_non_scrive_verifica_altrui(client, app, due_strutture):
+    """Scrittura (verifiche.py, modifica POST): file gemello di manutenzioni,
+    stessa forma di test."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    disattiva_struttura(app, due_strutture['a'])
+    with app.app_context():
+        verifica_b = query_one(
+            "SELECT id, esito FROM verifiche WHERE apparecchio_id=?", (due_strutture['app_b'],)
+        )
+    risposta = client.post(f"/verifiche/{verifica_b['id']}/modifica", data={
+        'apparecchio_id': str(due_strutture['app_b']),
+        'data_verifica': '2026-01-01',
+        'esito': 'negativo',
+    })
+    assert risposta.status_code == 302
+    with app.app_context():
+        dopo = query_one("SELECT esito FROM verifiche WHERE id=?", (verifica_b['id'],))
+    assert dopo['esito'] == verifica_b['esito']
+
+
+def test_admin_struttura_disattivata_non_elimina_verifica_altrui(client, app, due_strutture):
+    """Cancellazione (verifiche.py, elimina POST): e' l'esploit dimostrato
+    dalla revisione — la verifica della Clinica B veniva cancellata da un
+    admin della Clinica A senza scope."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    disattiva_struttura(app, due_strutture['a'])
+    with app.app_context():
+        verifica_b = query_one(
+            "SELECT id FROM verifiche WHERE apparecchio_id=?", (due_strutture['app_b'],)
+        )
+    client.post(f"/verifiche/{verifica_b['id']}/elimina")
+    with app.app_context():
+        esiste = query_one("SELECT id FROM verifiche WHERE id=?", (verifica_b['id'],))
+    assert esiste is not None

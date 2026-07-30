@@ -241,23 +241,20 @@ def nuova():
 @login_required
 def modifica(id):
     """Edit a verifica record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     verifica = query_one(
         """SELECT v.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
-           WHERE v.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE v.id = ?""",
+        (id,)
     )
-    if not verifica:
+    # Il cancello e' apparecchio_accessibile: verifica struttura e divisione
+    # sull'apparecchio a cui appartiene la verifica. Stesso messaggio, stesso
+    # redirect di "non trovata" quando la riga non si trova e quando non e'
+    # accessibile: chi tenta non deve poter distinguere i due casi.
+    if not verifica or not apparecchio_accessibile(verifica['apparecchio_id']):
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
-
-    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if verifica['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('verifiche.lista'))
 
     if request.method == 'GET':
         apparecchi = _get_accessible_apparecchi()
@@ -302,14 +299,13 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a verifica record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     verifica = query_one(
         """SELECT v.*, a.divisione_id, v.apparecchio_id FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
-           WHERE v.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE v.id = ?""",
+        (id,)
     )
-    if not verifica:
+    if not verifica or not apparecchio_accessibile(verifica['apparecchio_id']):
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
 
