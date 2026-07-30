@@ -419,3 +419,89 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
             raise
     finally:
         sorgente.close()
+
+
+def _cartella_senza_file(cartella):
+    """True se la cartella non contiene alcun file, a qualunque profondita'.
+
+    Cartelle vuote annidate non contano come 'con contenuto': possono
+    restare (un rmtree le porta via comunque), ma un solo file dentro basta
+    a rifiutare la rimozione dell'albero."""
+    for _radice, _sotto, file_presenti in os.walk(cartella):
+        if file_presenti:
+            return False
+    return True
+
+
+def elimina_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
+                      single_struttura=False):
+    """Elimina una struttura: archivio, database, file. In quest'ordine.
+
+    L'archivio per primo perche' se fallisce non si deve cancellare nulla:
+    esporta_struttura non tocca ne' il database vivo ne' uploads_base, quindi
+    un suo fallimento lascia tutto esattamente com'era.
+
+    Il database prima dei file perche' l'errore inverso e' peggiore: righe
+    che puntano ad allegati inesistenti sono un guasto silenzioso che si
+    scopre mesi dopo aprendo un verbale, mentre file senza riga sono solo
+    spazio sprecato - e pulisci_uploads.py (Task 9) e' fatto apposta per
+    trovarli.
+
+    I file vengono cancellati elencandoli da _percorsi_allegati, MAI con uno
+    shutil.rmtree di un intero sottoalbero: in modalita' single-struttura
+    quel sottoalbero non esiste (cartella_struttura solleva ValueError), e in
+    modalita' multi conterrebbe anche eventuali file orfani non referenziati
+    da nessuna riga, che non e' compito di questa funzione decidere di
+    buttare via. Solo in multi, se dopo la cancellazione file per file la
+    cartella della struttura resta vuota, viene rimossa per pulizia: non e'
+    un rmtree cieco, e' un rmtree su una cartella gia' verificata senza
+    contenuto.
+
+    Un file che non si riesce a cancellare (bloccato da un altro processo,
+    permessi) non fa fallire l'operazione - a quel punto database e archivio
+    sono gia' a posto - ma finisce nella chiave 'file_non_rimossi' del
+    risultato, cosi' il chiamante puo' loggarlo invece di perderlo come
+    farebbe ignore_errors=True.
+
+    Restituisce i conteggi di rimuovi_strutture piu' 'nome', 'archivio'
+    (percorso dell'archivio) e 'file_non_rimossi' (elenco di percorsi
+    relativi).
+    """
+    archivio = esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
+                                 single_struttura=single_struttura)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        nome = conn.execute("SELECT nome FROM strutture WHERE id = ?",
+                            (struttura_id,)).fetchone()[0]
+        # Va preso ORA: dopo rimuovi_strutture le righe che lo popolano non
+        # ci sono piu' e la funzione non troverebbe piu' nulla da restituire.
+        percorsi = _percorsi_allegati(conn, struttura_id)
+        conteggi = rimuovi_strutture(conn, [struttura_id])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    file_non_rimossi = []
+    for relativo in percorsi:
+        assoluto = os.path.join(uploads_base, relativo.replace('/', os.sep))
+        if not os.path.isfile(assoluto):
+            continue  # gia' assente: non e' un fallimento da segnalare
+        try:
+            os.remove(assoluto)
+        except OSError:
+            file_non_rimossi.append(relativo)
+
+    if not single_struttura:
+        cartella = cartella_struttura(uploads_base, struttura_id, single_struttura)
+        if os.path.isdir(cartella) and _cartella_senza_file(cartella):
+            shutil.rmtree(cartella, ignore_errors=True)
+
+    conteggi['nome'] = nome
+    conteggi['archivio'] = archivio
+    conteggi['file_non_rimossi'] = file_non_rimossi
+    return conteggi

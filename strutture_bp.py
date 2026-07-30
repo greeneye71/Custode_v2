@@ -447,6 +447,80 @@ def esporta(struttura_id):
     return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
 
 
+@strutture_bp.route('/<int:struttura_id>/elimina', methods=['GET'])
+@superadmin_required
+def conferma_eliminazione(struttura_id):
+    from struttura_service import contenuto_struttura
+
+    struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+    if struttura['attiva']:
+        flash('Per eliminare la struttura, disattivala prima dalla modifica.', 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    contenuto = contenuto_struttura(get_db(), struttura_id,
+                                    current_app.config['UPLOADS_PATH'],
+                                    single_struttura=single)
+    return render_template('strutture/elimina.html',
+                           struttura=struttura, contenuto=contenuto)
+
+
+@strutture_bp.route('/<int:struttura_id>/elimina', methods=['POST'])
+@superadmin_required
+def elimina(struttura_id):
+    from struttura_service import elimina_struttura
+
+    struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+    if struttura['attiva']:
+        flash('Per eliminare la struttura, disattivala prima dalla modifica.', 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+    if request.form.get('conferma_nome', '').strip() != struttura['nome']:
+        flash('Il nome scritto non corrisponde: la struttura non e\' stata eliminata.', 'danger')
+        return redirect(url_for('strutture.conferma_eliminazione', struttura_id=struttura_id))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+
+    # elimina_struttura apre una propria connessione sullo stesso file per
+    # cancellare le righe: commit qui per non lasciare scritture pendenti
+    # sulla connessione della richiesta mentre l'altra e' aperta.
+    get_db().commit()
+
+    try:
+        esito = elimina_struttura(
+            current_app.config['DATABASE_PATH'],
+            current_app.config['UPLOADS_PATH'],
+            struttura_id,
+            os.path.join(current_app.config['BACKUPS_PATH'], 'strutture'),
+            single_struttura=single,
+        )
+    except Exception as e:
+        current_app.logger.error(f'Eliminazione struttura {struttura_id} fallita: {e}',
+                                 exc_info=True)
+        flash('Eliminazione fallita, nulla e\' stato cancellato. Controlla il log.', 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    if esito['file_non_rimossi']:
+        current_app.logger.warning(
+            f'Eliminazione struttura {struttura_id}: {len(esito["file_non_rimossi"])} '
+            f'file non rimossi: {esito["file_non_rimossi"]}')
+
+    log_attivita(
+        g.user['id'], 'eliminazione', 'strutture', struttura_id,
+        f'Struttura "{esito["nome"]}" eliminata: {esito["apparecchi"]} apparecchi, '
+        f'{esito["manutenzioni"]} manutenzioni, {esito["verifiche"]} verifiche, '
+        f'{esito["utenti"]} utenti. Archivio: {esito["archivio"]}. '
+        f'File non rimossi: {len(esito["file_non_rimossi"])}.',
+        request.remote_addr)
+    flash(f'Struttura "{esito["nome"]}" eliminata. Archivio in {esito["archivio"]}', 'success')
+    return redirect(url_for('strutture.index'))
+
+
 def _fetch_anthropic_models(api_key):
     """Fetch available Anthropic models via /v1/models API. Falls back to hardcoded list on network errors.
     Raises on HTTP errors (invalid key, server error) so the caller can return ok: False."""

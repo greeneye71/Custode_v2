@@ -701,6 +701,173 @@ def test_esportazione_single_e_multi_producono_gli_stessi_allegati(conn, tmp_pat
     assert _leggi_conteggi_file_byte(dest_multi) == _leggi_conteggi_file_byte(dest_single)
 
 
+# ---------------------------------------------------------------------------
+# elimina_struttura
+# ---------------------------------------------------------------------------
+
+def test_eliminazione_produce_l_archivio_cancella_il_database_e_i_file_referenziati(conn, tmp_path):
+    """L'operazione completa: archivio, poi database, poi file (l'ordine del
+    docstring di elimina_struttura). Verifica gli effetti sulla A e,
+    soprattutto, che la B non venga toccata ne' nel database ne' sul
+    filesystem: un test che guarda solo la A supererebbe anche
+    un'implementazione che cancella tutto quanto."""
+    from struttura_service import elimina_struttura
+    con, ids = conn
+    a, b = ids['a']['struttura'], ids['b']['struttura']
+    # In modalita' multi upload_subdir scrive il prefisso strutture/<id>/
+    # anche dentro la colonna: e' quello il valore che _percorsi_allegati
+    # legge davvero, non un percorso 'foto/x.jpg' senza prefisso.
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?", (f'strutture/{a}/foto/A.jpg', ids['a']['apparecchio']))
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?", (f'strutture/{b}/foto/B.jpg', ids['b']['apparecchio']))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    uploads = tmp_path / 'uploads'
+    for struttura_id, nomefile in ((a, 'A.jpg'), (b, 'B.jpg')):
+        cartella = uploads / 'strutture' / str(struttura_id) / 'foto'
+        cartella.mkdir(parents=True)
+        (cartella / nomefile).write_bytes(b'x')
+
+    esito = elimina_struttura(percorso_db, str(uploads), a, str(tmp_path / 'archivi'))
+
+    assert os.path.isdir(esito['archivio'])
+    assert esito['nome'] == 'Clinica A'
+    assert esito['file_non_rimossi'] == []
+    # Il file referenziato dalla A e' sparito, e con esso la cartella (ora vuota).
+    assert not os.path.exists(str(uploads / 'strutture' / str(a)))
+    # La B non e' stata toccata: ne' il file ne' la sua cartella.
+    assert os.path.exists(str(uploads / 'strutture' / str(b) / 'foto' / 'B.jpg'))
+
+    vivo = sqlite3.connect(percorso_db)
+    assert vivo.execute("SELECT COUNT(*) FROM strutture").fetchone()[0] == 1
+    assert vivo.execute("SELECT nome FROM strutture").fetchone()[0] == 'Clinica B'
+    vivo.close()
+
+
+def test_eliminazione_non_cancella_un_file_non_referenziato_e_non_rimuove_la_cartella(conn, tmp_path):
+    """La cancellazione seleziona i file da _percorsi_allegati (le righe),
+    non con uno shutil.rmtree dell'intero sottoalbero uploads/strutture/<id>/:
+    un file presente li' ma non referenziato da nessuna riga (un orfano)
+    deve sopravvivere. Se un file sopravvive, la cartella non puo' nemmeno
+    essere rimossa come 'ormai vuota': lo rimane con dentro l'orfano."""
+    from struttura_service import elimina_struttura
+    con, ids = conn
+    a = ids['a']['struttura']
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               (f'strutture/{a}/foto/referenziato.jpg', ids['a']['apparecchio']))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'strutture' / str(a) / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'referenziato.jpg').write_bytes(b'x')
+    (cartella / 'orfano.jpg').write_bytes(b'y')
+
+    elimina_struttura(percorso_db, str(uploads), a, str(tmp_path / 'archivi'))
+
+    assert not os.path.exists(str(cartella / 'referenziato.jpg'))
+    assert os.path.exists(str(cartella / 'orfano.jpg'))
+
+
+def test_eliminazione_in_modalita_single_tocca_solo_i_file_della_struttura(conn, tmp_path):
+    """Il Critico segnalato dal brief del Task 7: in single-struttura non
+    esiste un sottoalbero per struttura da isolare (upload_subdir mette
+    tutto sotto uploads_base/<tipo>/, condiviso da ogni struttura del
+    database). elimina_struttura deve selezionare i file da cancellare per
+    riferimento (_percorsi_allegati), mai con uno shutil.rmtree su un
+    percorso che in questa modalita' sarebbe uploads_base stessa: quel
+    percorso cancellerebbe gli allegati di TUTTE le strutture del
+    deployment, B compresa."""
+    from struttura_service import elimina_struttura
+    con, ids = conn
+    a, b = ids['a']['struttura'], ids['b']['struttura']
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?", ('foto/A.jpg', ids['a']['apparecchio']))
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?", ('foto/B.jpg', ids['b']['apparecchio']))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'A.jpg').write_bytes(b'x')
+    (cartella / 'B.jpg').write_bytes(b'y')
+
+    esito = elimina_struttura(percorso_db, str(uploads), a, str(tmp_path / 'archivi'),
+                              single_struttura=True)
+
+    assert not os.path.exists(str(cartella / 'A.jpg'))
+    assert os.path.exists(str(cartella / 'B.jpg'))
+    # uploads_base esiste ancora: nessun rmtree dell'intera cartella condivisa.
+    assert os.path.isdir(str(uploads))
+    assert esito['file_non_rimossi'] == []
+    # single_struttura deve arrivare anche a esporta_struttura: se restasse al
+    # default (False), l'archiviazione cercherebbe gli allegati nel percorso
+    # multi (uploads/strutture/<id>/) che qui non esiste, e l'archivio
+    # uscirebbe senza il file A.jpg pur avendolo appena cancellato dal disco.
+    assert os.path.exists(os.path.join(esito['archivio'], 'uploads', 'foto', 'A.jpg'))
+
+
+def test_eliminazione_con_un_file_bloccato_lo_segnala_invece_di_ignorarlo(conn, tmp_path):
+    """Su Windows un file ancora aperto non si puo' cancellare: os.remove
+    solleva PermissionError. L'operazione non deve fermarsi (database e
+    archivio sono gia' a posto), ma il file non rimosso deve finire nel
+    risultato, non sparire in silenzio come farebbe uno
+    shutil.rmtree(..., ignore_errors=True)."""
+    from struttura_service import elimina_struttura
+    con, ids = conn
+    a = ids['a']['struttura']
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               (f'strutture/{a}/foto/bloccato.jpg', ids['a']['apparecchio']))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    uploads = tmp_path / 'uploads'
+    cartella = uploads / 'strutture' / str(a) / 'foto'
+    cartella.mkdir(parents=True)
+    percorso_file = cartella / 'bloccato.jpg'
+    percorso_file.write_bytes(b'x')
+
+    # Su Windows un file aperto (anche solo in lettura) non condivide il
+    # permesso di cancellazione: os.remove fallisce finche' l'handle resta aperto.
+    handle = open(percorso_file, 'rb')
+    try:
+        esito = elimina_struttura(percorso_db, str(uploads), a, str(tmp_path / 'archivi'))
+    finally:
+        handle.close()
+    os.remove(percorso_file)  # ripulito ora che l'handle e' chiuso, per non sporcare tmp_path
+
+    relativo = f"strutture/{a}/foto/bloccato.jpg"
+    assert relativo in esito['file_non_rimossi']
+    # Il file bloccato non deve aver impedito la cancellazione del database.
+    vivo = sqlite3.connect(percorso_db)
+    assert vivo.execute("SELECT COUNT(*) FROM strutture WHERE id=?", (a,)).fetchone()[0] == 0
+    vivo.close()
+
+
+def test_se_l_archivio_fallisce_non_si_cancella_nulla(conn, tmp_path, monkeypatch):
+    """L'ordine e' archivio, database, file: se il primo passo non riesce, il
+    resto non deve partire. Un archivio mancato e' un fastidio, un database
+    svuotato senza archivio e' una perdita."""
+    import struttura_service
+    from struttura_service import elimina_struttura
+    con, ids = conn
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+
+    def esplode(*args, **kwargs):
+        raise OSError('disco pieno')
+    monkeypatch.setattr(struttura_service, 'esporta_struttura', esplode)
+
+    with pytest.raises(OSError):
+        elimina_struttura(percorso_db, str(tmp_path / 'u'), ids['a']['struttura'], str(tmp_path / 'ar'))
+
+    assert con.execute("SELECT COUNT(*) FROM strutture").fetchone()[0] == 2
+
+
 # COLONNE_ALLEGATI e' l'elenco delle colonne che contengono un percorso di
 # allegato. Il test qui sotto lo confronta con lo schema per introspezione,
 # invece di ripetere a mano un elenco che divergerebbe alla prima colonna

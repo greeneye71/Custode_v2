@@ -85,3 +85,110 @@ def test_esportazione_negata_a_un_admin(client, app, dati):
         from flask import current_app
         radice = os.path.join(current_app.config['BACKUPS_PATH'], 'strutture')
         assert not os.path.isdir(radice) or len(os.listdir(radice)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Cancellazione
+# ---------------------------------------------------------------------------
+
+def test_la_pagina_di_conferma_richiede_la_struttura_disattivata(client, dati):
+    """Il freno vale anche sul GET: non basta bloccare la POST se la pagina
+    di conferma restasse comunque raggiungibile su una struttura attiva."""
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['s']}/elimina", follow_redirects=True)
+    testo = risposta.get_data(as_text=True)
+    assert 'disattiva' in testo.lower()
+    assert 'Cancella definitivamente' not in testo
+
+
+def test_la_pagina_di_conferma_mostra_il_contenuto(client, dati):
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['spenta']}/elimina")
+    assert risposta.status_code == 200
+    testo = risposta.get_data(as_text=True)
+    assert 'Chiusa' in testo
+    assert 'Cancella definitivamente' in testo
+
+
+def test_la_pagina_di_conferma_e_negata_a_un_admin(client, dati):
+    entra(client, 'admin@a.it')
+    risposta = client.get(f"/strutture/{dati['spenta']}/elimina", follow_redirects=True)
+    assert 'Cancella definitivamente' not in risposta.get_data(as_text=True)
+
+
+def test_la_cancellazione_richiede_la_struttura_disattivata(client, app, dati):
+    from models import query_one
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                           data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    assert 'disattiva' in risposta.get_data(as_text=True).lower()
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is not None
+
+
+def test_la_cancellazione_richiede_il_nome_esatto(client, app, dati):
+    from models import execute, query_one
+    entra(client, 'super@x.it')
+    with app.app_context():
+        execute("UPDATE strutture SET attiva=0 WHERE id=?", (dati['s'],))
+    risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                           data={'conferma_nome': 'clinica'}, follow_redirects=True)
+    assert 'nome' in risposta.get_data(as_text=True).lower()
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is not None
+
+
+def test_la_cancellazione_riuscita(client, app, dati):
+    from models import execute, query_one
+    entra(client, 'super@x.it')
+    with app.app_context():
+        execute("UPDATE strutture SET attiva=0 WHERE id=?", (dati['s'],))
+    risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                           data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    assert risposta.status_code == 200
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is None
+        assert query_one("SELECT id FROM utenti WHERE email='admin@a.it'") is None
+        assert query_one("SELECT id FROM utenti WHERE email='super@x.it'") is not None
+
+
+def test_la_cancellazione_e_negata_a_un_admin(client, app, dati):
+    from models import execute, query_one
+    with app.app_context():
+        execute("UPDATE strutture SET attiva=0 WHERE id=?", (dati['s'],))
+    entra(client, 'admin@a.it')
+    client.post(f"/strutture/{dati['s']}/elimina",
+                data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is not None
+
+
+def test_la_scheda_di_una_struttura_attiva_non_mostra_il_pulsante_elimina(client, dati):
+    """Il pulsante Elimina compare solo per una struttura gia' disattivata:
+    su una attiva la scheda deve spiegare perche' non c'e', non nasconderlo
+    e basta (altrimenti un ramo del template smesso di rendersi passerebbe
+    inosservato)."""
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['s']}")
+    testo = risposta.get_data(as_text=True)
+    assert f"/strutture/{dati['s']}/elimina" not in testo
+    assert 'disattivala prima' in testo.lower()
+
+
+def test_la_scheda_di_una_struttura_disattivata_mostra_il_pulsante_elimina(client, dati):
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['spenta']}")
+    testo = risposta.get_data(as_text=True)
+    assert f"/strutture/{dati['spenta']}/elimina" in testo
+    assert 'Elimina' in testo
+
+
+def test_la_scheda_nasconde_il_pulsante_elimina_in_modalita_single(client, app, dati):
+    """single_struttura arriva alla scheda dalla config dell'installazione
+    (Task 5): in quella modalita' il piano nasconde il pulsante Elimina
+    anche su una struttura disattivata."""
+    app.config['APP_CONFIG']['single_struttura'] = True
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['spenta']}")
+    testo = risposta.get_data(as_text=True)
+    assert f"/strutture/{dati['spenta']}/elimina" not in testo
