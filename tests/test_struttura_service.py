@@ -464,6 +464,52 @@ def test_esportazione_non_contiene_il_tecnico_assegnato_alla_struttura_esportata
     copia.close()
 
 
+# ---------------------------------------------------------------------------
+# strutture_config sensibile (Critico 4 della revisione finale)
+# ---------------------------------------------------------------------------
+#
+# strutture_bp.nuova() semina, per ogni struttura creata dall'interfaccia, le
+# chiavi AI globali lette da config.local.json dentro strutture_config: sono
+# dell'operatore del deployment, non della struttura, anche se la riga e'
+# formalmente sua. L'archivio consegnabile non deve portarle fuori in chiaro.
+
+def test_esportazione_azzera_le_chiavi_sensibili_di_strutture_config(conn, tmp_path):
+    """anthropic_api_key, openai_api_key e smtp_password_encrypted non devono
+    comparire nell'archivio: sono seminate da strutture_bp.nuova() o inserite
+    dalla configurazione SMTP, ma sono segreti dell'operatore/deployment, non
+    dati della struttura in senso proprio. ai_provider invece resta: non e'
+    un segreto, e' gia' nel fixture (vedi 'conn')."""
+    import sqlite3
+    from struttura_service import esporta_struttura
+    con, ids = conn
+    a = ids['a']['struttura']
+    con.execute("INSERT INTO strutture_config (struttura_id,chiave,valore) VALUES "
+                "(?,'anthropic_api_key','sk-ant-CHIAVE-GLOBALE-DEL-DEPLOYMENT')", (a,))
+    con.execute("INSERT INTO strutture_config (struttura_id,chiave,valore) VALUES "
+                "(?,'openai_api_key','sk-openai-GLOBALE')", (a,))
+    con.execute("INSERT INTO strutture_config (struttura_id,chiave,valore) VALUES "
+                "(?,'smtp_password_encrypted','gAAAAA-cifrato')", (a,))
+    con.commit()
+    percorso_db = con.execute("PRAGMA database_list").fetchone()[2]
+    con.close()
+
+    destinazione = esporta_struttura(percorso_db, str(tmp_path / 'uploads'), a,
+                                     str(tmp_path / 'archivi'))
+
+    copia = sqlite3.connect(os.path.join(destinazione, 'data', 'database.sqlite'))
+    chiavi = {r[0] for r in copia.execute(
+        "SELECT chiave FROM strutture_config WHERE struttura_id=?", (a,))}
+    assert 'anthropic_api_key' not in chiavi
+    assert 'openai_api_key' not in chiavi
+    assert 'smtp_password_encrypted' not in chiavi
+    assert 'ai_provider' in chiavi  # non e' un segreto, resta
+    copia.close()
+
+    with open(os.path.join(destinazione, 'ESPORTAZIONE.txt'), encoding='utf-8') as f:
+        testo = f.read()
+    assert 'configurazione sensibile' in testo.lower()
+
+
 def test_esportazione_non_tocca_il_database_vivo(conn, tmp_path):
     """rimuovi_strutture gira sulla copia. Se per un errore girasse
     sull'originale, l'esportazione cancellerebbe tutte le altre strutture."""

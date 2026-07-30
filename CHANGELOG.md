@@ -38,6 +38,14 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   toglie anche questi account dalla copia (`tecnici_strutture` segue in
   cascata): un archivio contiene solo gli utenti della struttura esportata,
   tecnici compresi, a prescindere da un'eventuale assegnazione.
+- **L'archivio di una struttura conteneva le chiavi delle API AI e le credenziali
+  SMTP del deployment in chiaro**, seminate in `strutture_config` da
+  `strutture_bp.nuova()` per ogni struttura creata dall'interfaccia (o inserite
+  dalla configurazione SMTP): sono dell'operatore del deployment, non della
+  struttura, anche se la riga e' formalmente sua. Ora l'esportazione azzera dalla
+  copia ogni chiave di `strutture_config` il cui nome contiene `api_key`,
+  `password`, `token` o `secret` — per schema del nome, non un elenco delle
+  chiavi note, cosi' una chiave futura vi rientra da sola.
 - **Un'installazione promossa da single a multi-struttura con `toggle_modalita.py`**
   (che cambia solo il flag di configurazione, senza spostare gli allegati)
   produceva un archivio senza quegli allegati — il sottoalbero
@@ -109,6 +117,8 @@ Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttur
   account condiviso fra strutture, non di proprieta' di una sola, e portarne l'hash
   della password fuori dal deployment per il rapporto di assegnazione — disponibile,
   non di proprieta' — non sembra un compromesso ragionevole.
+- L'archivio di una struttura non contiene la configurazione sensibile (chiavi delle
+  API AI, credenziali SMTP): va reinserita a mano dopo un reimporto.
 - **Il travaso degli allegati di un'installazione promossa da single a multi resta da
   fare**: `toggle_modalita.py` cambia solo il flag. Fino a quando gli allegati non
   vengono spostati a mano sotto `uploads/strutture/<id>/`, l'esportazione e la

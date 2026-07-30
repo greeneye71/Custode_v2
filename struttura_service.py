@@ -58,6 +58,21 @@ COLONNE_ALLEGATI = (
     ('strutture', 'logo_path', 'id = ?'),
 )
 
+# Frammenti che, nel NOME di una chiave di strutture_config, la segnalano come
+# un segreto da non mettere in un archivio consegnabile a terzi: chiavi AI
+# (strutture_bp.nuova() semina qui, per ogni struttura creata dall'interfaccia,
+# le chiavi globali lette da config.local.json: sono dell'operatore del
+# deployment, non della struttura, anche se la riga e' formalmente sua) e
+# credenziali SMTP. Il criterio e' per schema del nome, non un elenco delle
+# chiavi note (anthropic_api_key/gemini_api_key/openai_api_key): una chiave
+# futura che contenga uno di questi frammenti (un nuovo provider AI, un nuovo
+# servizio con password o token) rientra da sola, senza bisogno che qualcuno
+# se ne ricordi qui. smtp_password_encrypted ci rientra anche se, da sola,
+# non e' sfruttabile senza encryption_key (che l'archivio non porta): resta
+# un segreto per nome, ed e' il criterio - non la sfruttabilita' odierna -
+# a dover restare valido quando la cifratura cambiera'.
+FRAMMENTI_CONFIG_SENSIBILE = ('api_key', 'password', 'token', 'secret')
+
 
 class InstallazioneNonMigrataError(Exception):
     """Sollevata da esporta_struttura quando la struttura ha allegati che
@@ -399,6 +414,23 @@ def percorsi_installazione_non_migrata(conn, uploads_base, struttura_id):
         uploads_base, struttura_id, _percorsi_allegati(conn, struttura_id))
 
 
+def _azzera_config_sensibile(conn, struttura_id):
+    """Rimuove dalla copia le chiavi di strutture_config che sembrano un
+    segreto per il NOME (vedi FRAMMENTI_CONFIG_SENSIBILE), non un elenco
+    delle chiavi note. Restituisce le chiavi rimosse, solo per un eventuale
+    log del chiamante: ESPORTAZIONE.txt si limita a dire che la
+    configurazione sensibile non e' stata inclusa, senza elencarla."""
+    condizioni = ' OR '.join('lower(chiave) LIKE ?' for _ in FRAMMENTI_CONFIG_SENSIBILE)
+    parametri = [f'%{frammento}%' for frammento in FRAMMENTI_CONFIG_SENSIBILE]
+    rimosse = [r[0] for r in conn.execute(
+        f"SELECT chiave FROM strutture_config WHERE struttura_id = ? AND ({condizioni})",
+        [struttura_id] + parametri).fetchall()]
+    conn.execute(
+        f"DELETE FROM strutture_config WHERE struttura_id = ? AND ({condizioni})",
+        [struttura_id] + parametri)
+    return rimosse
+
+
 def anteprima_cancellazione_file(conn, struttura_id, uploads_base,
                                  single_struttura=False):
     """Quanti file (e byte) la cancellazione di questa struttura liberera'
@@ -588,6 +620,11 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                 non_del_deployment = [r[0] for r in copia.execute(
                     "SELECT id FROM utenti WHERE struttura_id IS NULL").fetchall()]
                 _rimuovi_utenti(copia, non_del_deployment)
+                # Le chiavi AI globali e le credenziali SMTP non sono della
+                # struttura anche se la riga e' formalmente sua (vedi
+                # FRAMMENTI_CONFIG_SENSIBILE): un archivio consegnabile non
+                # deve farle uscire dal deployment in chiaro.
+                _azzera_config_sensibile(copia, struttura_id)
                 copia.commit()
                 contenuto = contenuto_struttura(copia, struttura_id, uploads_base,
                                                 single_struttura)
@@ -633,7 +670,9 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                     "Non incluso in questo archivio: il superadmin del deployment e i\n"
                     "tecnici (sono account condivisi con altre strutture, non di proprieta'\n"
                     "di questa, anche quando risultano assegnati). Dopo il reimporto vanno\n"
-                    "ricreati e riassegnati a mano, se servono.\n\n"
+                    "ricreati e riassegnati a mano, se servono. Non inclusa nemmeno la\n"
+                    "configurazione sensibile della struttura (chiavi delle API AI, password\n"
+                    "SMTP): va reinserita a mano, se serve.\n\n"
                 )
                 f.write("Per reimportare questo archivio in un'installazione MedInventory:\n\n")
                 f.write(f"  python importa_installazione.py \"{destinazione}\"\n")
