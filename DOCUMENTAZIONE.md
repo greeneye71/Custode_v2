@@ -1,7 +1,7 @@
 # MedInventory - Documentazione
 
 **Gestione Apparecchi Elettromedicali**
-*Versione 2.5.1 - by Studio Bergamaschi*
+*Versione 2.5.2 - by Studio Bergamaschi*
 
 ---
 
