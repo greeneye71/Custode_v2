@@ -192,3 +192,110 @@ def test_la_scheda_nasconde_il_pulsante_elimina_in_modalita_single(client, app, 
     risposta = client.get(f"/strutture/{dati['spenta']}")
     testo = risposta.get_data(as_text=True)
     assert f"/strutture/{dati['spenta']}/elimina" not in testo
+
+
+# ---------------------------------------------------------------------------
+# Giro di correzioni 1 (rilievi Minori della revisione)
+# ---------------------------------------------------------------------------
+
+def _prepara_struttura_disattivata_con_foto(app, struttura_id, nome_apparecchio_file, contenuto_file):
+    """Disattiva la struttura, referenzia un file di foto sotto
+    uploads/strutture/<id>/foto/<nome> e lo scrive davvero su disco.
+    Restituisce il percorso assoluto del file creato."""
+    import os
+    from models import execute, query_one
+    with app.app_context():
+        execute("UPDATE strutture SET attiva=0 WHERE id=?", (struttura_id,))
+        apparecchio_id = query_one(
+            "SELECT id FROM apparecchi WHERE struttura_id=?", (struttura_id,))['id']
+        relativo = f"strutture/{struttura_id}/foto/{nome_apparecchio_file}"
+        execute("UPDATE apparecchi SET foto_path=? WHERE id=?", (relativo, apparecchio_id))
+
+    cartella = os.path.join(app.config['UPLOADS_PATH'], 'strutture', str(struttura_id), 'foto')
+    os.makedirs(cartella, exist_ok=True)
+    percorso = os.path.join(cartella, nome_apparecchio_file)
+    with open(percorso, 'wb') as f:
+        f.write(contenuto_file)
+    return percorso
+
+
+def test_la_pagina_di_conferma_distingue_i_file_che_verranno_cancellati_dagli_orfani(client, app, dati):
+    """Minore: in multi la pagina usava contenuto.file (l'intero
+    sottoalbero, orfani compresi) mentre la cancellazione passa dalle righe
+    (_percorsi_allegati): un operatore vedeva 'verranno cancellati N file'
+    quando in realta' solo alcuni lo sarebbero stati davvero, gli altri
+    restando sul disco senza preavviso."""
+    import os
+    _prepara_struttura_disattivata_con_foto(app, dati['s'], 'referenziato.jpg', b'0' * 100)
+    cartella_orfano = os.path.join(app.config['UPLOADS_PATH'], 'strutture', str(dati['s']), 'foto')
+    with open(os.path.join(cartella_orfano, 'orfano.jpg'), 'wb') as f:
+        f.write(b'0' * 999)
+
+    entra(client, 'super@x.it')
+    risposta = client.get(f"/strutture/{dati['s']}/elimina")
+    testo = risposta.get_data(as_text=True)
+    assert '1 file allegati saranno cancellati' in testo
+    assert 'pulisci_uploads.py' in testo
+    assert '1 file presenti nella cartella' in testo
+
+
+def test_la_cancellazione_con_un_file_bloccato_avvisa_l_operatore(client, app, dati):
+    """Minore: il file non rimosso finiva solo nel log applicativo e nel
+    registro attivita', ma la pagina che l'operatore vede restava un flash
+    verde di successo pieno. Su una struttura sanitaria cancellata un
+    allegato sopravvissuto va saputo subito, non ritrovato mesi dopo."""
+    import os
+    percorso = _prepara_struttura_disattivata_con_foto(app, dati['s'], 'bloccato.jpg', b'x')
+
+    entra(client, 'super@x.it')
+    # Un handle ancora aperto (anche solo in lettura) impedisce a os.remove
+    # di cancellare il file su Windows: e' cosi' che si simula un file
+    # bloccato da un altro processo senza doverne avviare uno davvero.
+    handle = open(percorso, 'rb')
+    try:
+        risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                               data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    finally:
+        handle.close()
+    os.remove(percorso)  # ripulito ora che l'handle e' chiuso
+
+    testo = risposta.get_data(as_text=True)
+    assert 'alert-warning' in testo
+    assert 'non sono stati' in testo.lower() and 'rimoss' in testo.lower()
+    assert 'alert-success' not in testo
+
+
+def test_la_cancellazione_registra_l_operazione_anche_se_fallisce_dopo_il_commit(client, app, dati, monkeypatch):
+    """Minore: se elimina_struttura fallisce DOPO aver gia' cancellato le
+    righe (qui: un errore non-OSError durante la rimozione di un file, che
+    il codice non cattura perche' cattura solo OSError), il database e'
+    gia' stato modificato. Il messaggio 'nulla e' stato cancellato' sarebbe
+    falso, e l'operazione - irreversibile - deve comunque finire nel
+    registro attivita'.
+
+    Scenario costruito apposta (il revisore ha confermato che non esiste un
+    innesco naturale con il codice attuale): si inietta un'eccezione
+    non-OSError in os.remove dentro struttura_service, cosa che nessun
+    percorso reale del codice provoca oggi."""
+    import struttura_service
+    from models import query_one
+    _prepara_struttura_disattivata_con_foto(app, dati['s'], 'x.jpg', b'x')
+
+    def esplode(*a, **k):
+        raise RuntimeError('errore non-OSError iniettato per il test')
+    monkeypatch.setattr(struttura_service.os, 'remove', esplode)
+
+    entra(client, 'super@x.it')
+    risposta = client.post(f"/strutture/{dati['s']}/elimina",
+                           data={'conferma_nome': 'Clinica A'}, follow_redirects=True)
+    testo = risposta.get_data(as_text=True)
+
+    assert 'nulla' not in testo.lower()
+    assert 'alert-warning' in testo
+
+    with app.app_context():
+        assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is None
+        riga_log = query_one(
+            "SELECT * FROM log_attivita WHERE azione='eliminazione' AND entita_id=?",
+            (dati['s'],))
+        assert riga_log is not None

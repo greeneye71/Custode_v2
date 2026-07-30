@@ -450,7 +450,7 @@ def esporta(struttura_id):
 @strutture_bp.route('/<int:struttura_id>/elimina', methods=['GET'])
 @superadmin_required
 def conferma_eliminazione(struttura_id):
-    from struttura_service import contenuto_struttura
+    from struttura_service import contenuto_struttura, anteprima_cancellazione_file
 
     struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
     if not struttura:
@@ -464,8 +464,16 @@ def conferma_eliminazione(struttura_id):
     contenuto = contenuto_struttura(get_db(), struttura_id,
                                     current_app.config['UPLOADS_PATH'],
                                     single_struttura=single)
+    # contenuto['file'] conta l'intero sottoalbero su disco in modalita'
+    # multi (orfani compresi): la cancellazione invece passa dalle righe
+    # (_percorsi_allegati). La pagina deve mostrare quanti file verranno
+    # DAVVERO cancellati, non il totale su disco: altrimenti promette la
+    # cancellazione di file che sopravvivono.
+    anteprima = anteprima_cancellazione_file(get_db(), struttura_id,
+                                             current_app.config['UPLOADS_PATH'])
     return render_template('strutture/elimina.html',
-                           struttura=struttura, contenuto=contenuto)
+                           struttura=struttura, contenuto=contenuto,
+                           anteprima=anteprima)
 
 
 @strutture_bp.route('/<int:struttura_id>/elimina', methods=['POST'])
@@ -502,13 +510,26 @@ def elimina(struttura_id):
     except Exception as e:
         current_app.logger.error(f'Eliminazione struttura {struttura_id} fallita: {e}',
                                  exc_info=True)
+        # elimina_struttura fa archivio, poi database, poi file: un'eccezione
+        # puo' arrivare anche DOPO che il database e' gia' stato modificato
+        # (es. un errore imprevisto durante la pulizia dei file, non
+        # catturato perche' non e' un OSError). In quel caso la struttura
+        # non c'e' piu': dire "nulla e' stato cancellato" sarebbe falso, e
+        # l'operazione - irreversibile - deve comunque finire nel registro.
+        ancora_presente = query_one("SELECT id FROM strutture WHERE id = ?", (struttura_id,))
+        if not ancora_presente:
+            log_attivita(
+                g.user['id'], 'eliminazione', 'strutture', struttura_id,
+                f'Struttura "{struttura["nome"]}" eliminata dal database, ma un errore '
+                f'e\' avvenuto dopo (durante l\'archiviazione o la pulizia dei file): {e}. '
+                'Controlla il log applicativo.',
+                request.remote_addr)
+            flash(f'Struttura "{struttura["nome"]}" e\' stata eliminata dal database, ma '
+                 'un errore e\' avvenuto durante la pulizia successiva. Controlla il log.',
+                 'warning')
+            return redirect(url_for('strutture.index'))
         flash('Eliminazione fallita, nulla e\' stato cancellato. Controlla il log.', 'danger')
         return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
-
-    if esito['file_non_rimossi']:
-        current_app.logger.warning(
-            f'Eliminazione struttura {struttura_id}: {len(esito["file_non_rimossi"])} '
-            f'file non rimossi: {esito["file_non_rimossi"]}')
 
     log_attivita(
         g.user['id'], 'eliminazione', 'strutture', struttura_id,
@@ -517,7 +538,18 @@ def elimina(struttura_id):
         f'{esito["utenti"]} utenti. Archivio: {esito["archivio"]}. '
         f'File non rimossi: {len(esito["file_non_rimossi"])}.',
         request.remote_addr)
-    flash(f'Struttura "{esito["nome"]}" eliminata. Archivio in {esito["archivio"]}', 'success')
+
+    if esito['file_non_rimossi']:
+        current_app.logger.warning(
+            f'Eliminazione struttura {struttura_id}: {len(esito["file_non_rimossi"])} '
+            f'file non rimossi: {esito["file_non_rimossi"]}')
+        flash(
+            f'Struttura "{esito["nome"]}" eliminata. Archivio in {esito["archivio"]}. '
+            f'Attenzione: {len(esito["file_non_rimossi"])} file allegati non sono stati '
+            'rimossi dal disco (dettagli nel log applicativo); pulisci_uploads.py li individuera\'.',
+            'warning')
+    else:
+        flash(f'Struttura "{esito["nome"]}" eliminata. Archivio in {esito["archivio"]}', 'success')
     return redirect(url_for('strutture.index'))
 
 

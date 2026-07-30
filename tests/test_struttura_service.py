@@ -300,6 +300,77 @@ def test_contenuto_di_default_resta_in_modalita_multi(conn, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# anteprima_cancellazione_file (Minore del giro di correzioni 1 del Task 7)
+# ---------------------------------------------------------------------------
+#
+# contenuto_struttura['file'], in modalita' multi, conta l'intero sottoalbero
+# uploads/strutture/<id>/ con un os.walk: utile per sapere quanto spazio
+# occupa la struttura, orfani compresi. La cancellazione pero' passa da
+# _percorsi_allegati (le righe), non dall'albero: la pagina di conferma non
+# puo' usare lo stesso numero di contenuto_struttura senza promettere la
+# cancellazione di file che in realta' sopravvivono.
+
+def test_anteprima_cancellazione_conta_solo_i_file_referenziati_non_gli_orfani(conn, tmp_path):
+    """Il numero che elimina_struttura cancellera' davvero, non il totale
+    su disco: un file non referenziato da nessuna riga (orfano) nella
+    stessa cartella non deve entrare nel conteggio, anche se contenuto_
+    struttura (os.walk) lo conterebbe."""
+    from struttura_service import anteprima_cancellazione_file
+    con, ids = conn
+    a = ids['a']['struttura']
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               (f'strutture/{a}/foto/referenziato.jpg', ids['a']['apparecchio']))
+    con.commit()
+
+    cartella = tmp_path / 'uploads' / 'strutture' / str(a) / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'referenziato.jpg').write_bytes(b'0' * 100)
+    (cartella / 'orfano.jpg').write_bytes(b'0' * 999)
+
+    anteprima = anteprima_cancellazione_file(con, a, str(tmp_path / 'uploads'))
+    assert anteprima['file'] == 1
+    assert anteprima['byte'] == 100
+
+
+def test_anteprima_cancellazione_ignora_i_percorsi_mancanti_su_disco(conn, tmp_path):
+    """Una riga puo' referenziare un file che non c'e' piu' sul disco
+    (cancellato a mano, o mai arrivato): non deve far fallire il conteggio,
+    solo non contarlo (come contenuto_struttura)."""
+    from struttura_service import anteprima_cancellazione_file
+    con, ids = conn
+    a = ids['a']['struttura']
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               (f'strutture/{a}/foto/assente.jpg', ids['a']['apparecchio']))
+    con.commit()
+
+    anteprima = anteprima_cancellazione_file(con, a, str(tmp_path / 'inesistente'))
+    assert anteprima['file'] == 0
+    assert anteprima['byte'] == 0
+
+
+def test_anteprima_cancellazione_coincide_con_contenuto_struttura_in_modalita_single(conn, tmp_path):
+    """In single-struttura contenuto_struttura usa gia' la stessa selezione
+    per riferimento (non esiste un sottoalbero da isolare con un os.walk):
+    i due conteggi devono coincidere, orfano compreso nell'esclusione."""
+    from struttura_service import anteprima_cancellazione_file, contenuto_struttura
+    con, ids = conn
+    a = ids['a']['struttura']
+    con.execute("UPDATE apparecchi SET foto_path=? WHERE id=?",
+               ('foto/referenziato.jpg', ids['a']['apparecchio']))
+    con.commit()
+
+    cartella = tmp_path / 'uploads' / 'foto'
+    cartella.mkdir(parents=True)
+    (cartella / 'referenziato.jpg').write_bytes(b'0' * 42)
+    (cartella / 'orfano.jpg').write_bytes(b'0' * 999)
+
+    anteprima = anteprima_cancellazione_file(con, a, str(tmp_path / 'uploads'))
+    contenuto = contenuto_struttura(con, a, str(tmp_path / 'uploads'), single_struttura=True)
+    assert anteprima['file'] == contenuto['file'] == 1
+    assert anteprima['byte'] == contenuto['byte'] == 42
+
+
+# ---------------------------------------------------------------------------
 # esporta_struttura
 # ---------------------------------------------------------------------------
 
@@ -919,8 +990,9 @@ def test_ogni_colonna_di_percorso_dello_schema_e_registrata(app):
     )
 
     # E il verso opposto: una riga di COLONNE_ALLEGATI che nomina una colonna
-    # inesistente non fallisce, viene ignorata dal try/except di
-    # _percorsi_allegati. Sarebbe una copertura solo apparente.
+    # inesistente fa sollevare sqlite3.OperationalError a _percorsi_allegati,
+    # che non la cattura — quindi manda in errore l'esportazione e la
+    # cancellazione di qualunque struttura. Meglio scoprirlo qui.
     inesistenti = registrate - colonne_schema
     assert not inesistenti, (
         f"COLONNE_ALLEGATI nomina colonne che lo schema non ha: "

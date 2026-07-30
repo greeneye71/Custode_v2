@@ -14,10 +14,19 @@
         {{ contenuto.documenti }} documenti e
         {{ contenuto.accessori }} accessori</li>
       <li>{{ contenuto.divisioni }} divisioni e {{ contenuto.import }} import</li>
-      <li>{{ contenuto.file }} file allegati
-        ({{ (contenuto.byte / 1048576) | round(1) }} MB)</li>
+      <li>{{ anteprima.file }} file allegati saranno cancellati
+        ({{ (anteprima.byte / 1048576) | round(1) }} MB)</li>
       <li>{{ contenuto.utenti }} utenti della struttura</li>
     </ul>
+    {% if contenuto.file > anteprima.file %}
+    <p class="text-warning mb-3">
+      <i class="bi bi-exclamation-circle me-1"></i>
+      Inoltre, {{ contenuto.file - anteprima.file }} file presenti nella cartella
+      della struttura non sono collegati a nessun apparecchio, manutenzione,
+      verifica, documento o import: <strong>non</strong> verranno cancellati ora e
+      resteranno sul disco. Usa <code>pulisci_uploads.py</code> per individuarli.
+    </p>
+    {% endif %}
     {% if contenuto.tecnici %}
     <p class="text-success mb-3">
       <i class="bi bi-check-circle me-1"></i>

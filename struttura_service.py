@@ -274,6 +274,39 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
     return contenuto
 
 
+def anteprima_cancellazione_file(conn, struttura_id, uploads_base):
+    """Quanti file (e byte) la cancellazione di questa struttura liberera'
+    DAVVERO: solo quelli referenziati da una riga (_percorsi_allegati), gli
+    stessi che elimina_struttura elenca per cancellarli uno per uno.
+
+    Non e' lo stesso numero di contenuto_struttura['file']: in modalita'
+    multi quella conta l'intero sottoalbero uploads/strutture/<id>/ con un
+    os.walk (utile per sapere quanto spazio occupa la struttura sul disco,
+    orfani compresi), mentre la cancellazione - per non rischiare di
+    portare via un file non suo in un database che non rispetta le
+    assunzioni della modalita' (vedi _percorsi_allegati) - cancella solo
+    cio' che una riga referenzia ancora. La pagina di conferma deve
+    mostrare QUESTO numero come "verra' cancellato": usare quello di
+    contenuto_struttura in multi promette la cancellazione di file che in
+    realta' sopravvivono (gli orfani), e chi legge quel numero prima di
+    un'operazione irreversibile fa un controllo di plausibilita' su un
+    dato sbagliato.
+
+    In modalita' single i due numeri coincidono sempre: contenuto_struttura
+    usa gia' questa stessa selezione in quella modalita', perche' li' non
+    esiste un sottoalbero da isolare con un os.walk.
+    """
+    numero, byte = 0, 0
+    for relativo in _percorsi_allegati(conn, struttura_id):
+        percorso = os.path.join(uploads_base, relativo.replace('/', os.sep))
+        try:
+            byte += os.path.getsize(percorso)
+            numero += 1
+        except OSError:
+            pass
+    return {'file': numero, 'byte': byte}
+
+
 def _nome_cartella(nome_struttura):
     """Nome parlante e ordinabile, con l'ora: due esportazioni nello stesso
     giorno non si sovrascrivono."""
