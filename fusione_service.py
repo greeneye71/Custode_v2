@@ -316,11 +316,17 @@ def fondi_apparecchi(conn, id_principale, id_scartato, valori=None,
         "WHERE apparecchio_match_id = ?", (id_principale, id_scartato))
     esito['preview'] = cur.rowcount
 
-    # 4. La scheda scartata va letta finche' esiste.
-    esito['scartato'] = dict(scartato)
-
-    # 5. Ora la cancellazione non porta via nulla: non ha piu' figli.
+    # 4. Ora la cancellazione non porta via nulla: non ha piu' figli.
     conn.execute("DELETE FROM apparecchi WHERE id = ?", (id_scartato,))
+
+    # 5. scartato e' una sqlite3.Row gia' letta in memoria in validazione
+    # (righe 204-207, prima di qualunque scrittura): dict() non e' sensibile
+    # all'ordine e darebbe lo stesso risultato ovunque nella funzione. Sta
+    # qui, dopo la DELETE, solo per leggibilita' - raggruppata vicino alla
+    # cancellazione a cui si riferisce concettualmente. L'ordine che conta
+    # davvero in questa funzione e' quello di UPDATE (sposta i figli) prima
+    # di DELETE (cancella la scheda), non questa riga.
+    esito['scartato'] = dict(scartato)
 
     # Dopo la cancellazione, non prima: se la principale prende la matricola
     # della scartata mentre la scartata esiste ancora,

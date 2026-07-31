@@ -401,6 +401,16 @@ def fondi(id, altro_id):
     """Confronto delle due schede prima della fusione."""
     from fusione_service import CAMPI_FONDIBILI, valori_predefiniti
 
+    # La POST rifiuta gia' id == altro_id (fondi_apparecchi solleva
+    # FusioneRifiutataError), ma quel rifiuto rimanda proprio a QUESTA
+    # pagina: senza guardia anche qui, un URL con lo stesso id due volte
+    # renderebbe una pagina "funzionante" (bottone di fusione, sei
+    # checkbox, due radio "principale" con lo stesso value e lo stesso id
+    # HTML duplicato) che rimanda a se stessa in un anello.
+    if id == altro_id:
+        flash('Le due schede da confrontare devono essere diverse.', 'warning')
+        return redirect(url_for('apparecchi.lista'))
+
     uno, due = _due_schede_fondibili(id, altro_id)
     if not uno or not due:
         flash('Apparecchio non trovato o non autorizzato.', 'danger')

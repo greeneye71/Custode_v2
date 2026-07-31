@@ -238,6 +238,18 @@ def test_la_pagina_di_confronto_marca_il_proprietario_di_ogni_valore(client, dat
     assert f'data-owner="{dati["due"]}"' in testo
 
 
+def test_la_get_di_confronto_rifiuta_lo_stesso_id_due_volte(client, dati):
+    """Senza guardia la GET renderebbe una pagina 'funzionante' (bottone di
+    fusione, due radio 'principale' con lo stesso value e lo stesso id HTML
+    duplicato) che rimanda a se stessa: la POST rifiuta gia' id == altro_id,
+    ma il redirect di quel rifiuto punta proprio a questa pagina, un anello.
+    La GET deve chiuderlo per prima."""
+    entra(client, 'admin@a.it')
+    risposta = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['uno']}",
+                          follow_redirects=False)
+    assert risposta.status_code == 302
+
+
 def test_la_get_di_confronto_e_negata_fra_strutture_diverse(client, app, dati):
     """_due_schede_fondibili e' l'UNICO presidio della GET (nessun'altra
     query filtrata la protegge): usa apparecchio_accessibile per entrambi
