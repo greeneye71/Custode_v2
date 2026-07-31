@@ -530,7 +530,7 @@ flag dei cookie, redirect HTTP→HTTPS e risoluzione DNS.
 
 ---
 
-*Documentazione MedInventory v2.6.0 — Studio Bergamaschi*
+*Documentazione MedInventory v2.6.1 — Studio Bergamaschi*
 
 **Riferimenti:**
 - [Cloudflare Tunnel — Documentazione ufficiale](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
