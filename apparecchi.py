@@ -354,7 +354,23 @@ def duplicati():
         flash('Non autorizzato.', 'danger')
         return redirect(url_for('apparecchi.lista'))
 
-    div_clause, div_params = filtro_divisione()
+    # Volutamente NON filtro_divisione(): quella clausola onora
+    # g.divisione_attiva, e per un admin/tecnico che non ha ancora scelto
+    # "Tutte le divisioni" g.divisione_attiva e' una divisione SPECIFICA
+    # (auth.py, ramo "Default to first accessible division") - il
+    # confronto vedrebbe solo gli apparecchi di quel reparto e, nel caso
+    # comune di un duplicato fra due reparti diversi, l'elenco direbbe che
+    # non ci sono duplicati quando invece ce ne sono. I tre ruoli ammessi
+    # qui sopra hanno comunque accesso a tutta la struttura -
+    # apparecchio_accessibile salta il controllo di divisione per loro -
+    # quindi confrontare l'intera struttura non allarga la visibilita', e'
+    # l'ambito giusto per questa domanda. Il superadmin che non impersona
+    # nessuna struttura non vede nulla, come nel resto del progetto.
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        div_clause, div_params = "AND a.struttura_id = ?", [struttura_id]
+    else:
+        div_clause, div_params = "AND 1=0", []
     righe = query_all(
         f"""SELECT a.id, a.matricola, a.marca, a.modello, a.ubicazione, a.descrizione,
                    (SELECT COUNT(*) FROM manutenzioni m WHERE m.apparecchio_id = a.id) AS n_manut,

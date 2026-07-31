@@ -86,6 +86,37 @@ def test_l_elenco_e_negato_a_un_utente_semplice(client, dati):
     assert 'R00015' not in risposta.get_data(as_text=True)
 
 
+def test_l_elenco_propone_duplicati_fra_divisioni_diverse(client, app, dati):
+    """auth.py mette un admin appena entrato (nessuna scelta di divisione in
+    sessione) sulla PRIMA divisione della struttura (g.divisioni[0]), non su
+    'tutte' - quello e' il default del solo tecnico. Se l'elenco confrontasse
+    con filtro_divisione() (che onora g.divisione_attiva), un duplicato che
+    vive in due reparti diversi non verrebbe mai proposto: e' proprio il caso
+    che il CHANGELOG cita per primo ("import da documenti diversi o un
+    inserimento manuale in due reparti").
+
+    Qui la struttura ha DUE divisioni ('Cardiologia' e 'Oculistica', ordinate
+    per nome: Cardiologia prima); l'admin finisce quindi bloccato su
+    Cardiologia. I due apparecchi duplicati vivono uno in Cardiologia e uno
+    in Oculistica: solo confrontando l'intera struttura la coppia emerge."""
+    from models import execute
+    with app.app_context():
+        div_secondaria = execute(
+            "INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Cardiologia','CAR',?)",
+            (dati['a'],)).lastrowid
+        # Sposto 'due' nella nuova divisione: 'uno' resta in Oculistica
+        # (dati['div_a']), quindi la coppia duplicata attraversa i reparti.
+        execute("UPDATE apparecchi SET divisione_id=? WHERE id=?",
+                (div_secondaria, dati['due']))
+    entra(client, 'admin@a.it')  # primo accesso: nessuna divisione ancora scelta in sessione
+    risposta = client.get('/apparecchi/duplicati')
+    assert risposta.status_code == 200
+    testo = risposta.get_data(as_text=True)
+    assert 'Nessuna coppia sospetta' not in testo
+    assert 'R-00015' in testo
+    assert 'R00015' in testo
+
+
 def test_l_elenco_dice_perche_propone_la_coppia(client, dati):
     """Chi guarda deve sapere quale criterio l'ha proposta: e' cio' che
     distingue una corrispondenza certa da una somiglianza da verificare."""
