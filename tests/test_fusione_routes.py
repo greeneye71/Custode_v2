@@ -173,21 +173,39 @@ def test_la_collisione_con_un_terzo_viene_spiegata_non_lanciata(client, app, dat
         assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
 
 
-def test_il_fallimento_a_meta_annulla_la_scrittura_gia_fatta(client, app, dati, monkeypatch):
+def test_una_fusione_fallita_non_lascia_scritture_durevoli(client, app, dati, monkeypatch):
     """I sei test precedenti provano i casi che riescono e i rifiuti che
     avvengono PRIMA di scrivere (FusioneRifiutataError, FusioneCollisioneError):
     nessuno prova il guasto a meta', quando fondi_apparecchi ha gia' scritto
     qualcosa sulla connessione della richiesta e poi solleva un'eccezione
-    imprevista. La rotta deve accorgersene ed annullare TUTTO prima del
-    redirect (except Exception: db.rollback()), non lasciare a meta' l'unica
-    operazione della fusione che cancella una scheda: un update parziale
-    sopravvissuto sarebbe indistinguibile da una fusione riuscita a meta',
-    e l'operatore non avrebbe modo di saperlo dalla sola interfaccia.
+    imprevista. Qui si simula quel guasto e si controlla che non resti nulla
+    di quella scrittura: un update parziale sopravvissuto sarebbe
+    indistinguibile da una fusione riuscita a meta', e l'operatore non
+    avrebbe modo di saperlo dalla sola interfaccia.
+
+    ATTENZIONE al nome: NON e' un test del db.rollback() esplicito nel ramo
+    `except Exception` di esegui_fusione. Con quella riga tolta, questo test
+    resta verde lo stesso (verificato: rimuovendola a mano e rilanciando
+    solo questo test, passa comunque). Il motivo e' in models.get_db/close_db:
+    la connessione della richiesta viene chiusa a fine richiesta con
+    db.close(), MAI preceduta da un commit implicito; e nel percorso di
+    guasto qui esercitato il codice non raggiunge mai db.commit() (sta dopo
+    la chiamata a fondi_apparecchi nel try, e l'eccezione la salta). Senza un
+    commit di mezzo, l'UPDATE fatto dentro fondi_apparecchi_a_meta non e' mai
+    diventato durevole: sparisce alla chiusura della connessione a
+    prescindere dal rollback esplicito. Quella riga quindi OGGI non e'
+    coperta da nessun test - ne' questo ne' altri - e chi la leggesse
+    protetta da questo test la toglierebbe credendo di non rompere nulla.
+    Lo diventerebbe se in futuro la rotta eseguisse un commit intermedio
+    prima di chiamare fondi_apparecchi (per esempio un'altra scrittura sulla
+    stessa richiesta): in quel momento un rollback mancante lascerebbe quella
+    scrittura precedente durevole mentre la fusione fallisce, e servirebbe
+    un test dedicato a quello scenario - che oggi non si puo' scrivere
+    perche' descriverebbe codice che non esiste.
 
     Simula il guasto con un monkeypatch su fusione_service.fondi_apparecchi
     che scrive davvero (sposta la manutenzione di 'due' su 'uno') e poi
-    solleva RuntimeError senza mai arrivare al commit della rotta. Se il
-    rollback funziona, quella scrittura scompare con tutto il resto.
+    solleva RuntimeError senza mai arrivare al commit della rotta.
 
     Il monkeypatch funziona perche' la rotta fa `from fusione_service import
     fondi_apparecchi` DENTRO la funzione esegui_fusione, non in cima al file:
