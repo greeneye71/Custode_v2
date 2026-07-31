@@ -18,7 +18,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile, filtro_divisione)
+                    apparecchio_accessibile, filtro_divisione, get_db)
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -342,6 +342,228 @@ def lista():
         return render_template('partials/apparecchi_table.html', **context)
 
     return render_template('apparecchi/lista.html', **context)
+
+
+@apparecchi_bp.route('/apparecchi/duplicati')
+@login_required
+def duplicati():
+    """Coppie di schede che potrebbero descrivere lo stesso apparecchio."""
+    from fusione_service import candidati_duplicati, CRITERI
+
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        flash('Non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    # Volutamente NON filtro_divisione(): quella clausola onora
+    # g.divisione_attiva, e per un admin/tecnico che non ha ancora scelto
+    # "Tutte le divisioni" g.divisione_attiva e' una divisione SPECIFICA
+    # (auth.py, ramo "Default to first accessible division") - il
+    # confronto vedrebbe solo gli apparecchi di quel reparto e, nel caso
+    # comune di un duplicato fra due reparti diversi, l'elenco direbbe che
+    # non ci sono duplicati quando invece ce ne sono. I tre ruoli ammessi
+    # qui sopra hanno comunque accesso a tutta la struttura -
+    # apparecchio_accessibile salta il controllo di divisione per loro -
+    # quindi confrontare l'intera struttura non allarga la visibilita', e'
+    # l'ambito giusto per questa domanda. Il superadmin che non impersona
+    # nessuna struttura non vede nulla, come nel resto del progetto.
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        div_clause, div_params = "AND a.struttura_id = ?", [struttura_id]
+    else:
+        div_clause, div_params = "AND 1=0", []
+    righe = query_all(
+        f"""SELECT a.id, a.matricola, a.marca, a.modello, a.ubicazione, a.descrizione,
+                   (SELECT COUNT(*) FROM manutenzioni m WHERE m.apparecchio_id = a.id) AS n_manut,
+                   (SELECT COUNT(*) FROM verifiche v WHERE v.apparecchio_id = a.id) AS n_verif
+            FROM apparecchi a
+            WHERE a.stato != 'dismesso' {div_clause}
+            ORDER BY a.marca, a.modello, a.matricola""",
+        div_params)
+
+    coppie = candidati_duplicati(righe)
+    return render_template('apparecchi/duplicati.html', coppie=coppie, criteri=CRITERI)
+
+
+def _due_schede_fondibili(id, altro_id):
+    """Le due schede, se l'utente puo' agire su entrambe. Altrimenti (None, None).
+
+    apparecchio_accessibile controlla struttura E divisione: e' l'unico modo
+    accettabile di raggiungere un apparecchio per id.
+    """
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        return None, None
+    return apparecchio_accessibile(id), apparecchio_accessibile(altro_id)
+
+
+@apparecchi_bp.route('/apparecchi/<int:id>/fondi/<int:altro_id>')
+@login_required
+def fondi(id, altro_id):
+    """Confronto delle due schede prima della fusione."""
+    from fusione_service import CAMPI_FONDIBILI, valori_predefiniti
+
+    # La POST rifiuta gia' id == altro_id (fondi_apparecchi solleva
+    # FusioneRifiutataError), ma quel rifiuto rimanda proprio a QUESTA
+    # pagina: senza guardia anche qui, un URL con lo stesso id due volte
+    # renderebbe una pagina "funzionante" (bottone di fusione, sei
+    # checkbox, due radio "principale" con lo stesso value e lo stesso id
+    # HTML duplicato) che rimanda a se stessa in un anello.
+    if id == altro_id:
+        flash('Le due schede da confrontare devono essere diverse.', 'warning')
+        return redirect(url_for('apparecchi.lista'))
+
+    uno, due = _due_schede_fondibili(id, altro_id)
+    if not uno or not due:
+        flash('Apparecchio non trovato o non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    differenze = [
+        {'campo': c, 'a': uno.get(c), 'b': due.get(c)}
+        for c in CAMPI_FONDIBILI if uno.get(c) != due.get(c)
+    ]
+    interventi = query_all(
+        """SELECT 'manutenzione' AS tipo, id, data_intervento AS data, tipo AS sottotipo,
+                  verbale_path AS allegato, apparecchio_id
+           FROM manutenzioni WHERE apparecchio_id IN (?, ?)
+           UNION ALL
+           SELECT 'verifica', id, data_verifica, esito, documento_path, apparecchio_id
+           FROM verifiche WHERE apparecchio_id IN (?, ?)
+           ORDER BY data DESC""",
+        (id, altro_id, id, altro_id))
+
+    return render_template('apparecchi/fondi.html', uno=uno, due=due,
+                           differenze=differenze, interventi=interventi,
+                           predefiniti=valori_predefiniti(uno, due))
+
+
+@apparecchi_bp.route('/apparecchi/<int:id>/fondi/<int:altro_id>', methods=['POST'])
+@login_required
+def esegui_fusione(id, altro_id):
+    """Esegue la fusione. Tutto in una transazione sola."""
+    from fusione_service import (fondi_apparecchi, CAMPI_FONDIBILI,
+                                 FusioneCollisioneError, FusioneRifiutataError)
+
+    uno, due = _due_schede_fondibili(id, altro_id)
+    if not uno or not due:
+        flash('Apparecchio non trovato o non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    try:
+        id_principale = int(request.form.get('principale', 0))
+    except (TypeError, ValueError):
+        id_principale = 0
+    if id_principale not in (id, altro_id):
+        flash('Scegli quale scheda deve sopravvivere.', 'warning')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+    id_scartato = altro_id if id_principale == id else id
+
+    valori = {}
+    for campo in CAMPI_FONDIBILI:
+        if f'campo_{campo}' in request.form:
+            valore = request.form.get(f'campo_{campo}')
+            valori[campo] = valore if valore != '' else None
+
+    interventi_scartati = []
+    for chiave in request.form.getlist('scarta'):
+        tipo, _sep, id_int = chiave.partition(':')
+        if id_int.isdigit():
+            interventi_scartati.append((tipo, int(id_int)))
+
+    db = get_db()
+    try:
+        esito = fondi_apparecchi(db, id_principale, id_scartato, valori,
+                                 interventi_scartati)
+
+        # Il registro e' l'unica rete che resta dopo la fusione: la scheda
+        # scartata non c'e' piu' nel database, quindi il messaggio deve
+        # riversarla per intero, non solo nei campi che il form poteva far
+        # scegliere. esito['scartato'] e' dict(scartato) preso PRIMA della
+        # cancellazione (vedi fondi_apparecchi): itera su quello, non su
+        # CAMPI_FONDIBILI, altrimenti colonne come divisione_id (NOT NULL
+        # nello schema, e quindi indispensabile per ricreare la riga a mano)
+        # sparirebbero dal registro senza che nessuna fusione futura le
+        # rimpianga finche' non serve davvero ricostruire.
+        scartato = esito['scartato']
+        campi = ' '.join(
+            f"{c}={v!r}" for c, v in scartato.items() if v not in (None, ''))
+
+        # La scheda scartata e' l'unico dato che sparisce dal database, ma
+        # non e' l'unico dato che cambia: i valori scelti dal form
+        # sovrascrivono anche colonne della scheda SUPERSTITE, che nel
+        # database restano solo nella loro forma nuova. Senza il valore
+        # precedente qui, ricostruire lo stato di prima della fusione e'
+        # impossibile per meta' dei dati toccati. esito['valori_precedenti']
+        # e' gia' limitato ai soli campi il cui valore e' davvero cambiato
+        # (vedi fondi_apparecchi).
+        precedenti = esito['valori_precedenti']
+        valori_prec = ', '.join(
+            f"{c}={v!r}" for c, v in precedenti.items()) or 'nessuno'
+
+        # log_attivita chiama models.execute(), che fa il proprio commit
+        # sulla stessa connessione (get_db() e' per-richiesta): chiamandola
+        # QUI, prima del commit esplicito qui sotto, quel commit copre
+        # insieme la fusione e la voce di registro. Se la scrittura del
+        # registro fallisce, l'eccezione arriva al blocco "except Exception"
+        # sotto e db.rollback() annulla anche la fusione: meglio nessuna
+        # fusione che una fusione senza alcuna traccia di cosa conteneva la
+        # scheda cancellata.
+        # struttura_id e' il settimo parametro di log_attivita: senza,
+        # la voce nasce con struttura_id NULL, e admin.py filtra
+        # "l.struttura_id = ?" per chiunque non sia superadmin - NULL = ?
+        # non e' mai vero. L'admin (o il tecnico) che ha appena eseguito
+        # la fusione non vedrebbe la propria voce ne' a schermo ne'
+        # nell'export CSV, l'unica traccia rimasta di una scheda
+        # cancellata in modo definitivo. uno e due sono nella stessa
+        # struttura a questo punto (fondi_apparecchi lo garantisce, o
+        # avrebbe gia' sollevato FusioneRifiutataError prima di arrivare
+        # qui), quindi la struttura della principale e' quella giusta.
+        log_attivita(
+            g.user['id'], 'fusione', 'apparecchi', id_principale,
+            f"Fusi \"{scartato['marca']} {scartato['modello']} {scartato['matricola']}\" "
+            f"(id {id_scartato}) in id {id_principale}. Scheda scartata: {campi}. "
+            f"Spostati: {esito['manutenzioni']} manutenzioni, {esito['verifiche']} verifiche, "
+            f"{esito['documenti']} documenti, {esito['accessori']} accessori. "
+            f"Scartati: {esito['interventi_scartati']} interventi. "
+            f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}. "
+            f"Valori precedenti sulla scheda superstite (sovrascritti): {valori_prec}",
+            request.remote_addr, struttura_id=uno['struttura_id'])
+
+        # A questo punto la fusione e' gia' durevole: models.execute(),
+        # chiamata da log_attivita qui sopra, ha gia' fatto commit() sulla
+        # stessa connessione di richiesta (get_db() e' per-richiesta), e
+        # quel commit copre tutto cio' che fondi_apparecchi ha scritto prima
+        # di lei. Questa riga e' quindi un no-op in ogni fusione che arriva
+        # fin qui - non e' lei a rendere durevole la fusione, oggi. Resta
+        # comunque, e non va tolta credendola ridondante: e' la rete per il
+        # giorno in cui la registrazione verra' spostata, sostituita da
+        # un'implementazione che non passa piu' da models.execute(), o
+        # tolta del tutto - a quel punto sarebbe l'unica cosa a reggere, e
+        # la sua assenza sarebbe un bug silenzioso scoperto solo quando
+        # qualcuno si accorge che le fusioni non sopravvivono al riavvio.
+        # E l'ordine sopra - registrazione PRIMA, commit DOPO - e' voluto,
+        # non un dettaglio: se log_attivita fallisce, l'eccezione arriva al
+        # blocco "except Exception" sotto e db.rollback() annulla anche la
+        # fusione. Una fusione senza la sua voce di registro non deve
+        # risultare avvenuta: e' l'unica traccia che resta della scheda
+        # cancellata, e la fusione non si annulla dall'interfaccia.
+        db.commit()
+    except FusioneCollisioneError as e:
+        db.rollback()
+        flash(str(e), 'danger')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+    except FusioneRifiutataError as e:
+        db.rollback()
+        flash(f'Fusione non eseguita: {e}', 'danger')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+    except Exception as e:
+        db.rollback()
+        current_app.logger.error(f'Fusione {id_principale}<-{id_scartato} fallita: {e}',
+                                 exc_info=True)
+        flash('Fusione fallita, nulla e\' stato modificato. Controlla il log.', 'danger')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+
+    flash(f"Schede fuse: {esito['manutenzioni']} manutenzioni e "
+          f"{esito['verifiche']} verifiche trasferite.", 'success')
+    return redirect(url_for('apparecchi.dettaglio', id=id_principale))
 
 
 @apparecchi_bp.route('/apparecchi/nuovo', methods=['GET', 'POST'])

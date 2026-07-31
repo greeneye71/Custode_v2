@@ -6,6 +6,62 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.6.1] - 2026-07-31
+
+### Aggiunto
+
+- **Fusione di apparecchi duplicati.** Lo stesso apparecchio fisico registrato due
+  volte — `R-00015` e `R00015`, `MON-1` e `MON-l` — si incontra dopo un import da
+  documenti diversi o un inserimento manuale in due reparti. Tenerne due schede
+  spezza lo storico e falsa lo scadenzario, perche' la vista `prossime_scadenze`
+  tiene l'ultimo record per apparecchio e ne vede due; cancellarne una perde i dati
+  che solo quella aveva. Ora si fondono: manutenzioni, verifiche, documenti e
+  accessori confluiscono sulla scheda che sopravvive, che **conserva il proprio id**
+  perche' i QR code gia' stampati e attaccati sull'apparecchio restino validi.
+- **Elenco dei possibili duplicati** (`/apparecchi/duplicati`), con il criterio che
+  ha proposto ogni coppia: matricola identica a meno di trattini e maiuscole, una
+  matricola contenuta nell'altra, oppure stesso modello e ubicazione con matricole
+  che differiscono per un carattere. Sono proposte, non certezze: due macchine
+  gemelle acquistate insieme hanno la stessa forma di un errore di battitura, e
+  nessun criterio automatico puo' distinguerle — per questo si confronta prima di
+  fondere.
+- Nella pagina di confronto si sceglie quale scheda sopravvive e, per ogni campo
+  diverso, quale valore tenere. E' preselezionato quello della scheda principale,
+  **tranne dove e' vuoto e l'altra ha un valore**: nel caso comune basta confermare,
+  e non si perde il dato che solo la scheda scartata aveva. Gli interventi
+  confluiscono tutti; scartarne uno e' una scelta esplicita, e la riga dice se solo
+  quella copia ha il verbale allegato.
+- La fusione e' **definitiva** e non si annulla dall'interfaccia. Nel registro
+  attivita' finisce la scheda cancellata campo per campo, cosi' ricostruirla a mano
+  resta possibile.
+
+### Note
+
+- Riservata ad `admin`, `tecnico` e `superadmin`: la fusione cancella una scheda, e
+  un `utente` non puo' nemmeno dismetterne una. Entrambe le schede devono essere
+  accessibili all'operatore — nessuna fusione fra strutture diverse. (I tre ruoli
+  ammessi vedono comunque tutte le divisioni della propria struttura, quindi
+  un vincolo "ne' fra divisioni non assegnate" non si applica mai a loro: non
+  esiste un ruolo che possa fondere ed essere limitato a una divisione.)
+- Se i valori scelti facessero collidere la scheda risultante con un terzo apparecchio
+  (`UNIQUE(struttura_id, modello, matricola)`), l'operazione viene rifiutata con un
+  messaggio che nomina il terzo, invece di fallire con un errore di database.
+- **Nessun file si sposta**: gli allegati stanno in `uploads/strutture/<id>/<tipo>/`,
+  non in cartelle per apparecchio, quindi fondere due schede della stessa struttura
+  cambia solo la riga che li referenzia.
+- Lo **spostamento di un apparecchio fra strutture** resta da progettare: a differenza
+  della fusione, li' i file si spostano davvero, perche' cambia il prefisso del
+  percorso.
+- **Limiti noti:**
+  - L'elenco dei duplicati resta quadratico nel numero di apparecchi (i criteri
+    `matricola_contenuta` e `matricola_distanza_uno` confrontano matricole diverse fra
+    loro): su un parco di qualche migliaio di apparecchi si sente, misurato sulla rotta
+    vera — circa 0.3s a 500 apparecchi, 1.8s a 1500, 5.9s a 3000.
+  - Una scheda **dismessa** puo' comunque essere fusa raggiungendo l'URL di confronto a
+    mano: l'elenco dei duplicati le esclude, ma la rotta di fusione non lo controlla.
+
+---
+
 ## [2.6.0] - 2026-07-30
 
 Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttura.
