@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Possibili duplicati{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-files me-2"></i>Possibili duplicati</h2>
+  <span class="badge bg-secondary">{{ coppie|length }} coppie</span>
+</div>
+
+{% if not coppie %}
+<div class="alert alert-success">
+  <i class="bi bi-check-circle me-1"></i>
+  Nessuna coppia sospetta fra gli apparecchi visibili.
+</div>
+{% else %}
+<p class="text-muted">
+  Sono proposte, non certezze: due macchine gemelle acquistate insieme hanno la
+  stessa forma di un errore di battitura. Confronta prima di fondere.
+</p>
+{% for c in coppie %}
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <div class="row">
+      {% for scheda in (c.a, c.b) %}
+      <div class="col-md-5">
+        <strong>{{ scheda.marca }} {{ scheda.modello }}</strong>
+        <code class="ms-1">{{ scheda.matricola }}</code><br>
+        <span class="text-muted small">
+          {{ scheda.ubicazione or '—' }} ·
+          {{ scheda.n_manut }} manut. · {{ scheda.n_verif }} verif.
+        </span>
+      </div>
+      {% if not loop.last %}<div class="col-md-1 text-center align-self-center">↔</div>{% endif %}
+      {% endfor %}
+      {# Il pulsante "Confronta" arriva col Task 5, insieme alla rotta che
+         apre: un collegamento a una rotta inesistente farebbe sollevare
+         BuildError, e un segnaposto che non porta da nessuna parte e' peggio
+         di un pulsante che ancora non c'e'. #}
+    </div>
+    <div class="mt-2 small text-secondary">
+      <i class="bi bi-info-circle me-1"></i>{{ criteri[c.criterio] }}
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -344,6 +344,30 @@ def lista():
     return render_template('apparecchi/lista.html', **context)
 
 
+@apparecchi_bp.route('/apparecchi/duplicati')
+@login_required
+def duplicati():
+    """Coppie di schede che potrebbero descrivere lo stesso apparecchio."""
+    from fusione_service import candidati_duplicati, CRITERI
+
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        flash('Non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    div_clause, div_params = filtro_divisione()
+    righe = query_all(
+        f"""SELECT a.id, a.matricola, a.marca, a.modello, a.ubicazione, a.descrizione,
+                   (SELECT COUNT(*) FROM manutenzioni m WHERE m.apparecchio_id = a.id) AS n_manut,
+                   (SELECT COUNT(*) FROM verifiche v WHERE v.apparecchio_id = a.id) AS n_verif
+            FROM apparecchi a
+            WHERE a.stato != 'dismesso' {div_clause}
+            ORDER BY a.marca, a.modello, a.matricola""",
+        div_params)
+
+    coppie = candidati_duplicati(righe)
+    return render_template('apparecchi/duplicati.html', coppie=coppie, criteri=CRITERI)
+
+
 @apparecchi_bp.route('/apparecchi/nuovo', methods=['GET', 'POST'])
 @login_required
 def nuovo():
