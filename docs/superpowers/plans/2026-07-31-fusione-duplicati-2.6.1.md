@@ -1000,7 +1000,8 @@ def dati(app):
         estraneo = execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,"
                            "modello,stato) VALUES (?,?,'SEGRETO-B','SIEMENS','Y1','funzionante')",
                            (db_, b)).lastrowid
-    return {'a': a, 'b': b, 'div_a': da, 'uno': uno, 'due': due, 'estraneo': estraneo}
+    return {'a': a, 'b': b, 'div_a': da, 'div_b': db_,
+            'uno': uno, 'due': due, 'estraneo': estraneo}
 
 
 def entra(client, email):
@@ -1023,12 +1024,10 @@ def test_l_elenco_non_mostra_apparecchi_di_altre_strutture(client, app, dati):
     from models import execute
     with app.app_context():
         # Un duplicato PERFETTO nell'altra struttura: se il filtro manca,
-        # compare di sicuro.
+        # la coppia compare di sicuro.
         execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,"
                 "stato,ubicazione) VALUES (?,?,'SEGRETO-B','SIEMENS','Y1','funzionante','X')",
-                (dati['b'], dati['b']) if False else
-                (execute("SELECT id FROM divisioni WHERE struttura_id=?",
-                         (dati['b'],)).lastrowid or 0, dati['b']))
+                (dati['div_b'], dati['b']))
     entra(client, 'admin@a.it')
     testo = client.get('/apparecchi/duplicati').get_data(as_text=True)
     assert 'SEGRETO-B' not in testo
@@ -1050,11 +1049,10 @@ def test_l_elenco_dice_perche_propone_la_coppia(client, dati):
     assert 'matricola identica a meno di trattini' in testo
 ```
 
-**Nota per l'implementatore:** il secondo test contiene una costruzione contorta
-per creare l'apparecchio nella struttura B. Sostituiscila con una `INSERT` diretta
-usando la divisione della struttura B (recuperandone l'id nella fixture e
-restituendolo nel dizionario `dati`). Il piano lascia il difetto in evidenza
-invece di nasconderlo: **correggi la fixture, non l'asserzione.**
+**Nota per l'implementatore:** se un test di questo file dovesse fallire, la
+regola e' **correggere la fixture, non l'asserzione**. In questo progetto tre
+test si sono gia' rivelati ciechi perche' qualcuno aveva adattato
+l'aspettativa al comportamento invece del contrario.
 
 - [ ] **Step 2: Eseguire i test per verificare che falliscano**
 
@@ -1127,10 +1125,10 @@ def duplicati():
       </div>
       {% if not loop.last %}<div class="col-md-1 text-center align-self-center">↔</div>{% endif %}
       {% endfor %}
-      <div class="col-md-1 text-end align-self-center">
-        <a href="{{ url_for('apparecchi.fondi', id=c.a.id, altro_id=c.b.id) }}"
-           class="btn btn-sm btn-outline-primary">Confronta</a>
-      </div>
+      {# Il pulsante "Confronta" arriva col Task 5, insieme alla rotta che
+         apre: un collegamento a una rotta inesistente farebbe sollevare
+         BuildError, e un segnaposto che non porta da nessuna parte e' peggio
+         di un pulsante che ancora non c'e'. #}
     </div>
     <div class="mt-2 small text-secondary">
       <i class="bi bi-info-circle me-1"></i>{{ criteri[c.criterio] }}
@@ -1142,10 +1140,10 @@ def duplicati():
 {% endblock %}
 ```
 
-**Attenzione:** il template rimanda a `apparecchi.fondi`, che esiste solo dal Task 5.
-Finche' quel task non e' fatto, la pagina solleva `BuildError`. Sostituisci
-temporaneamente quell'`<a>` con `<span class="text-muted small">da confrontare</span>`
-e rimettilo al Task 5, **dopo** aver creato la rotta. Non lasciare rotte segnaposto.
+**Attenzione:** in questo task il template non ha ancora il pulsante "Confronta",
+perche' la rotta `apparecchi.fondi` che aprirebbe nasce solo al Task 5 e un
+`url_for` verso una rotta inesistente fa sollevare `BuildError` sulla pagina
+intera. Il Task 5 aggiunge rotta e pulsante insieme. Niente segnaposto.
 
 - [ ] **Step 5: Eseguire i test**
 
@@ -1489,11 +1487,17 @@ mancano, aggiungili alla riga `from models import (...)` e a quella di `flask`.
 {% endblock %}
 ```
 
-- [ ] **Step 5: Rimettere il collegamento nell'elenco e aggiungere la voce alla scheda**
+- [ ] **Step 5: Aggiungere il collegamento nell'elenco e la voce alla scheda**
 
-In `templates/apparecchi/duplicati.html`, rimetti l'`<a>` verso
-`url_for('apparecchi.fondi', id=c.a.id, altro_id=c.b.id)` al posto del segnaposto
-inserito al Task 4.
+In `templates/apparecchi/duplicati.html`, al posto del commento lasciato dal
+Task 4, il pulsante che ora ha una rotta a cui puntare:
+
+```html
+      <div class="col-md-1 text-end align-self-center">
+        <a href="{{ url_for('apparecchi.fondi', id=c.a.id, altro_id=c.b.id) }}"
+           class="btn btn-sm btn-outline-primary">Confronta</a>
+      </div>
+```
 
 In `templates/apparecchi/dettaglio.html`, accanto agli altri pulsanti di azione,
 dentro il blocco gia' condizionato ai ruoli amministrativi:
@@ -1633,9 +1637,8 @@ transazione unica) → Task 3 e Task 5. Tracciabilita' → Task 5. Tutti i test 
 nella sezione «Test» della spec hanno un test corrispondente.
 
 **Segnaposto.** Nessun «TBD», nessun «simile al Task N», nessun passo senza il codice
-che serve. L'unica cosa deliberatamente lasciata rotta e' la fixture del secondo test
-del Task 4, segnalata nel testo con l'istruzione di correggerla — perche' un piano che
-nasconde un proprio difetto insegna a far passare i test invece che a leggerli.
+che serve, e nessun segnaposto nell'interfaccia: il pulsante "Confronta" nasce al
+Task 5 insieme alla rotta che apre, invece di comparire prima come elemento inerte.
 
 **Coerenza dei tipi.** `Coppia(a, b, criterio)` con `a`/`b` dizionari: usata cosi' nel
 Task 1 e nel template del Task 4 (`c.a.id`, `c.a.matricola`). `fondi_apparecchi`
