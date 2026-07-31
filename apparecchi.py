@@ -446,6 +446,38 @@ def esegui_fusione(id, altro_id):
     try:
         esito = fondi_apparecchi(db, id_principale, id_scartato, valori,
                                  interventi_scartati)
+
+        # Il registro e' l'unica rete che resta dopo la fusione: la scheda
+        # scartata non c'e' piu' nel database, quindi il messaggio deve
+        # riversarla per intero, non solo nei campi che il form poteva far
+        # scegliere. esito['scartato'] e' dict(scartato) preso PRIMA della
+        # cancellazione (vedi fondi_apparecchi): itera su quello, non su
+        # CAMPI_FONDIBILI, altrimenti colonne come divisione_id (NOT NULL
+        # nello schema, e quindi indispensabile per ricreare la riga a mano)
+        # sparirebbero dal registro senza che nessuna fusione futura le
+        # rimpianga finche' non serve davvero ricostruire.
+        scartato = esito['scartato']
+        campi = ' '.join(
+            f"{c}={v!r}" for c, v in scartato.items() if v not in (None, ''))
+
+        # log_attivita chiama models.execute(), che fa il proprio commit
+        # sulla stessa connessione (get_db() e' per-richiesta): chiamandola
+        # QUI, prima del commit esplicito qui sotto, quel commit copre
+        # insieme la fusione e la voce di registro. Se la scrittura del
+        # registro fallisce, l'eccezione arriva al blocco "except Exception"
+        # sotto e db.rollback() annulla anche la fusione: meglio nessuna
+        # fusione che una fusione senza alcuna traccia di cosa conteneva la
+        # scheda cancellata.
+        log_attivita(
+            g.user['id'], 'fusione', 'apparecchi', id_principale,
+            f"Fusi \"{scartato['marca']} {scartato['modello']} {scartato['matricola']}\" "
+            f"(id {id_scartato}) in id {id_principale}. Scheda scartata: {campi}. "
+            f"Spostati: {esito['manutenzioni']} manutenzioni, {esito['verifiche']} verifiche, "
+            f"{esito['documenti']} documenti, {esito['accessori']} accessori. "
+            f"Scartati: {esito['interventi_scartati']} interventi. "
+            f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}",
+            request.remote_addr)
+
         db.commit()
     except FusioneCollisioneError as e:
         db.rollback()
@@ -461,20 +493,6 @@ def esegui_fusione(id, altro_id):
                                  exc_info=True)
         flash('Fusione fallita, nulla e\' stato modificato. Controlla il log.', 'danger')
         return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
-
-    scartato = esito['scartato']
-    campi = ' '.join(
-        f"{c}={scartato.get(c)!r}" for c in CAMPI_FONDIBILI
-        if scartato.get(c) not in (None, ''))
-    log_attivita(
-        g.user['id'], 'fusione', 'apparecchi', id_principale,
-        f"Fusi \"{scartato['marca']} {scartato['modello']} {scartato['matricola']}\" "
-        f"(id {id_scartato}) in id {id_principale}. Scheda scartata: {campi}. "
-        f"Spostati: {esito['manutenzioni']} manutenzioni, {esito['verifiche']} verifiche, "
-        f"{esito['documenti']} documenti, {esito['accessori']} accessori. "
-        f"Scartati: {esito['interventi_scartati']} interventi. "
-        f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}",
-        request.remote_addr)
 
     flash(f"Schede fuse: {esito['manutenzioni']} manutenzioni e "
           f"{esito['verifiche']} verifiche trasferite.", 'success')

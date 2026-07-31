@@ -141,10 +141,15 @@ def test_il_registro_conserva_la_scheda_scartata(client, app, dati):
         assert voce is not None
         # 'R00015' e 'OZY' compaiono anche nel riassunto iniziale del
         # messaggio ("Fusi ... in id ..."): da soli non proverebbero che il
-        # blocco "Scheda scartata: campo=valore ..." campo per campo esiste
-        # davvero. ubicazione non compare altrove nel messaggio, quindi la
-        # sua presenza dimostra che quel blocco e' stato scritto.
-        assert "Scheda scartata: matricola='R00015'" in voce['dettagli']
+        # blocco "Scheda scartata: campo=valore ..." esiste davvero. Il
+        # blocco itera su dict(scartato) (tutte le colonne, non solo
+        # CAMPI_FONDIBILI), quindi l'ordine dei campi segue quello delle
+        # colonne della tabella e non e' garantito: si ancora al formato
+        # "campo='valore'" con le virgolette, che nel riassunto iniziale non
+        # compare mai, invece che a una posizione fissa dopo "Scheda
+        # scartata:".
+        assert 'Scheda scartata:' in voce['dettagli']
+        assert "matricola='R00015'" in voce['dettagli']
         assert "ubicazione='Sala 1'" in voce['dettagli']
 
 
@@ -244,3 +249,61 @@ def test_una_fusione_fallita_non_lascia_scritture_durevoli(client, app, dati, mo
         riga = query_one("SELECT apparecchio_id FROM manutenzioni WHERE id=?", (m,))
         assert riga['apparecchio_id'] == dati['due']
         assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
+
+
+def test_il_registro_conserva_anche_i_campi_non_scegibili_dal_form(client, app, dati):
+    """CAMPI_FONDIBILI governa cosa il FORM puo' far scegliere ed esclude di
+    proposito divisione_id e le colonne di audit: spostare un apparecchio di
+    divisione o di struttura e' un'altra funzione, con altri controlli. Ma il
+    registro non e' il form: e' l'unica traccia che resta della scheda
+    scartata, e divisione_id e' NOT NULL nello schema - senza, ricostruire a
+    mano la scheda cancellata non e' possibile. Il messaggio deve quindi
+    riversare la riga INTERA (dict(scartato) via esito['scartato']), non
+    filtrata da CAMPI_FONDIBILI."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+                data={'principale': dati['uno']}, follow_redirects=True)
+    with app.app_context():
+        voce = query_one("SELECT dettagli FROM log_attivita WHERE azione='fusione'")
+        assert voce is not None
+        assert f"divisione_id={dati['div_a']}" in voce['dettagli']
+
+
+def test_se_la_registrazione_fallisce_la_fusione_non_risulta_avvenuta(client, app, dati, monkeypatch):
+    """Prima di questa correzione log_attivita veniva chiamata DOPO il commit
+    della fusione: un guasto proprio li' dentro lasciava una scheda gia'
+    cancellata senza alcuna voce di registro a spiegare cosa conteneva - la
+    fusione era gia' avvenuta, ma diventata irrintracciabile, ed e'
+    esattamente lo scenario che l'unica rete rimasta (il registro) doveva
+    escludere. Spostando log_attivita dentro il try, prima del commit, un
+    guasto nella scrittura del registro fa fallire (e annullare) tutto
+    insieme: meglio nessuna fusione che una fusione senza traccia.
+
+    apparecchi.py importa log_attivita a livello di modulo
+    (`from models import (..., log_attivita, ...)`), non dentro la funzione
+    come fa invece per fusione_service: il nome e' gia' legato nel namespace
+    di apparecchi al momento dell'import, quindi il monkeypatch deve colpire
+    apparecchi.log_attivita, non models.log_attivita - patchare quest'ultimo
+    non avrebbe alcun effetto sulla rotta.
+    """
+    from models import query_one
+    import apparecchi
+
+    def log_attivita_che_esplode(*args, **kwargs):
+        raise RuntimeError("guasto simulato nella scrittura del registro")
+
+    monkeypatch.setattr(apparecchi, 'log_attivita', log_attivita_che_esplode)
+
+    entra(client, 'admin@a.it')
+    risposta = client.post(
+        f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+        data={'principale': dati['uno']}, follow_redirects=True)
+
+    assert risposta.status_code == 200
+    assert 'Fusione fallita' in risposta.get_data(as_text=True)
+
+    with app.app_context():
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
+        assert query_one(
+            "SELECT COUNT(*) AS n FROM log_attivita WHERE azione='fusione'")['n'] == 0
