@@ -476,6 +476,18 @@ def esegui_fusione(id, altro_id):
         campi = ' '.join(
             f"{c}={v!r}" for c, v in scartato.items() if v not in (None, ''))
 
+        # La scheda scartata e' l'unico dato che sparisce dal database, ma
+        # non e' l'unico dato che cambia: i valori scelti dal form
+        # sovrascrivono anche colonne della scheda SUPERSTITE, che nel
+        # database restano solo nella loro forma nuova. Senza il valore
+        # precedente qui, ricostruire lo stato di prima della fusione e'
+        # impossibile per meta' dei dati toccati. esito['valori_precedenti']
+        # e' gia' limitato ai soli campi il cui valore e' davvero cambiato
+        # (vedi fondi_apparecchi).
+        precedenti = esito['valori_precedenti']
+        valori_prec = ', '.join(
+            f"{c}={v!r}" for c, v in precedenti.items()) or 'nessuno'
+
         # log_attivita chiama models.execute(), che fa il proprio commit
         # sulla stessa connessione (get_db() e' per-richiesta): chiamandola
         # QUI, prima del commit esplicito qui sotto, quel commit copre
@@ -491,7 +503,8 @@ def esegui_fusione(id, altro_id):
             f"Spostati: {esito['manutenzioni']} manutenzioni, {esito['verifiche']} verifiche, "
             f"{esito['documenti']} documenti, {esito['accessori']} accessori. "
             f"Scartati: {esito['interventi_scartati']} interventi. "
-            f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}",
+            f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}. "
+            f"Valori precedenti sulla scheda superstite (sovrascritti): {valori_prec}",
             request.remote_addr)
 
         # A questo punto la fusione e' gia' durevole: models.execute(),

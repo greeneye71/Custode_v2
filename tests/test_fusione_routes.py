@@ -184,6 +184,24 @@ def test_il_registro_conserva_la_scheda_scartata(client, app, dati):
         assert "ubicazione='Sala 1'" in voce['dettagli']
 
 
+def test_il_registro_conserva_i_valori_precedenti_della_superstite(client, app, dati):
+    """La scheda scartata non e' l'unica a cambiare: i valori scelti dal
+    form possono sovrascrivere anche la scheda SUPERSTITE, e quel valore
+    vecchio esiste solo per un istante - nel database resta solo la forma
+    nuova. Senza di esso nel registro, ricostruire lo stato precedente e'
+    impossibile per meta' dei dati toccati dalla fusione."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+                data={'principale': dati['uno'], 'campo_matricola': 'R00015'},
+                follow_redirects=True)
+    with app.app_context():
+        voce = query_one("SELECT dettagli FROM log_attivita WHERE azione='fusione'")
+        assert voce is not None
+        assert ("Valori precedenti sulla scheda superstite (sovrascritti): "
+                "matricola='R-00015'") in voce['dettagli']
+
+
 def test_la_pagina_di_confronto_mostra_i_campi_diversi(client, dati):
     entra(client, 'admin@a.it')
     testo = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}").get_data(as_text=True)

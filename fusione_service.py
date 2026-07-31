@@ -252,7 +252,8 @@ def fondi_apparecchi(conn, id_principale, id_scartato, valori=None,
             dict(altro))
 
     esito = {'manutenzioni': 0, 'verifiche': 0, 'documenti': 0, 'accessori': 0,
-             'preview': 0, 'interventi_scartati': 0, 'valori_scelti': []}
+             'preview': 0, 'interventi_scartati': 0, 'valori_scelti': [],
+             'valori_precedenti': {}}
 
     for tipo, id_intervento in interventi_scartati:
         conn.execute(f"DELETE FROM {TABELLE_INTERVENTO[tipo]} WHERE id = ?",
@@ -282,6 +283,17 @@ def fondi_apparecchi(conn, id_principale, id_scartato, valori=None,
     # della scartata mentre la scartata esiste ancora,
     # UNIQUE(struttura_id, modello, matricola) rifiuta l'UPDATE.
     if valori:
+        # Il registro e' l'unica rete rimasta anche per la scheda superstite:
+        # questi valori vengono SOVRASCRITTI (non solo i nomi dei campi, che
+        # da soli non bastano a ricostruire nulla), quindi vanno catturati
+        # ORA, dalla riga letta prima di qualunque scrittura (`principale`,
+        # righe 204-205), non dopo l'UPDATE che li rimpiazza. Solo i campi il
+        # cui valore cambia davvero: se l'operatore conferma il valore gia'
+        # presente sulla principale, non c'e' nulla da ricostruire.
+        esito['valori_precedenti'] = {
+            campo: principale[campo] for campo, valore in valori.items()
+            if principale[campo] != valore
+        }
         assegnazioni = ', '.join(f"{c} = ?" for c in valori)
         conn.execute(
             f"UPDATE apparecchi SET {assegnazioni} WHERE id = ?",

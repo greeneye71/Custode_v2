@@ -323,6 +323,31 @@ def test_la_principale_puo_prendere_la_matricola_della_scartata(conn):
                        (ids['principale'],)).fetchone()[0] == 'R00015'
 
 
+def test_i_valori_precedenti_della_superstite_vengono_conservati(conn):
+    """Il registro deve poter ricostruire anche i campi della scheda
+    SUPERSTITE che la fusione sovrascrive, non solo la scheda scartata: una
+    volta applicato l'UPDATE, il valore vecchio non e' in nessun posto del
+    database."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                             valori={'matricola': 'R00015'})
+    con.commit()
+    assert esito['valori_precedenti'] == {'matricola': 'R-00015'}
+
+
+def test_i_valori_precedenti_escludono_i_campi_confermati_senza_cambiare(conn):
+    """Se l'operatore conferma il valore che la principale ha gia', non c'e'
+    nulla da ricostruire per quel campo: non deve comparire come
+    'sovrascritto'."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                             valori={'matricola': 'R-00015'})  # gia' il suo valore
+    con.commit()
+    assert esito['valori_precedenti'] == {}
+
+
 def test_un_campo_non_fondibile_viene_rifiutato(conn):
     """valori arriva da un form. I nomi di colonna finiscono in una f-string,
     quindi l'elenco dei campi ammessi e' una costante del modulo e non
