@@ -57,8 +57,14 @@ def _differisce_di_un_carattere(a, b):
 
 def _criterio_coppia(a, b):
     """Il criterio piu' forte che si applica a due righe, o None."""
-    ma = normalizza_matricola(a.get('matricola'))
-    mb = normalizza_matricola(b.get('matricola'))
+    return _criterio_coppia_normalizzate(
+        a, b, normalizza_matricola(a.get('matricola')), normalizza_matricola(b.get('matricola')))
+
+
+def _criterio_coppia_normalizzate(a, b, ma, mb):
+    """Come _criterio_coppia, ma con le matricole gia' normalizzate dal
+    chiamante: candidati_duplicati le calcola una sola volta per riga invece
+    che due volte per ogni coppia in cui la riga compare."""
     if not ma or not mb:
         return None
 
@@ -93,18 +99,55 @@ def candidati_duplicati(righe):
     esclude gli apparecchi dismessi.
 
     Il confronto gira in Python e non in SQL perche' SQLite non ha una
-    distanza fra stringhe; su qualche migliaio di apparecchi il costo e'
-    trascurabile.
+    distanza fra stringhe. NON e' trascurabile su un parco di qualche
+    migliaio di apparecchi: rimane quadratico (matricola_contenuta e
+    matricola_distanza_uno lo richiedono, vedi sotto), quindi 4x le righe
+    restano circa 4x il tempo, non 16x come nella versione precedente di
+    questa funzione, ma la crescita e' comunque quadratica, non lineare.
+    Misurato sulla rotta vera dopo questa ottimizzazione: 500 apparecchi
+    ~0.3s, 1500 ~1.8s, 3000 ~5.9s (contro gli ~0.3s / ~2.4s / ~9.5s di prima
+    - circa 2 volte piu' veloce a parita' di righe, non un cambio di classe
+    di complessita'). run_production.py serve con Waitress a 4 thread: su un
+    parco grande una sola apertura della pagina puo' ancora bloccarne uno
+    per diversi secondi.
+
+    matricola_equivalente (il criterio piu' forte, un confronto ESATTO fra
+    matricole normalizzate) e' raggruppato per chiave e costa quindi lineare,
+    non quadratico. matricola_contenuta e matricola_distanza_uno restano
+    quadratici - richiedono di confrontare matricole DIVERSE fra loro, che
+    una chiave esatta non puo' raggruppare - ma le matricole sono
+    normalizzate una sola volta per riga invece che due volte per ogni
+    coppia, quindi il costo per coppia e' comunque piu' basso.
 
     Propone, non decide: due macchine gemelle comprate insieme ('MON-1' e
     'MON-2' nella stessa sala) hanno la stessa forma di un errore di
     battitura, e nessun criterio automatico puo' distinguerle. Per questo
     ogni coppia porta il criterio che l'ha proposta.
     """
+    normalizzate = [normalizza_matricola(r.get('matricola')) for r in righe]
+
+    gruppi = {}
+    for i, m in enumerate(normalizzate):
+        if m:
+            gruppi.setdefault(m, []).append(i)
+
     trovate = []
+    equivalenti = set()
+    for indici in gruppi.values():
+        if len(indici) < 2:
+            continue
+        for x in range(len(indici)):
+            for y in range(x + 1, len(indici)):
+                i, j = indici[x], indici[y]
+                trovate.append(Coppia(righe[i], righe[j], 'matricola_equivalente'))
+                equivalenti.add((i, j))
+
     for i in range(len(righe)):
         for j in range(i + 1, len(righe)):
-            criterio = _criterio_coppia(righe[i], righe[j])
+            if (i, j) in equivalenti:
+                continue
+            criterio = _criterio_coppia_normalizzate(
+                righe[i], righe[j], normalizzate[i], normalizzate[j])
             if criterio:
                 trovate.append(Coppia(righe[i], righe[j], criterio))
     return trovate
