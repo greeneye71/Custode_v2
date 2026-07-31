@@ -171,3 +171,58 @@ def test_la_collisione_con_un_terzo_viene_spiegata_non_lanciata(client, app, dat
     assert 'Esiste gia' in risposta.get_data(as_text=True)
     with app.app_context():
         assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
+
+
+def test_il_fallimento_a_meta_annulla_la_scrittura_gia_fatta(client, app, dati, monkeypatch):
+    """I sei test precedenti provano i casi che riescono e i rifiuti che
+    avvengono PRIMA di scrivere (FusioneRifiutataError, FusioneCollisioneError):
+    nessuno prova il guasto a meta', quando fondi_apparecchi ha gia' scritto
+    qualcosa sulla connessione della richiesta e poi solleva un'eccezione
+    imprevista. La rotta deve accorgersene ed annullare TUTTO prima del
+    redirect (except Exception: db.rollback()), non lasciare a meta' l'unica
+    operazione della fusione che cancella una scheda: un update parziale
+    sopravvissuto sarebbe indistinguibile da una fusione riuscita a meta',
+    e l'operatore non avrebbe modo di saperlo dalla sola interfaccia.
+
+    Simula il guasto con un monkeypatch su fusione_service.fondi_apparecchi
+    che scrive davvero (sposta la manutenzione di 'due' su 'uno') e poi
+    solleva RuntimeError senza mai arrivare al commit della rotta. Se il
+    rollback funziona, quella scrittura scompare con tutto il resto.
+
+    Il monkeypatch funziona perche' la rotta fa `from fusione_service import
+    fondi_apparecchi` DENTRO la funzione esegui_fusione, non in cima al file:
+    il nome viene risolto al momento della chiamata, quindi sostituire
+    l'attributo sul modulo prima della POST e' sufficiente. Se qualcuno
+    "semplificasse" spostando l'import a livello di modulo, il monkeypatch
+    smetterebbe di avere effetto e questo test non proverebbe piu' nulla
+    (patcherebbe una copia del nome gia' legata nel namespace di apparecchi.py).
+    """
+    from models import execute, query_one
+    import fusione_service
+
+    with app.app_context():
+        m = execute("INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento) "
+                    "VALUES (?,'preventiva','2026-01-01')", (dati['due'],)).lastrowid
+
+    def fondi_apparecchi_a_meta(conn, id_principale, id_scartato, valori=None,
+                                interventi_scartati=()):
+        conn.execute("UPDATE manutenzioni SET apparecchio_id = ? WHERE apparecchio_id = ?",
+                     (id_principale, id_scartato))
+        raise RuntimeError("guasto simulato a meta' operazione")
+
+    monkeypatch.setattr(fusione_service, 'fondi_apparecchi', fondi_apparecchi_a_meta)
+
+    entra(client, 'admin@a.it')
+    risposta = client.post(
+        f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+        data={'principale': dati['uno']}, follow_redirects=True)
+
+    assert risposta.status_code == 200
+    assert 'Fusione fallita' in risposta.get_data(as_text=True)
+
+    with app.app_context():
+        # Se il rollback ha funzionato, la manutenzione e' ancora sulla
+        # scheda 'due' (non spostata), e 'due' esiste ancora.
+        riga = query_one("SELECT apparecchio_id FROM manutenzioni WHERE id=?", (m,))
+        assert riga['apparecchio_id'] == dati['due']
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
