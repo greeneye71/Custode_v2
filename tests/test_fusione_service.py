@@ -292,3 +292,128 @@ def test_fondere_fra_strutture_diverse_e_rifiutato(conn):
         fondi_apparecchi(con, ids['principale'], estraneo)
     assert con.execute("SELECT COUNT(*) FROM apparecchi WHERE id=?",
                        (estraneo,)).fetchone()[0] == 1
+
+
+def test_i_valori_scelti_finiscono_sulla_scheda_principale(conn):
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                             valori={'anno_fabbricazione': 2019, 'note': 'Rev. 2024'})
+    con.commit()
+
+    riga = con.execute("SELECT anno_fabbricazione, note, matricola FROM apparecchi WHERE id=?",
+                       (ids['principale'],)).fetchone()
+    assert riga['anno_fabbricazione'] == 2019
+    assert riga['note'] == 'Rev. 2024'
+    assert riga['matricola'] == 'R-00015'          # non scelta: resta la sua
+    assert sorted(esito['valori_scelti']) == ['anno_fabbricazione', 'note']
+
+
+def test_la_principale_puo_prendere_la_matricola_della_scartata(conn):
+    """UNIQUE(struttura_id, modello, matricola) rifiuterebbe l'UPDATE finche'
+    la scheda scartata esiste: i valori vanno applicati DOPO la cancellazione.
+    E' il caso ordinario in cui si tiene la scheda con lo storico piu' lungo
+    ma la matricola corretta e' quella dell'altra."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                     valori={'matricola': 'R00015'})
+    con.commit()
+    assert con.execute("SELECT matricola FROM apparecchi WHERE id=?",
+                       (ids['principale'],)).fetchone()[0] == 'R00015'
+
+
+def test_un_campo_non_fondibile_viene_rifiutato(conn):
+    """valori arriva da un form. I nomi di colonna finiscono in una f-string,
+    quindi l'elenco dei campi ammessi e' una costante del modulo e non
+    qualcosa che il chiamante puo' estendere."""
+    from fusione_service import fondi_apparecchi, FusioneRifiutataError
+    con, ids, _s = conn
+    with pytest.raises(FusioneRifiutataError):
+        fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                         valori={'struttura_id': 999})
+    with pytest.raises(FusioneRifiutataError):
+        fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                         valori={'id': 1})
+
+
+def test_collisione_con_un_terzo_apparecchio_rifiuta_e_lo_nomina(conn):
+    """Meglio un rifiuto che nomina il terzo apparecchio di un errore di
+    database: chi legge deve capire che esiste gia' una scheda con quella
+    matricola, e quale."""
+    from fusione_service import fondi_apparecchi, FusioneCollisioneError
+    con, ids, _s = conn
+    con.execute("UPDATE apparecchi SET matricola='COLLIDE' WHERE id=?", (ids['terzo'],))
+    con.commit()
+
+    with pytest.raises(FusioneCollisioneError) as errore:
+        fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                         valori={'matricola': 'COLLIDE'})
+    assert errore.value.altro['id'] == ids['terzo']
+    # E niente e' stato toccato: il rifiuto precede ogni scrittura.
+    assert con.execute("SELECT COUNT(*) FROM apparecchi WHERE id=?",
+                       (ids['scartato'],)).fetchone()[0] == 1
+    assert conta(con, 'manutenzioni', ids['scartato']) == 1
+
+
+def test_un_intervento_scartato_non_confluisce(conn):
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    da_scartare = con.execute(
+        "SELECT id FROM verifiche WHERE apparecchio_id=? LIMIT 1",
+        (ids['scartato'],)).fetchone()[0]
+
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                             interventi_scartati=[('verifica', da_scartare)])
+    con.commit()
+
+    assert esito['interventi_scartati'] == 1
+    assert conta(con, 'verifiche', ids['principale']) == 2      # 1 + 2 - 1
+    assert con.execute("SELECT COUNT(*) FROM verifiche WHERE id=?",
+                       (da_scartare,)).fetchone()[0] == 0
+
+
+def test_si_puo_scartare_anche_un_intervento_della_scheda_principale(conn):
+    """La coppia duplicata ha una copia su ciascuna scheda: chi conferma
+    sceglie quale delle due buttare, e puo' benissimo essere quella della
+    scheda che sopravvive."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    da_scartare = con.execute(
+        "SELECT id FROM manutenzioni WHERE apparecchio_id=? LIMIT 1",
+        (ids['principale'],)).fetchone()[0]
+
+    fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                     interventi_scartati=[('manutenzione', da_scartare)])
+    con.commit()
+    assert conta(con, 'manutenzioni', ids['principale']) == 3    # 3 + 1 - 1
+
+
+def test_un_intervento_di_un_terzo_apparecchio_non_si_puo_scartare(conn):
+    """interventi_scartati arriva da un form: un id qualunque non deve poter
+    cancellare l'intervento di un apparecchio che non c'entra."""
+    from fusione_service import fondi_apparecchi, FusioneRifiutataError
+    con, ids, _s = conn
+    estraneo = con.execute(
+        "SELECT id FROM manutenzioni WHERE apparecchio_id=?",
+        (ids['terzo'],)).fetchone()[0]
+
+    with pytest.raises(FusioneRifiutataError):
+        fondi_apparecchi(con, ids['principale'], ids['scartato'],
+                         interventi_scartati=[('manutenzione', estraneo)])
+    assert conta(con, 'manutenzioni', ids['terzo']) == 1
+
+
+def test_valori_predefiniti_tiene_la_principale_tranne_dove_e_vuota(conn):
+    """Nel caso comune basta confermare, e non si perde il dato che solo la
+    scheda scartata aveva."""
+    from fusione_service import valori_predefiniti
+    con, ids, _s = conn
+    p = dict(con.execute("SELECT * FROM apparecchi WHERE id=?", (ids['principale'],)).fetchone())
+    s = dict(con.execute("SELECT * FROM apparecchi WHERE id=?", (ids['scartato'],)).fetchone())
+
+    predefiniti = valori_predefiniti(p, s)
+    assert predefiniti['matricola'] == 'R-00015'      # la principale ha un valore
+    assert predefiniti['anno_fabbricazione'] == 2019  # la principale e' vuota
+    assert predefiniti['note'] == 'Rev. 2024'         # idem
+    assert 'marca' not in predefiniti                 # identici: non si sceglie
