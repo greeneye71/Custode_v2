@@ -100,3 +100,14 @@ def test_elenco_vuoto_o_singolo():
     from fusione_service import candidati_duplicati
     assert candidati_duplicati([]) == []
     assert candidati_duplicati([riga(1, 'R-1')]) == []
+
+
+def test_matricole_cortissime_non_si_propongono_nemmeno_a_parita_di_modello():
+    """Il vincolo di lunghezza governa anche il criterio piu' debole, non solo
+    il contenimento: 'A-1' e 'A-2' nella stessa sala sono quasi sempre due
+    macchine numerate di seguito, non la stessa registrata due volte. Il
+    criterio che le distinguerebbe non esiste, e proporle tutte rende
+    l'elenco inutilizzabile - che e' il modo in cui questa funzione smette
+    di essere usata."""
+    from fusione_service import candidati_duplicati
+    assert candidati_duplicati([riga(1, 'A-1'), riga(2, 'A-2')]) == []

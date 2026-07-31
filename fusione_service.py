@@ -17,14 +17,17 @@ Coppia = namedtuple('Coppia', 'a b criterio')
 CRITERI = {
     'matricola_equivalente': 'matricola identica a meno di trattini e maiuscole',
     'matricola_contenuta': 'una matricola e\' contenuta nell\'altra',
-    'matricola_distanza_uno': 'stesso modello e ubicazione, matricole che '
-                              'differiscono per un carattere',
+    'matricola_distanza_uno': 'stesso modello e ubicazione, matricole di '
+                              'lunghezza sufficiente che differiscono per un carattere',
 }
 
-# Sotto questa lunghezza il contenimento non si applica: '1' e' contenuto in
-# '12', '13', '104' e cosi' via, e su un parco con matricole corte l'elenco
-# proporrebbe tutto con tutto.
-LUNGHEZZA_MINIMA_CONTENIMENTO = 4
+# Sotto questa lunghezza il confronto fra matricole non distingue piu' un
+# duplicato da due macchine numerate di seguito: '1'/'12' e 'A-1'/'A-2'
+# potrebbero essere due registrazioni dello stesso apparecchio o due macchine
+# gemelle. Su un parco con matricole corte, qualunque criterio porterebbe a
+# proposte indiscriminate e un elenco che nessuno usa. La costante governa sia
+# il criterio di contenimento che quello di distanza uno.
+LUNGHEZZA_MINIMA_MATRICOLA = 4
 
 
 def normalizza_matricola(valore):
@@ -62,8 +65,8 @@ def _criterio_coppia(a, b):
     if ma == mb:
         return 'matricola_equivalente'
 
-    if (len(ma) >= LUNGHEZZA_MINIMA_CONTENIMENTO
-            and len(mb) >= LUNGHEZZA_MINIMA_CONTENIMENTO
+    if (len(ma) >= LUNGHEZZA_MINIMA_MATRICOLA
+            and len(mb) >= LUNGHEZZA_MINIMA_MATRICOLA
             and (ma in mb or mb in ma)):
         return 'matricola_contenuta'
 
@@ -72,8 +75,8 @@ def _criterio_coppia(a, b):
     # consecutive del parco. Inoltre, su matricole corte diventerebbe
     # indiscriminato (1 e 12, 1 e 13, ecc.), quindi applica il vincolo
     # sulla lunghezza minima.
-    if (len(ma) >= LUNGHEZZA_MINIMA_CONTENIMENTO
-            and len(mb) >= LUNGHEZZA_MINIMA_CONTENIMENTO
+    if (len(ma) >= LUNGHEZZA_MINIMA_MATRICOLA
+            and len(mb) >= LUNGHEZZA_MINIMA_MATRICOLA
             and a.get('modello') == b.get('modello')
             and a.get('ubicazione') == b.get('ubicazione')
             and _differisce_di_un_carattere(ma, mb)):
