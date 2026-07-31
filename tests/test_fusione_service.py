@@ -332,9 +332,21 @@ def test_un_campo_non_fondibile_viene_rifiutato(conn):
     with pytest.raises(FusioneRifiutataError):
         fondi_apparecchi(con, ids['principale'], ids['scartato'],
                          valori={'struttura_id': 999})
+
+
+def test_il_campo_id_non_e_fondibile_viene_rifiutato(conn):
+    """Separato dal caso struttura_id: qui il valore e' quello dell'id del
+    TERZO apparecchio (non quello, gia' proprio, della principale), cosi' che
+    l'UPDATE, se eseguito, farebbe davvero qualcosa - collidere con una riga
+    che esiste per davvero - invece di essere un'auto-assegnazione che non
+    proverebbe nulla ne' con la guardia ne' senza."""
+    from fusione_service import fondi_apparecchi, FusioneRifiutataError
+    con, ids, _s = conn
     with pytest.raises(FusioneRifiutataError):
         fondi_apparecchi(con, ids['principale'], ids['scartato'],
-                         valori={'id': 1})
+                         valori={'id': ids['terzo']})
+    assert con.execute("SELECT COUNT(*) FROM apparecchi WHERE id=?",
+                       (ids['terzo'],)).fetchone()[0] == 1
 
 
 def test_collisione_con_un_terzo_apparecchio_rifiuta_e_lo_nomina(conn):
@@ -417,3 +429,20 @@ def test_valori_predefiniti_tiene_la_principale_tranne_dove_e_vuota(conn):
     assert predefiniti['anno_fabbricazione'] == 2019  # la principale e' vuota
     assert predefiniti['note'] == 'Rev. 2024'         # idem
     assert 'marca' not in predefiniti                 # identici: non si sceglie
+
+
+def test_valori_predefiniti_non_scambia_uno_zero_reale_per_vuoto(conn):
+    """connesso_rete e' 0 o 1: uno 0 sulla principale e' un valore legittimo
+    (l'apparecchio non e' in rete), non l'equivalente di campo assente. Un
+    confronto ingenuo con `not a` lo confonderebbe con None o '' e la
+    principale perderebbe uno zero corretto a favore dell'1 della scartata."""
+    from fusione_service import valori_predefiniti
+    con, ids, _s = conn
+    con.execute("UPDATE apparecchi SET connesso_rete=0 WHERE id=?", (ids['principale'],))
+    con.execute("UPDATE apparecchi SET connesso_rete=1 WHERE id=?", (ids['scartato'],))
+    con.commit()
+    p = dict(con.execute("SELECT * FROM apparecchi WHERE id=?", (ids['principale'],)).fetchone())
+    s = dict(con.execute("SELECT * FROM apparecchi WHERE id=?", (ids['scartato'],)).fetchone())
+
+    predefiniti = valori_predefiniti(p, s)
+    assert predefiniti['connesso_rete'] == 0
