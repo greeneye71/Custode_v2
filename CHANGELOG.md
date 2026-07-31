@@ -39,8 +39,10 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 - Riservata ad `admin`, `tecnico` e `superadmin`: la fusione cancella una scheda, e
   un `utente` non puo' nemmeno dismetterne una. Entrambe le schede devono essere
-  accessibili all'operatore — nessuna fusione fra strutture diverse ne' fra divisioni
-  non assegnate.
+  accessibili all'operatore — nessuna fusione fra strutture diverse. (I tre ruoli
+  ammessi vedono comunque tutte le divisioni della propria struttura, quindi
+  un vincolo "ne' fra divisioni non assegnate" non si applica mai a loro: non
+  esiste un ruolo che possa fondere ed essere limitato a una divisione.)
 - Se i valori scelti facessero collidere la scheda risultante con un terzo apparecchio
   (`UNIQUE(struttura_id, modello, matricola)`), l'operazione viene rifiutata con un
   messaggio che nomina il terzo, invece di fallire con un errore di database.
@@ -50,6 +52,13 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 - Lo **spostamento di un apparecchio fra strutture** resta da progettare: a differenza
   della fusione, li' i file si spostano davvero, perche' cambia il prefisso del
   percorso.
+- **Limiti noti:**
+  - L'elenco dei duplicati resta quadratico nel numero di apparecchi (i criteri
+    `matricola_contenuta` e `matricola_distanza_uno` confrontano matricole diverse fra
+    loro): su un parco di qualche migliaio di apparecchi si sente, misurato sulla rotta
+    vera — circa 0.3s a 500 apparecchi, 1.8s a 1500, 5.9s a 3000.
+  - Una scheda **dismessa** puo' comunque essere fusa raggiungendo l'URL di confronto a
+    mano: l'elenco dei duplicati le esclude, ma la rotta di fusione non lo controlla.
 
 ---
 
