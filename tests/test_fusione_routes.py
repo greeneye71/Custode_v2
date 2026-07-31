@@ -238,6 +238,35 @@ def test_la_pagina_di_confronto_marca_il_proprietario_di_ogni_valore(client, dat
     assert f'data-owner="{dati["due"]}"' in testo
 
 
+def test_la_get_di_confronto_e_negata_fra_strutture_diverse(client, app, dati):
+    """_due_schede_fondibili e' l'UNICO presidio della GET (nessun'altra
+    query filtrata la protegge): usa apparecchio_accessibile per entrambi
+    gli id, esattamente il controllo che la 2.6.0 ha reso obbligatorio su
+    nove rotte dopo che una lettura per id nuda ci era passata sotto silenzio
+    per mesi. Se qualcuno sostituisse apparecchio_accessibile con una SELECT
+    diretta per id, la POST rifiuterebbe comunque (fondi_apparecchi controlla
+    la struttura), ma la GET renderebbe la pagina di confronto con dentro i
+    dati riservati dell'altra struttura - motivo per cui qui si controlla
+    l'EFFETTO e lo STATUS, non solo l'assenza di una stringa nella pagina di
+    atterraggio dopo un redirect."""
+    from models import execute
+    with app.app_context():
+        execute("UPDATE apparecchi SET ubicazione='Bunker riservato', "
+                "note='Contratto 4.500 EUR' WHERE id=?", (dati['estraneo'],))
+    entra(client, 'admin@a.it')
+
+    negata = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['estraneo']}",
+                        follow_redirects=False)
+    assert negata.status_code == 302
+
+    atterraggio = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['estraneo']}",
+                             follow_redirects=True)
+    testo = atterraggio.get_data(as_text=True)
+    assert 'Bunker riservato' not in testo
+    assert 'Contratto 4.500 EUR' not in testo
+    assert 'SEGRETO-B' not in testo
+
+
 def test_la_collisione_con_un_terzo_viene_spiegata_non_lanciata(client, app, dati):
     from models import execute, query_one
     with app.app_context():
