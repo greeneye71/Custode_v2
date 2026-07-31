@@ -15,15 +15,6 @@ def dati(app):
                      (a,)).lastrowid
         db_ = execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Cardiologia','CAR',?)",
                       (b,)).lastrowid
-        # Divisione senza apparecchi, nella stessa struttura A: l'utente
-        # semplice ci sta dentro invece che in Oculistica. Se stesse in
-        # Oculistica, dopo il redirect vedrebbe R00015 nel SUO elenco
-        # normale - legittimamente, perche' e' un apparecchio della sua
-        # divisione - e la presenza della matricola non proverebbe piu'
-        # nulla sull'autorizzazione della pagina duplicati.
-        d_vuota = execute(
-            "INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Radiologia','RAD',?)",
-            (a,)).lastrowid
         hash_pw = generate_password_hash('Passw0rd!')
         execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id,primo_accesso) "
                 "VALUES ('admin@a.it',?,'A','A','admin',?,0)", (hash_pw, a))
@@ -31,7 +22,7 @@ def dati(app):
             "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id,primo_accesso) "
             "VALUES ('utente@a.it',?,'U','U','utente',?,0)", (hash_pw, a)).lastrowid
         execute("INSERT INTO utenti_divisioni (utente_id,divisione_id,ruolo_divisione) "
-                "VALUES (?,?,'utente')", (semplice, d_vuota))
+                "VALUES (?,?,'utente')", (semplice, da))
 
         uno = execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,"
                       "stato,ubicazione) VALUES (?,?,'R-00015','REXXAM','OZY','funzionante','Sala 1')",
@@ -79,9 +70,19 @@ def test_l_elenco_non_mostra_apparecchi_di_altre_strutture(client, app, dati):
 
 def test_l_elenco_e_negato_a_un_utente_semplice(client, dati):
     """La fusione cancella una scheda, e un utente non puo' nemmeno
-    dismetterne una."""
+    dismetterne una.
+
+    Il test resta ancorato al comportamento della ROTTA (redirect, non 200
+    sulla pagina) e non al contenuto della pagina di atterraggio: seguire il
+    redirect e controllare solo l'assenza della matricola li' non
+    distinguerebbe un accesso negato da un accesso concesso per errore ma
+    atterrato su una vista che semplicemente non aveva nulla da mostrare -
+    esattamente cio' che e' successo quando l'utente semplice era stato
+    spostato in una divisione senza apparecchi per aggirare un falso
+    negativo diverso."""
     entra(client, 'utente@a.it')
-    risposta = client.get('/apparecchi/duplicati', follow_redirects=True)
+    risposta = client.get('/apparecchi/duplicati', follow_redirects=False)
+    assert risposta.status_code == 302
     assert 'R00015' not in risposta.get_data(as_text=True)
 
 
