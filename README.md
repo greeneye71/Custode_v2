@@ -1,4 +1,4 @@
-# MedInventory v2.5.2
+# MedInventory v2.6.0
 
 **Gestione Apparecchi Elettromedicali** — applicazione web per strutture sanitarie
 by Studio Bergamaschi
@@ -342,9 +342,17 @@ python crea_superadmin.py           # crea l'utente superadmin
 python run_production.py            # riavvia l'applicazione
 ```
 
+**Attenzione:** `toggle_modalita.py` cambia solo il flag di configurazione, non
+sposta gli allegati già caricati. In modalità single stanno sotto
+`uploads/<tipo>/`; in modalità multi il codice li cerca sotto
+`uploads/strutture/<id>/<tipo>/`. Finché non li si sposta manualmente
+nella nuova posizione, l'esportazione e la cancellazione di quella struttura
+(menu Strutture, da superadmin) si rifiutano invece di produrre un archivio
+incompleto o di cancellare allegati che non hanno mai avuto una copia.
+
 ---
 
-## Migrazione
+## Migrazioni
 
 ### Da v1.x a v2.0
 
@@ -552,4 +560,4 @@ Vedere il file [LICENSE](LICENSE) per i termini di licenza.
 
 ---
 
-*MedInventory v2.5.2 — by Studio Bergamaschi*
+*MedInventory v2.6.0 — by Studio Bergamaschi*

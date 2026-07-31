@@ -103,11 +103,14 @@ def analizza():
         flash('Divisione non valida.', 'danger')
         return redirect(url_for('import.upload'))
 
-    if g.user['ruolo'] != 'admin':
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if divisione_id not in accessible_ids:
-            flash('Divisione non accessibile.', 'danger')
-            return redirect(url_for('import.upload'))
+    # g.divisioni e' gia' scoped alla struttura corrente per ogni ruolo
+    # (auth.py): saltare il controllo per l'admin permetteva di attribuire
+    # l'import a una divisione di un'altra struttura, semplicemente
+    # indovinandone l'id. Nessun ruolo va escluso da questo controllo.
+    accessible_ids = [d['id'] for d in g.divisioni]
+    if divisione_id not in accessible_ids:
+        flash('Divisione non accessibile.', 'danger')
+        return redirect(url_for('import.upload'))
 
     ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
     if ext not in ALLOWED_IMPORT_EXT:
@@ -152,7 +155,14 @@ def analizza():
     app_obj = current_app._get_current_object()
     uploads_path = current_app.config['UPLOADS_PATH']
     from ai_service import get_ai_config as _gac
-    _struttura_id = getattr(g, 'struttura_id', None)
+    # _struttura_import (non g.struttura_id) e' il valore autoritativo: e' lo
+    # stesso gia' usato sopra per l'INSERT in import_history. g.struttura_id
+    # puo' essere None (superadmin che non impersona, admin la cui struttura
+    # e' stata disattivata) mentre l'import ha comunque una struttura precisa,
+    # derivata dalla divisione scelta: passare g.struttura_id al thread
+    # faceva perdere il filtro di struttura al match automatico degli
+    # apparecchi (_match_apparecchi), che allora cercava su tutte le strutture.
+    _struttura_id = _struttura_import
     _ai_cfg = _gac(struttura_id=_struttura_id, config=config)
     api_key = _ai_cfg['api_key']
     user_id = g.user['id']
@@ -783,6 +793,14 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                     apparecchio_id = None
             else:
                 apparecchio_id = row['apparecchio_match_id']
+                # Il match arriva dall'analisi in background: va riverificato
+                # nello scope di chi esegue l'import, esattamente come
+                # l'override manuale sopra. Senza questo controllo un
+                # apparecchio_match_id di un'altra struttura (es. perche' il
+                # thread di analisi aveva perso il filtro di struttura)
+                # passerebbe senza che nessuno lo controlli.
+                if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                    apparecchio_id = None
 
             if not apparecchio_id:
                 execute("UPDATE import_preview SET stato = 'rejected', "
@@ -928,6 +946,11 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                         apparecchio_id = None
                 else:
                     apparecchio_id = row['apparecchio_match_id']
+                    # Stesso motivo di _execute_verbali: il match automatico
+                    # non e' gia' verificato nello scope di chi esegue
+                    # l'import, va controllato qui come l'override manuale.
+                    if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                        apparecchio_id = None
 
             if not apparecchio_id:
                 execute("UPDATE import_preview SET stato = 'rejected', "

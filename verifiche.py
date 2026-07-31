@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile)
+                    apparecchio_accessibile, filtro_divisione)
 
 verifiche_bp = Blueprint('verifiche', __name__)
 
@@ -27,27 +27,9 @@ ALLOWED_DOC_EXT = {'pdf'}
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_divisione_filter(table_alias='a'):
-    """Return SQL WHERE clause and params for division filtering."""
-    div = g.divisione_attiva
-    if div and div.get('id') != 'tutte':
-        return f"AND {table_alias}.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] in ('admin', 'tecnico'):
-        struttura_id = getattr(g, 'struttura_id', None)
-        if struttura_id:
-            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
-        return "", []
-    else:
-        ids = [d['id'] for d in g.divisioni]
-        if not ids:
-            return "AND 1=0", []
-        placeholders = ','.join('?' * len(ids))
-        return f"AND {table_alias}.divisione_id IN ({placeholders})", ids
-
-
 def _get_accessible_apparecchi():
     """Get list of apparecchi accessible by current user."""
-    div_clause, div_params = _get_divisione_filter('a')
+    div_clause, div_params = filtro_divisione('a')
     return query_all(
         f"""SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
             FROM apparecchi a
@@ -135,7 +117,7 @@ def _save_documento(file_obj, verifica_id, struttura_id=None):
 @login_required
 def lista():
     """List verifiche with filters."""
-    div_clause, div_params = _get_divisione_filter('a')
+    div_clause, div_params = filtro_divisione('a')
 
     search = request.args.get('search', '').strip()
     esito = request.args.get('esito', '')
@@ -259,23 +241,20 @@ def nuova():
 @login_required
 def modifica(id):
     """Edit a verifica record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     verifica = query_one(
         """SELECT v.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
-           WHERE v.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE v.id = ?""",
+        (id,)
     )
-    if not verifica:
+    # Il cancello e' apparecchio_accessibile: verifica struttura e divisione
+    # sull'apparecchio a cui appartiene la verifica. Stesso messaggio, stesso
+    # redirect di "non trovata" quando la riga non si trova e quando non e'
+    # accessibile: chi tenta non deve poter distinguere i due casi.
+    if not verifica or not apparecchio_accessibile(verifica['apparecchio_id']):
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
-
-    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if verifica['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('verifiche.lista'))
 
     if request.method == 'GET':
         apparecchi = _get_accessible_apparecchi()
@@ -320,14 +299,13 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a verifica record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     verifica = query_one(
         """SELECT v.*, a.divisione_id, v.apparecchio_id FROM verifiche v
            JOIN apparecchi a ON v.apparecchio_id = a.id
-           WHERE v.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE v.id = ?""",
+        (id,)
     )
-    if not verifica:
+    if not verifica or not apparecchio_accessibile(verifica['apparecchio_id']):
         flash('Verifica non trovata.', 'danger')
         return redirect(url_for('verifiche.lista'))
 

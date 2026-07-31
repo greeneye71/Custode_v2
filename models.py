@@ -71,8 +71,19 @@ def percorso_logo_struttura(struttura):
     """
     if not struttura or not struttura.get('logo_path'):
         return None
-    return os.path.join(current_app.config['UPLOADS_PATH'],
-                        struttura['logo_path'].replace('/', os.sep))
+    base = current_app.config['UPLOADS_PATH']
+    percorso = os.path.join(base, struttura['logo_path'].replace('/', os.sep))
+    radice = os.path.realpath(base)
+    assoluto = os.path.realpath(percorso)
+    # Stesso controllo di struttura_service._allegato_nel_perimetro (Task 7):
+    # un percorso composto da un dato del database va verificato prima di
+    # essere usato, non solo composto. Il confronto tiene conto del caso in
+    # cui il risolto COINCIDE con la radice: un semplice
+    # startswith(radice + os.sep) da solo tratterebbe quel caso come "fuori",
+    # perche' la stringa uguale non inizia con se stessa piu' un separatore.
+    if assoluto != radice and not assoluto.startswith(radice + os.sep):
+        return None
+    return percorso
 
 
 def init_db():
@@ -83,7 +94,29 @@ def init_db():
         # Split by semicolons and execute each statement
         # (needed because executescript doesn't support PRAGMA in all cases)
         sql = f.read()
-    db.executescript(sql)
+    try:
+        db.executescript(sql)
+    except sqlite3.OperationalError as e:
+        # Un database che non ha ancora ricevuto le migrazioni autonome muore
+        # qui, perche' schema.sql crea indici su colonne che quelle migrazioni
+        # devono ancora aggiungere o rinominare (per esempio descrizione, che
+        # migrate_v1_2.py ottiene rinominando codice_interno). Il messaggio di
+        # SQLite - "no such column: descrizione" - non dice all'operatore cosa
+        # fare, e l'applicazione non parte affatto: e' il momento peggiore per
+        # un errore criptico. Le migrazioni NON vengono eseguite qui: sono
+        # scelte deliberate dell'operatore, fanno un backup e possono
+        # rinominare colonne, quindi indovinarle rischierebbe di lasciare i
+        # dati dove nessuno li cerchera' piu'.
+        if 'no such column' in str(e):
+            raise RuntimeError(
+                f"Il database non e' aggiornato allo schema di questa versione "
+                f"({e}). Le migrazioni non vengono applicate automaticamente. "
+                f"Esegui prima:\n"
+                f"    python migrate.py --check    (analizza, non modifica nulla)\n"
+                f"    python migrate.py            (applica, con backup)\n"
+                f"Vedi la sezione \"Migrazioni\" del README."
+            ) from e
+        raise
     db.commit()
 
 
@@ -527,6 +560,150 @@ ORDER BY prossima_scadenza ASC""",
         except Exception:
             pass
 
+    # Utenti rimasti senza struttura: adottali, astienti o disattivali a
+    # seconda di quante strutture esistono. Ci si arriva eliminando una
+    # struttura (utenti.struttura_id era ON DELETE SET NULL fino alla 2.6),
+    # importando dati incompleti, oppure aggiornando un'installazione che
+    # non conosceva ancora struttura_id (schema v1.x, prima di
+    # migrate_v2_0.py): in quel caso la migrazione v2.2 appena eseguita ha
+    # lasciato struttura_id NULL su ogni utente esistente, e disattivarli
+    # tutti incondizionatamente bloccherebbe fuori un'installazione che ha
+    # aggiornato senza che nessuno abbia sbagliato niente. Questo blocco
+    # esiste per chiudere una falla (un account senza scope che, prima del
+    # Task 1, vedeva comunque dati altrui), non per murare fuori chi
+    # aggiorna: i tre rami sotto lo distinguono da un'ambiguita' reale.
+    # superadmin e tecnico sono esclusi in ogni ramo: hanno struttura_id
+    # NULL per progetto.
+    try:
+        orfani = db.execute(
+            "SELECT id, email FROM utenti "
+            "WHERE struttura_id IS NULL AND attivo = 1 "
+            "  AND ruolo IN ('admin', 'utente')"
+        ).fetchall()
+        if orfani:
+            strutture_attive = db.execute(
+                "SELECT id, nome FROM strutture WHERE attiva = 1"
+            ).fetchall()
+            if len(strutture_attive) == 1:
+                # Adozione: stessa logica del precedente su import_history
+                # (poco sopra, "Import storici senza divisione..."): con
+                # un'unica struttura attiva non c'e' ambiguita' su dove
+                # inquadrarli, ed e' il caso piu' comune (installazione
+                # monostruttura che aggiorna).
+                struttura = strutture_attive[0]
+                db.execute(
+                    "UPDATE utenti SET struttura_id = ? "
+                    "WHERE struttura_id IS NULL AND attivo = 1 "
+                    "  AND ruolo IN ('admin', 'utente')",
+                    (struttura['id'],)
+                )
+                db.commit()
+                logger.warning(
+                    f"{len(orfani)} utenti senza struttura assegnati "
+                    f"all'unica struttura attiva '{struttura['nome']}' "
+                    f"(id {struttura['id']}): "
+                    + ', '.join(r['email'] for r in orfani)
+                )
+            elif len(strutture_attive) == 0:
+                # Astensione: non esiste ancora una struttura in cui
+                # inquadrarli (es. installazione mai passata da
+                # migrate_v2_0.py). Disattivarli qui li renderebbe
+                # inaccessibili senza che nessuno abbia un posto dove
+                # riassegnarli: si lasciano attivi e si segnala soltanto.
+                logger.warning(
+                    f"{len(orfani)} utenti senza struttura e nessuna struttura "
+                    "attiva nel database: lasciati attivi in attesa che venga "
+                    "creata almeno una struttura. Utenti: "
+                    + ', '.join(r['email'] for r in orfani)
+                )
+            else:
+                # Disattivazione: con due o piu' strutture attive
+                # l'ambiguita' e' reale, nessuno puo' indovinare a quale
+                # appartenesse l'utente. Comportamento invariato.
+                db.execute(
+                    "UPDATE utenti SET attivo = 0 "
+                    "WHERE struttura_id IS NULL AND attivo = 1 "
+                    "  AND ruolo IN ('admin', 'utente')"
+                )
+                db.commit()
+                for riga in orfani:
+                    logger.warning(
+                        f"Utente senza struttura disattivato: {riga['email']} (id {riga['id']}). "
+                        "Riassegnalo a una struttura per riabilitarlo."
+                    )
+    except Exception as e:
+        logger.error(f"Gestione utenti orfani fallita: {e}", exc_info=True)
+
+    # v2.6: utenti.struttura_id da ON DELETE SET NULL a RESTRICT.
+    # SQLite non sa cambiare una FK con ALTER TABLE: va ricostruita la tabella.
+    # legacy_alter_table = ON e' obbligatorio: da SQLite 3.26 il RENAME
+    # riscrive da solo le FK delle tabelle figlie, e sessioni e
+    # utenti_divisioni finirebbero a puntare a utenti_old_26 lasciando
+    # l'applicazione senza login. Stessa forma della migrazione v2.2 sopra.
+    try:
+        row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='utenti'"
+        ).fetchone()
+        if row and 'ON DELETE RESTRICT' not in row[0]:
+            logger.info("Migrazione v2.6: struttura_id di utenti a ON DELETE RESTRICT...")
+            cols_vecchie = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
+            db.execute("PRAGMA legacy_alter_table = ON")
+            db.execute("PRAGMA foreign_keys = OFF")
+            db.execute("ALTER TABLE utenti RENAME TO utenti_old_26")
+            db.execute("""
+                CREATE TABLE utenti (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT UNIQUE NOT NULL,
+                  password_hash TEXT NOT NULL,
+                  nome TEXT NOT NULL,
+                  cognome TEXT NOT NULL,
+                  ruolo TEXT NOT NULL CHECK(ruolo IN ('superadmin', 'admin', 'utente', 'tecnico')),
+                  divisione_default_id INTEGER,
+                  attivo INTEGER DEFAULT 1,
+                  primo_accesso INTEGER DEFAULT 1,
+                  ultimo_accesso DATETIME,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                  struttura_id INTEGER,
+                  FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE RESTRICT,
+                  FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
+                )
+            """)
+            # Colonne di destinazione nominate esplicitamente (vedi stesso
+            # commento nella migrazione v2.2 sopra): un utente che viene da
+            # uno schema senza struttura_id deve ritrovarsi struttura_id NULL
+            # (valore predefinito), non far fallire l'INSERT. cols_vecchie
+            # viene da PRAGMA table_info sulla tabella vecchia e puo' contenere
+            # colonne che la tabella nuova non ha (installazione personalizzata
+            # o colonna rimossa fra le versioni): si scartano e si segnalano,
+            # perché un dato che sparisce in silenzio è peggio di un errore.
+            cols_nuove = [r[1] for r in db.execute("PRAGMA table_info(utenti)").fetchall()]
+            cols_comuni = [c for c in cols_vecchie if c in cols_nuove]
+            cols_scartate = [c for c in cols_vecchie if c not in cols_nuove]
+            if cols_scartate:
+                logger.warning(
+                    f"Migrazione v2.6: colonne di utenti_old_26 assenti nella "
+                    f"nuova tabella utenti, scartate: {cols_scartate}"
+                )
+            col_list = ', '.join(cols_comuni)
+            db.execute(f"INSERT INTO utenti ({col_list}) SELECT {col_list} FROM utenti_old_26")
+            db.execute("DROP TABLE utenti_old_26")
+            db.execute("PRAGMA legacy_alter_table = OFF")
+            db.execute("PRAGMA foreign_keys = ON")
+            db.commit()
+            logger.info("Migrazione v2.6 completata.")
+    except Exception as e:
+        logger.error(f"Migrazione v2.6 (FK utenti.struttura_id) FALLITA: {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.execute("PRAGMA legacy_alter_table = OFF")
+            db.execute("PRAGMA foreign_keys = ON")
+        except Exception:
+            pass
+
     # Versioning schema DB tramite PRAGMA user_version
     # Convenzione: major*100 + minor*10 + patch  (v1.4.3 → 143)
     schema_ver = db.execute("PRAGMA user_version").fetchone()[0]
@@ -547,6 +724,44 @@ ORDER BY prossima_scadenza ASC""",
         logger.debug(f"Schema DB versione {schema_ver}")
 
 
+def filtro_divisione(table_alias='a'):
+    """Clausola WHERE e parametri per limitare una query allo scope dell'utente.
+
+    Unico punto del progetto che decide cosa un utente puo' vedere. Fino alla
+    2.5 ne esistevano quattro copie divergenti, una per blueprint, e tutte
+    contenevano lo stesso difetto: per un admin o tecnico senza struttura
+    attiva restituivano ("", []), cioe' NESSUN filtro, e la query tornava gli
+    apparecchi di tutte le strutture. Lo stato si raggiunge sia eliminando la
+    struttura (utenti.struttura_id e' ON DELETE SET NULL) sia semplicemente
+    disattivandola, perche' auth.py porta g.struttura_id a None quando la
+    struttura non e' attiva.
+
+    In un'applicazione multi-tenant l'assenza di scope significa "nessun
+    dato", mai "tutti i dati".
+
+    Il superadmin che non impersona alcuna struttura ricade anche lui in
+    "AND 1=0": e' gia' il comportamento odierno di tre blueprint su quattro,
+    e la via per vedere i dati di una struttura e' entrarci.
+
+    Restituisce (clausola, parametri). La clausola inizia sempre con "AND ".
+    """
+    div = getattr(g, 'divisione_attiva', None)
+    if div and div.get('id') != 'tutte':
+        return f"AND {table_alias}.divisione_id = ?", [div['id']]
+
+    if getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico', 'superadmin'):
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
+        return "AND 1=0", []
+
+    ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+    if not ids:
+        return "AND 1=0", []
+    segnaposto = ','.join('?' * len(ids))
+    return f"AND {table_alias}.divisione_id IN ({segnaposto})", ids
+
+
 def apparecchio_accessibile(apparecchio_id):
     """Verifica che l'apparecchio sia nello scope dell'utente corrente.
 
@@ -555,10 +770,19 @@ def apparecchio_accessibile(apparecchio_id):
     Restituisce la riga dell'apparecchio, oppure None se non accessibile.
     """
     struttura_id = getattr(g, 'struttura_id', None)
-    app_row = query_one(
-        "SELECT * FROM apparecchi WHERE id = ? AND (struttura_id = ? OR ? IS NULL)",
-        (apparecchio_id, struttura_id, struttura_id)
-    )
+    if struttura_id:
+        app_row = query_one(
+            "SELECT * FROM apparecchi WHERE id = ? AND struttura_id = ?",
+            (apparecchio_id, struttura_id)
+        )
+    elif g.user['ruolo'] == 'superadmin':
+        # Stato normale del superadmin che non sta impersonando nessuno.
+        app_row = query_one("SELECT * FROM apparecchi WHERE id = ?", (apparecchio_id,))
+    else:
+        # Admin, tecnico o utente senza struttura attiva: nessun apparecchio.
+        # La condizione precedente era "struttura_id = ? OR ? IS NULL", che
+        # con struttura_id None accettava qualunque riga.
+        return None
     if not app_row:
         return None
     if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):

@@ -54,7 +54,7 @@ def _filtro_tutte_le_divisioni():
     sempre da g.struttura_id, mai da un parametro dell'URL: l'isolamento fra
     strutture resta invariato.
 
-    Nota: questo non e' lo stesso criterio di apparecchi._get_divisione_filter(),
+    Nota: questo non e' lo stesso criterio di models.filtro_divisione(),
     che onora prima g.divisione_attiva e mette il superadmin nel ramo delle
     divisioni anziche' in quello della struttura.
 

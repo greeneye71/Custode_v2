@@ -38,7 +38,13 @@ def scrivi_config(config):
 
 
 def stato_attuale(config):
-    return config.get('single_struttura', True)  # default: single-struttura
+    # Il resto del progetto (models.py, app.py) usa False come default per
+    # 'single_struttura' quando la chiave manca: qui era True, quindi con la
+    # chiave assente lo strumento dichiarava "single" mentre l'applicazione
+    # si comportava gia' da multi. Proprio l'area del Critico 2: un
+    # disallineamento del genere confonde l'operatore su quale schema di
+    # allegati la sua installazione stia davvero usando.
+    return config.get('single_struttura', False)
 
 
 def descrivi_stato(is_single):

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ struttura.nome }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h2><i class="bi bi-building me-2"></i>{{ struttura.nome }}
+    {% if struttura.attiva %}
+      <span class="badge bg-success align-middle">Attiva</span>
+    {% else %}
+      <span class="badge bg-danger align-middle">Disattiva</span>
+    {% endif %}
+  </h2>
+  <a href="{{ url_for('strutture.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i>Strutture
+  </a>
+</div>
+
+<div class="row g-3 mb-4">
+  {% for etichetta, valore in [
+      ('Apparecchi', contenuto.apparecchi), ('Manutenzioni', contenuto.manutenzioni),
+      ('Verifiche', contenuto.verifiche), ('Documenti', contenuto.documenti),
+      ('Divisioni', contenuto.divisioni), ('Utenti', contenuto.utenti)] %}
+  <div class="col-6 col-md-2">
+    <div class="card text-center shadow-sm h-100">
+      <div class="card-body py-3">
+        <div class="fs-4 fw-bold">{{ valore }}</div>
+        <div class="text-muted small">{{ etichetta }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<p class="text-muted">
+  {{ contenuto.file }} file allegati, {{ (contenuto.byte / 1048576) | round(1) }} MB.
+</p>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header">Divisioni</div>
+  <ul class="list-group list-group-flush">
+    {% for d in divisioni %}
+    <li class="list-group-item d-flex justify-content-between">
+      <span>{{ d.nome }}</span>
+      {% if not d.attiva %}<span class="badge bg-secondary">Disattiva</span>{% endif %}
+    </li>
+    {% else %}
+    <li class="list-group-item text-muted">Nessuna divisione.</li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header">Utenti della struttura</div>
+  <ul class="list-group list-group-flush">
+    {% for u in utenti %}
+    <li class="list-group-item d-flex justify-content-between">
+      <span>{{ u.nome }} {{ u.cognome }} <small class="text-muted">{{ u.email }}</small></span>
+      <span class="badge bg-secondary">{{ u.ruolo }}</span>
+    </li>
+    {% else %}
+    <li class="list-group-item text-muted">Nessun utente.</li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header">Tecnici assegnati
+    <small class="text-muted">— non vengono cancellati con la struttura</small>
+  </div>
+  <ul class="list-group list-group-flush">
+    {% for t in tecnici %}
+    <li class="list-group-item">{{ t.nome }} {{ t.cognome }}
+      <small class="text-muted">{{ t.email }}</small></li>
+    {% else %}
+    <li class="list-group-item text-muted">Nessun tecnico assegnato.</li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="d-flex gap-2" id="azioni-struttura">
+  <form method="post" action="{{ url_for('strutture.esporta', struttura_id=struttura.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-primary">
+      <i class="bi bi-box-arrow-down me-1"></i>Esporta archivio
+    </button>
+  </form>
+  {% if not struttura.attiva %}
+  <form method="post" action="{{ url_for('strutture.riattiva', struttura_id=struttura.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-success">
+      <i class="bi bi-arrow-counterclockwise me-1"></i>Riattiva
+    </button>
+  </form>
+  {% if not single_struttura %}
+  <a href="{{ url_for('strutture.conferma_eliminazione', struttura_id=struttura.id) }}"
+     class="btn btn-outline-danger">
+    <i class="bi bi-trash me-1"></i>Elimina
+  </a>
+  {% endif %}
+  {% else %}
+  <span class="text-muted align-self-center">
+    Per eliminare la struttura, disattivala prima dalla modifica.
+  </span>
+  {% endif %}
+</div>
+{% endblock %}

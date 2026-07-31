@@ -6,11 +6,194 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.6.0] - 2026-07-30
+
+Release dedicata all'isolamento fra strutture e al ciclo di vita di una struttura.
+
+### Corretto
+
+- **Un admin o tecnico senza struttura attiva vedeva gli apparecchi di tutte le
+  strutture.** `_get_divisione_filter()` restituiva "nessun filtro" invece di "nessun
+  dato", in quattro copie divergenti (apparecchi, manutenzioni, verifiche, export). Lo
+  stato si raggiungeva sia eliminando una struttura sia semplicemente disattivandola.
+  Il caso piu' grave era l'esportazione: per un superadmin non impersonante
+  restituiva davvero "nessun filtro", cioe' i dati di tutte le strutture; le altre tre
+  rotte fallivano gia' chiuse (nessun risultato). Ora il filtro e' uno solo, in
+  `models.py`, e l'assenza di scope significa nessun dato.
+- Lo stesso difetto in `models.apparecchio_accessibile()`, il controllo che protegge i
+  download degli allegati.
+- **Lo stesso difetto in nove rotte per singolo record (dodici query) — e li' si poteva
+  anche scrivere e cancellare.** Le rotte di dettaglio, modifica, dismissione, caricamento
+  foto e documenti di un apparecchio, e di modifica ed eliminazione di manutenzioni e
+  verifiche, avevano ciascuna la propria copia del controllo, scritta come
+  `AND (struttura_id = ? OR ? IS NULL)`: senza struttura attiva la condizione era vera
+  per qualunque riga di qualunque struttura, e il controllo di divisione che seguiva
+  escludeva esplicitamente i ruoli `admin`, `superadmin` e `tecnico`. Non serviva
+  alcuno stato anomalo per arrivarci: **un tecnico assegnato a piu' strutture, nei
+  minuti fra il login e la scelta della struttura, poteva leggere e dismettere
+  apparecchi di una struttura a cui non era assegnato**, ed eliminare manutenzioni e
+  verifiche altrui. Un admin la cui struttura fosse stata disattivata poteva fare
+  altrettanto. Ora tutte passano da `apparecchio_accessibile()`, che era gia' l'unico
+  posto in cui la regola andava scritta. I due caricamenti — foto e documenti — il
+  controllo di divisione non l'avevano affatto, nemmeno per gli utenti semplici: ora
+  ce l'hanno, quindi un utente non puo' piu' allegare file a un apparecchio di una
+  divisione che non gli e' assegnata, pur restando nella sua struttura.
+- La stessa famiglia negli import: `import_bp.analizza()` saltava il controllo di
+  divisione per il ruolo `admin` (che poteva cosi' attribuire un import alla divisione
+  di un'altra struttura, file compreso), passava al thread di analisi la struttura
+  della sessione invece di quella dell'import, e l'apparecchio individuato
+  automaticamente dall'AI veniva usato senza verificarne lo scope — mentre
+  l'associazione scelta a mano accanto veniva verificata. Il risultato poteva essere
+  una manutenzione di una struttura scritta su un apparecchio di un'altra.
+- `utenti.struttura_id` passa da `ON DELETE SET NULL` a `RESTRICT`: una cancellazione
+  diretta sul database non puo' piu' lasciare un admin o un utente senza struttura.
+  Per chi ne aveva gia' una NULL (installazioni aggiornate da uno schema anteriore
+  alla 2.6): se esiste esattamente una struttura attiva vengono assegnati a quella;
+  se non ce n'e' nessuna restano cosi, con un avviso nel log; con due o piu'
+  strutture attive vengono disattivati, segnalati anch'essi nel log.
+- **L'archivio di una struttura conteneva il superadmin del deployment ed ogni
+  tecnico, hash della password compreso, anche senza alcun rapporto con la
+  struttura esportata.** `esporta_struttura` riusa la primitiva di cancellazione
+  con il predicato invertito: quella lascia intenzionalmente fuori chi ha
+  `struttura_id NULL` (superadmin e tecnici), perche' nella direzione
+  cancellazione quell'account non deve sparire. Nella direzione esportazione
+  significava che finiva nell'archivio consegnato a terzi. Ora l'esportazione
+  toglie anche questi account dalla copia (`tecnici_strutture` segue in
+  cascata): un archivio contiene solo gli utenti della struttura esportata,
+  tecnici compresi, a prescindere da un'eventuale assegnazione.
+- **L'archivio di una struttura conteneva le chiavi delle API AI e le credenziali
+  SMTP del deployment in chiaro**, seminate in `strutture_config` da
+  `strutture_bp.nuova()` per ogni struttura creata dall'interfaccia (o inserite
+  dalla configurazione SMTP): sono dell'operatore del deployment, non della
+  struttura, anche se la riga e' formalmente sua. Ora l'esportazione azzera dalla
+  copia ogni chiave di `strutture_config` il cui nome contiene `api_key`,
+  `password`, `token` o `secret` — per schema del nome, non un elenco delle
+  chiavi note, cosi' una chiave futura vi rientra da sola.
+- **Un'installazione promossa da single a multi-struttura con `toggle_modalita.py`**
+  (che cambia solo il flag di configurazione, senza spostare gli allegati)
+  produceva un archivio senza quegli allegati — il sottoalbero
+  `uploads/strutture/<id>/` che l'esportazione copia non esiste ancora — e la
+  pagina di conferma della cancellazione diceva "0 file allegati saranno
+  cancellati" mentre le righe referenziavano ancora i verbali di manutenzione: la
+  cancellazione che seguiva li perdeva per sempre, perche' l'unica copia
+  (l'archivio) non li aveva mai avuti, e il messaggio finale indirizzava a
+  `pulisci_uploads.py`, che li cancellava perche' non piu' referenziati da
+  nessuna riga. Ora l'esportazione e la cancellazione si rifiutano (e la scheda
+  non arriva nemmeno a mostrare la pagina di conferma) finche' quegli allegati
+  non vengono spostati manualmente sotto `uploads/strutture/<id>/`. Un singolo
+  riferimento incrociato a un'altra struttura (per esempio una risalita nel
+  percorso) resta invece un'anomalia isolata di una riga, segnalata come prima
+  senza bloccare l'operazione.
+- `toggle_modalita.py` dichiarava "single-struttura" quando la chiave di
+  configurazione mancava, mentre il resto del progetto (compreso il punto sopra)
+  tratta l'assenza della chiave come "multi": uno strumento e l'applicazione
+  potevano descrivere due modalita' diverse per la stessa installazione.
+
+### Aggiunto
+
+- **Scheda della struttura** (`/strutture/<id>`): conteggi, spazio occupato, utenti e
+  tecnici assegnati. Riattivazione di una struttura disattivata dall'elenco.
+- **Esportazione** di una struttura in un archivio con la forma di un'installazione,
+  reimportabile con `importa_installazione.py`. Disponibile anche da sola, non solo
+  come passaggio della cancellazione. Limite noto: il reimporto non ripristina il
+  logo (`strutture.logo_path` e il relativo file) ne' lo storico import
+  (`import_history`, dietro il flag opt-in `--con-import-history`) — i dati restano
+  nell'archivio, solo non vengono riscritti automaticamente in questi due punti.
+- **Cancellazione completa** di una struttura: apparecchi, manutenzioni, verifiche,
+  documenti, accessori, import, divisioni, configurazione, token, utenti e allegati.
+  Tre freni in serie: la struttura dev'essere gia' disattivata, l'archivio viene
+  prodotto prima di toccare qualsiasi cosa, e il nome va scritto a mano. I tecnici
+  sopravvivono, perdendo solo l'assegnazione. Il registro attivita' sopravvive,
+  slegato dalla struttura. La cancellazione dei file segue le righe del database, non
+  un `rmtree` dell'intero albero: un file gia' fuori dal perimetro della struttura
+  (per esempio lasciato da un'importazione interrotta) non viene toccato e resta sul
+  disco — per questo `pulisci_uploads.py`, qui sotto, fa parte di questa stessa
+  release e non della prossima.
+- **`pulisci_uploads.py`**: elenca i file sotto `uploads/` che nessuna riga del
+  database referenzia. Elenca soltanto, salvo `--elimina` — che chiede comunque
+  conferma e si rifiuta se il database non referenzia alcun percorso pur essendoci
+  file sotto `uploads/`: e' il segno di un database vuoto o di un percorso
+  configurato male, non di un'installazione senza allegati.
+
+### Modificato
+
+- Il logo precedente viene cancellato quando se ne carica uno nuovo, e
+  `percorso_logo_struttura()` verifica che il percorso resti dentro `uploads/`.
+
+- **L'avvio su un database non ancora migrato dice cosa fare.** Le migrazioni
+  autonome (`migrate.py` e i singoli `migrate_v*.py`) restano una scelta
+  dell'operatore — fanno un backup e possono rinominare colonne, quindi non vengono
+  applicate da sole all'avvio. Ma finora, se non erano state eseguite, l'applicazione
+  moriva in `init_db()` con `no such column: descrizione`, perche' `schema.sql` crea
+  un indice su una colonna che `migrate_v1_2.py` deve ancora ottenere rinominando
+  `codice_interno`. Un messaggio che non dice nulla, nel momento peggiore: ora
+  l'errore nomina `python migrate.py --check` e rimanda al README. Nessun
+  cambiamento su cosa riesce e cosa no.
+
+### Limiti noti
+
+- Il reimporto di un archivio non ripristina logo e storico import (vedi
+  l'esportazione qui sopra).
+- L'archivio di una struttura non contiene mai il superadmin ne' i tecnici (nemmeno
+  quelli effettivamente assegnati): dopo un reimporto le assegnazioni vanno rifatte a
+  mano dal nuovo deployment. Scelta deliberata (vedi il punto sopra): un tecnico e' un
+  account condiviso fra strutture, non di proprieta' di una sola, e portarne l'hash
+  della password fuori dal deployment per il rapporto di assegnazione — disponibile,
+  non di proprieta' — non sembra un compromesso ragionevole.
+- L'archivio di una struttura non contiene la configurazione sensibile (chiavi delle
+  API AI, credenziali SMTP): va reinserita a mano dopo un reimporto.
+- **Il travaso degli allegati di un'installazione promossa da single a multi resta da
+  fare**: `toggle_modalita.py` cambia solo il flag. Fino a quando gli allegati non
+  vengono spostati a mano sotto `uploads/strutture/<id>/`, l'esportazione e la
+  cancellazione di quella struttura si rifiutano (vedi sopra) invece di procedere su
+  un archivio incompleto.
+
+Dove l'isolamento non arriva ancora — noto, misurato, non corretto in questa release:
+
+- **`pulisci_uploads.py --elimina` cancella le pagine di un import in attesa di
+  revisione.** Gli import multipagina salvano le pagine sotto `uploads/import/pages_*`
+  e le referenziano da `import_preview.dati_estratti`, che non e' una colonna di
+  percorso: lo strumento le dichiara orfane. Se poi si conferma quell'import, la
+  manutenzione nasce senza verbale allegato, **senza errore e senza avviso**. Il PDF
+  di partenza resta in `import_history`, quindi si recupera rifacendo l'import.
+  Conviene chiudere gli import in sospeso prima di usare `--elimina`.
+- **`email_monitor` puo' agganciare un verbale ricevuto via email all'apparecchio di
+  un'altra struttura.** La ricerca parte con lo scope giusto, ma se dentro la struttura
+  non trova nulla prosegue senza filtro; il risultato alimenta un inserimento
+  automatico, senza revisione umana. E' il piu' insidioso dei tre perche' non c'e'
+  nessuno a guardare.
+- **Gli allegati sotto `uploads/import/` non sono isolati per struttura.** `/uploads/`
+  sa proteggere solo i percorsi nella forma `strutture/<id>/...`: i documenti caricati
+  per un import sono leggibili da qualunque utente autenticato, di qualunque struttura.
+- **Un utente spostato da una struttura a un'altra lascia la propria email nel registro
+  dell'archivio.** L'esportazione non annota piu' le identita' che rimuove (vedi sopra),
+  ma la primitiva di cancellazione, che l'esportazione riusa per togliere le altre
+  strutture, continua a farlo: un admin che ha lavorato sulla struttura A e oggi
+  appartiene alla B lascia il proprio indirizzo nelle voci di registro della A. Il
+  contenuto e' molto piu' debole del caso chiuso in questa release — e' l'indirizzo di
+  chi quella struttura l'ha davvero amministrata, non di un estraneo — ma resta un dato
+  personale che esce dal deployment.
+- **`importa_installazione.py` assegna una struttura anche agli utenti `tecnico` che
+  importa**, e non importa `tecnici_strutture`. Quel tecnico non riesce ad accedere
+  finche' un admin non lo riassegna, e — avendo una struttura — verrebbe cancellato
+  insieme ad essa, contro la garanzia che i tecnici sopravvivono. Non riguarda gli
+  archivi prodotti da questa applicazione, che non contengono tecnici; riguarda
+  l'assorbimento di un'installazione estranea.
+
+---
+
 ## [2.5.2] - 2026-07-30
 
 Release correttiva urgente, un solo difetto. Chi ha gia' installato la 2.5.x su un
 database aggiornato non e' interessato; chi aggiorna da una versione anteriore alla
 2.2 deve passare da qui.
+
+> **Precisazione aggiunta il 30/07/2026.** Questa correzione riguarda la migrazione
+> incrementale che `apply_schema_updates()` applica all'avvio. Non sostituisce le
+> migrazioni autonome: un'installazione anteriore alla v2.0 va prima portata avanti
+> con `python migrate.py` (che crea un backup e, fra le altre cose, rinomina
+> `apparecchi.codice_interno` in `descrizione`), altrimenti l'avvio si interrompe
+> prima di arrivare qui. Fino alla 2.6.0 lo faceva con un messaggio criptico.
 
 ### Corretto
 

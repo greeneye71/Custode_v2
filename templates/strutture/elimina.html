@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Elimina {{ struttura.nome }}{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-exclamation-triangle text-danger me-2"></i>
+  Elimina "{{ struttura.nome }}"</h2>
+
+<div class="card border-danger shadow-sm mb-4">
+  <div class="card-body">
+    <p class="mb-2">Verranno eliminati definitivamente:</p>
+    <ul class="mb-3">
+      <li>{{ contenuto.apparecchi }} apparecchi, con
+        {{ contenuto.manutenzioni }} manutenzioni,
+        {{ contenuto.verifiche }} verifiche,
+        {{ contenuto.documenti }} documenti e
+        {{ contenuto.accessori }} accessori</li>
+      <li>{{ contenuto.divisioni }} divisioni e {{ contenuto.import }} import</li>
+      <li>{{ anteprima.file }} file allegati saranno cancellati
+        ({{ (anteprima.byte / 1048576) | round(1) }} MB)</li>
+      <li>{{ contenuto.utenti }} utenti della struttura</li>
+    </ul>
+    {% set non_toccati = contenuto.file - anteprima.file %}
+    {% if non_toccati > 0 %}
+    <p class="text-warning mb-3">
+      <i class="bi bi-exclamation-circle me-1"></i>
+      Inoltre, {{ non_toccati }} file presenti nella cartella
+      della struttura non sono collegati a nessun apparecchio, manutenzione,
+      verifica, documento o import: <strong>non</strong> verranno cancellati ora e
+      resteranno sul disco. Usa <code>pulisci_uploads.py</code> per individuarli.
+    </p>
+    {% elif non_toccati < 0 %}
+    <p class="text-danger mb-3">
+      <i class="bi bi-exclamation-octagon me-1"></i>
+      Attenzione: il conteggio degli allegati non torna ({{ contenuto.file }} nella
+      cartella della struttura, {{ anteprima.file }} da cancellare): verifica
+      manualmente prima di procedere, non fidarti dei numeri qui sopra.
+    </p>
+    {% endif %}
+    {% if contenuto.tecnici %}
+    <p class="text-success mb-3">
+      <i class="bi bi-check-circle me-1"></i>
+      {{ contenuto.tecnici }} tecnici assegnati <strong>non</strong> verranno eliminati:
+      perderanno solo l'assegnazione a questa struttura.
+    </p>
+    {% endif %}
+    <p class="text-muted">
+      Prima di cancellare verra' esportato un archivio della struttura sotto
+      <code>backups/strutture/</code>, reimportabile con
+      <code>importa_installazione.py</code>. Non porta con se' il logo, lo storico
+      degli import, il superadmin, i tecnici ne' la configurazione sensibile
+      (chiavi delle API AI, password SMTP): vedi <code>ESPORTAZIONE.txt</code>
+      dentro l'archivio.
+    </p>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('strutture.elimina', struttura_id=struttura.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label class="form-label">
+    Per confermare, scrivi il nome della struttura: <code>{{ struttura.nome }}</code>
+  </label>
+  <div class="d-flex gap-2">
+    <input type="text" name="conferma_nome" class="form-control" style="max-width:400px"
+           autocomplete="off" required>
+    <button class="btn btn-danger">Cancella definitivamente</button>
+    <a href="{{ url_for('strutture.scheda', struttura_id=struttura.id) }}"
+       class="btn btn-outline-secondary">Annulla</a>
+  </div>
+</form>
+{% endblock %}

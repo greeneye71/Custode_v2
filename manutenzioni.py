@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile)
+                    apparecchio_accessibile, filtro_divisione)
 
 manutenzioni_bp = Blueprint('manutenzioni', __name__)
 
@@ -24,24 +24,6 @@ ALLOWED_VERBALE_EXT = {'pdf'}
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _get_divisione_filter(table_alias='a'):
-    """Return SQL WHERE clause and params for division filtering."""
-    div = g.divisione_attiva
-    if div and div.get('id') != 'tutte':
-        return f"AND {table_alias}.divisione_id = ?", [div['id']]
-    elif g.user['ruolo'] in ('admin', 'tecnico'):
-        struttura_id = getattr(g, 'struttura_id', None)
-        if struttura_id:
-            return f"AND {table_alias}.struttura_id = ?", [struttura_id]
-        return "", []
-    else:
-        ids = [d['id'] for d in g.divisioni]
-        if not ids:
-            return "AND 1=0", []
-        placeholders = ','.join('?' * len(ids))
-        return f"AND {table_alias}.divisione_id IN ({placeholders})", ids
-
 
 def _validate_manutenzione(form_data):
     """Validate maintenance form data. Returns (cleaned_data, errors)."""
@@ -137,7 +119,7 @@ def _save_verbale(file_obj, manutenzione_id, struttura_id=None):
 @login_required
 def lista():
     """List maintenance records with filters."""
-    div_clause, div_params = _get_divisione_filter('a')
+    div_clause, div_params = filtro_divisione('a')
 
     search = request.args.get('search', '').strip()
     tipo = request.args.get('tipo', '')
@@ -266,23 +248,20 @@ def nuova():
 @login_required
 def modifica(id):
     """Edit a maintenance record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     manutenzione = query_one(
         """SELECT m.*, a.marca, a.modello, a.matricola, a.divisione_id
            FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
-           WHERE m.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE m.id = ?""",
+        (id,)
     )
-    if not manutenzione:
+    # Il cancello e' apparecchio_accessibile: verifica struttura e divisione
+    # sull'apparecchio a cui appartiene la manutenzione. Stesso messaggio,
+    # stesso redirect di "non trovata" quando la riga non si trova e quando
+    # non e' accessibile: chi tenta non deve poter distinguere i due casi.
+    if not manutenzione or not apparecchio_accessibile(manutenzione['apparecchio_id']):
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
-
-    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
-        accessible_ids = [d['id'] for d in g.divisioni]
-        if manutenzione['divisione_id'] not in accessible_ids:
-            flash('Accesso non autorizzato.', 'danger')
-            return redirect(url_for('manutenzioni.lista'))
 
     if request.method == 'GET':
         apparecchi = _get_accessible_apparecchi()
@@ -328,14 +307,13 @@ def modifica(id):
 @login_required
 def elimina(id):
     """Delete a maintenance record."""
-    struttura_id = getattr(g, 'struttura_id', None)
     manutenzione = query_one(
         """SELECT m.*, a.divisione_id FROM manutenzioni m
            JOIN apparecchi a ON m.apparecchio_id = a.id
-           WHERE m.id = ? AND (a.struttura_id = ? OR ? IS NULL)""",
-        (id, struttura_id, struttura_id)
+           WHERE m.id = ?""",
+        (id,)
     )
-    if not manutenzione:
+    if not manutenzione or not apparecchio_accessibile(manutenzione['apparecchio_id']):
         flash('Manutenzione non trovata.', 'danger')
         return redirect(url_for('manutenzioni.lista'))
 
@@ -393,7 +371,7 @@ def scarica_verbale(id):
 @login_required
 def scadenzario():
     """Deadline tracking view with priority badges."""
-    div_clause, div_params = _get_divisione_filter('ps')
+    div_clause, div_params = filtro_divisione('ps')
 
     tipo = request.args.get('tipo', '')
     priorita = request.args.get('priorita', '')
@@ -468,7 +446,7 @@ def scadenzario():
 
 def _get_accessible_apparecchi():
     """Get list of apparecchi accessible by current user."""
-    div_clause, div_params = _get_divisione_filter('a')
+    div_clause, div_params = filtro_divisione('a')
     return query_all(
         f"""SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
             FROM apparecchi a

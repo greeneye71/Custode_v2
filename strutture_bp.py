@@ -18,7 +18,7 @@ from werkzeug.utils import secure_filename
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config, \
-    upload_subdir
+    upload_subdir, percorso_logo_struttura
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
@@ -368,6 +368,241 @@ def modifica(struttura_id):
 
     return render_template('strutture/form.html', struttura=struttura,
                            tipi_struttura=_TIPI_STRUTTURA, divisioni=divisioni)
+
+
+@strutture_bp.route('/<int:struttura_id>')
+@superadmin_required
+def scheda(struttura_id):
+    from struttura_service import contenuto_struttura
+
+    struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    contenuto = contenuto_struttura(get_db(), struttura_id,
+                                    current_app.config['UPLOADS_PATH'],
+                                    single_struttura=single)
+    divisioni = _get_divisioni_struttura(struttura_id)
+    utenti = query_all(
+        "SELECT nome, cognome, email, ruolo, attivo FROM utenti "
+        "WHERE struttura_id = ? ORDER BY cognome, nome", (struttura_id,))
+    tecnici = query_all(
+        "SELECT u.nome, u.cognome, u.email FROM utenti u "
+        "JOIN tecnici_strutture ts ON ts.tecnico_id = u.id "
+        "WHERE ts.struttura_id = ? ORDER BY u.cognome, u.nome", (struttura_id,))
+
+    return render_template('strutture/scheda.html', struttura=struttura,
+                           contenuto=contenuto, divisioni=divisioni,
+                           utenti=utenti, tecnici=tecnici,
+                           single_struttura=single)
+
+
+@strutture_bp.route('/<int:struttura_id>/riattiva', methods=['POST'])
+@superadmin_required
+def riattiva(struttura_id):
+    struttura = query_one("SELECT id, nome FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    execute("UPDATE strutture SET attiva = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (struttura_id,))
+    log_attivita(g.user['id'], 'riattivazione', 'strutture', struttura_id,
+                 f'Struttura "{struttura["nome"]}" riattivata', request.remote_addr)
+    flash(f'Struttura "{struttura["nome"]}" riattivata.', 'success')
+    return redirect(url_for('strutture.index'))
+
+
+@strutture_bp.route('/<int:struttura_id>/esporta', methods=['POST'])
+@superadmin_required
+def esporta(struttura_id):
+    from struttura_service import esporta_struttura, InstallazioneNonMigrataError
+
+    struttura = query_one("SELECT id, nome FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    try:
+        destinazione = esporta_struttura(
+            current_app.config['DATABASE_PATH'],
+            current_app.config['UPLOADS_PATH'],
+            struttura_id,
+            os.path.join(current_app.config['BACKUPS_PATH'], 'strutture'),
+            single_struttura=single,
+        )
+    except InstallazioneNonMigrataError as e:
+        # Non e' un errore imprevisto: e' esporta_struttura che si rifiuta
+        # apposta di produrre un archivio incompleto. L'operatore deve sapere
+        # cosa sta succedendo e cosa fare, non solo "controlla il log".
+        current_app.logger.warning(
+            f'Esportazione struttura {struttura_id} rifiutata: {e}')
+        flash(str(e), 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+    except Exception as e:
+        current_app.logger.error(f'Esportazione struttura {struttura_id} fallita: {e}',
+                                 exc_info=True)
+        flash('Esportazione fallita. Controlla il log.', 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    log_attivita(g.user['id'], 'esportazione', 'strutture', struttura_id,
+                 f'Struttura "{struttura["nome"]}" esportata in {destinazione}',
+                 request.remote_addr)
+    flash(f'Archivio creato in {destinazione}', 'success')
+    return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+
+@strutture_bp.route('/<int:struttura_id>/elimina', methods=['GET'])
+@superadmin_required
+def conferma_eliminazione(struttura_id):
+    from struttura_service import (contenuto_struttura, anteprima_cancellazione_file,
+                                   percorsi_installazione_non_migrata)
+
+    struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+    if struttura['attiva']:
+        flash('Per eliminare la struttura, disattivala prima dalla modifica.', 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    # scheda.html nasconde il pulsante Elimina in modalita' single (non
+    # esiste un sottoalbero uploads/ da isolare per struttura): la rotta deve
+    # rifiutare allo stesso modo, non solo il template nascondere il link.
+    if single:
+        flash("L'eliminazione di una struttura non e' disponibile in modalita' "
+             "single-struttura.", 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    non_migrati = percorsi_installazione_non_migrata(
+        get_db(), current_app.config['UPLOADS_PATH'], struttura_id)
+    if non_migrati:
+        # Mostrare comunque la pagina significherebbe promettere un conteggio
+        # di file che l'esportazione (chiamata dalla POST che segue) non
+        # potrebbe onorare: si rifiuta qui, PRIMA di far scrivere all'operatore
+        # il nome di conferma di una cancellazione che non puo' completarsi
+        # in sicurezza.
+        flash(
+            f"Impossibile procedere: {len(non_migrati)} allegati di questa struttura "
+            "esistono su disco ma fuori dallo schema multi-struttura (probabile "
+            "installazione promossa da single a multi con toggle_modalita.py, che "
+            "non sposta i file). Sposta manualmente questi allegati sotto "
+            f"uploads/strutture/{struttura_id}/<tipo>/ prima di esportare o cancellare "
+            "questa struttura.", 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    contenuto = contenuto_struttura(get_db(), struttura_id,
+                                    current_app.config['UPLOADS_PATH'],
+                                    single_struttura=single)
+    # contenuto['file'] conta l'intero sottoalbero su disco in modalita'
+    # multi (orfani compresi): la cancellazione invece passa dalle righe
+    # (_percorsi_allegati). La pagina deve mostrare quanti file verranno
+    # DAVVERO cancellati, non il totale su disco: altrimenti promette la
+    # cancellazione di file che sopravvivono.
+    anteprima = anteprima_cancellazione_file(get_db(), struttura_id,
+                                             current_app.config['UPLOADS_PATH'],
+                                             single_struttura=single)
+    return render_template('strutture/elimina.html',
+                           struttura=struttura, contenuto=contenuto,
+                           anteprima=anteprima)
+
+
+@strutture_bp.route('/<int:struttura_id>/elimina', methods=['POST'])
+@superadmin_required
+def elimina(struttura_id):
+    from struttura_service import elimina_struttura, InstallazioneNonMigrataError
+
+    struttura = query_one("SELECT * FROM strutture WHERE id = ?", (struttura_id,))
+    if not struttura:
+        flash('Struttura non trovata.', 'danger')
+        return redirect(url_for('strutture.index'))
+    if struttura['attiva']:
+        flash('Per eliminare la struttura, disattivala prima dalla modifica.', 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    single = current_app.config.get('APP_CONFIG', {}).get('single_struttura', False)
+    # Stessa guardia della GET/scheda.html: in single il pulsante non c'e',
+    # la rotta non deve restare raggiungibile lo stesso (POST diretta).
+    if single:
+        flash("L'eliminazione di una struttura non e' disponibile in modalita' "
+             "single-struttura.", 'warning')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    if request.form.get('conferma_nome', '').strip() != struttura['nome']:
+        flash('Il nome scritto non corrisponde: la struttura non e\' stata eliminata.', 'danger')
+        return redirect(url_for('strutture.conferma_eliminazione', struttura_id=struttura_id))
+
+    # elimina_struttura apre una propria connessione sullo stesso file per
+    # cancellare le righe: commit qui per non lasciare scritture pendenti
+    # sulla connessione della richiesta mentre l'altra e' aperta.
+    get_db().commit()
+
+    try:
+        esito = elimina_struttura(
+            current_app.config['DATABASE_PATH'],
+            current_app.config['UPLOADS_PATH'],
+            struttura_id,
+            os.path.join(current_app.config['BACKUPS_PATH'], 'strutture'),
+            single_struttura=single,
+        )
+    except InstallazioneNonMigrataError as e:
+        # elimina_struttura chiama esporta_struttura per prima: questo arriva
+        # PRIMA di toccare il database, quindi "nulla e' stato cancellato" e'
+        # vero qui, a differenza del ramo sotto (che copre un fallimento a
+        # meta' operazione). L'operatore deve sapere cosa fare, non solo che
+        # e' fallito.
+        current_app.logger.warning(
+            f'Eliminazione struttura {struttura_id} rifiutata: {e}')
+        flash(str(e), 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+    except Exception as e:
+        current_app.logger.error(f'Eliminazione struttura {struttura_id} fallita: {e}',
+                                 exc_info=True)
+        # elimina_struttura fa archivio, poi database, poi file: un'eccezione
+        # puo' arrivare anche DOPO che il database e' gia' stato modificato
+        # (es. un errore imprevisto durante la pulizia dei file, non
+        # catturato perche' non e' un OSError). In quel caso la struttura
+        # non c'e' piu': dire "nulla e' stato cancellato" sarebbe falso, e
+        # l'operazione - irreversibile - deve comunque finire nel registro.
+        ancora_presente = query_one("SELECT id FROM strutture WHERE id = ?", (struttura_id,))
+        if not ancora_presente:
+            log_attivita(
+                g.user['id'], 'eliminazione', 'strutture', struttura_id,
+                f'Struttura "{struttura["nome"]}" eliminata dal database, ma un errore '
+                f'e\' avvenuto dopo (durante l\'archiviazione o la pulizia dei file): {e}. '
+                'Controlla il log applicativo.',
+                request.remote_addr)
+            flash(f'Struttura "{struttura["nome"]}" e\' stata eliminata dal database, ma '
+                 'un errore e\' avvenuto durante la pulizia successiva. Controlla il log.',
+                 'warning')
+            return redirect(url_for('strutture.index'))
+        flash('Eliminazione fallita, nulla e\' stato cancellato. Controlla il log.', 'danger')
+        return redirect(url_for('strutture.scheda', struttura_id=struttura_id))
+
+    log_attivita(
+        g.user['id'], 'eliminazione', 'strutture', struttura_id,
+        f'Struttura "{esito["nome"]}" eliminata: {esito["apparecchi"]} apparecchi, '
+        f'{esito["manutenzioni"]} manutenzioni, {esito["verifiche"]} verifiche, '
+        f'{esito["utenti"]} utenti. Archivio: {esito["archivio"]}. '
+        f'File non rimossi: {len(esito["file_non_rimossi"])}.',
+        request.remote_addr)
+
+    if esito['file_non_rimossi']:
+        current_app.logger.warning(
+            f'Eliminazione struttura {struttura_id}: {len(esito["file_non_rimossi"])} '
+            f'file non rimossi: {esito["file_non_rimossi"]}')
+        flash(
+            f'Struttura "{esito["nome"]}" eliminata. Archivio in {esito["archivio"]}. '
+            f'Attenzione: {len(esito["file_non_rimossi"])} file allegati non sono stati '
+            'rimossi dal disco (dettagli nel log applicativo); pulisci_uploads.py li individuera\'.',
+            'warning')
+    else:
+        flash(f'Struttura "{esito["nome"]}" eliminata. Archivio in {esito["archivio"]}', 'success')
+    return redirect(url_for('strutture.index'))
 
 
 def _fetch_anthropic_models(api_key):
@@ -773,11 +1008,26 @@ def carica_logo(struttura_id):
         flash('Formato non supportato. Usa PNG o JPG.', 'danger')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
+    precedente = query_one("SELECT logo_path FROM strutture WHERE id = ?", (struttura_id,))
+    vecchio_logo_path = (precedente or {}).get('logo_path')
+
     cartella, prefisso = upload_subdir('loghi', struttura_id)
     nome = secure_filename(f"{int(datetime.now().timestamp())}_{file.filename}")
+    nuovo_logo_path = f"{prefisso}/{nome}"
     file.save(os.path.join(cartella, nome))
     execute("UPDATE strutture SET logo_path = ? WHERE id = ?",
-            (f"{prefisso}/{nome}", struttura_id))
+            (nuovo_logo_path, struttura_id))
+
+    # Il file precedente non serve piu': senza questo, ogni sostituzione del
+    # logo lascia un orfano su disco (e' cio' che pulisci_uploads.py esiste
+    # per ripulire quando e' gia' successo altrove - qui si evita che succeda).
+    if vecchio_logo_path and vecchio_logo_path != nuovo_logo_path:
+        vecchio_percorso = percorso_logo_struttura({'logo_path': vecchio_logo_path})
+        if vecchio_percorso and os.path.exists(vecchio_percorso):
+            try:
+                os.remove(vecchio_percorso)
+            except OSError:
+                current_app.logger.warning(f'Logo precedente non rimosso: {vecchio_percorso}')
 
     log_attivita(g.user['id'], 'modifica', 'strutture', struttura_id,
                  'Logo aggiornato', request.remote_addr, struttura_id=struttura_id)

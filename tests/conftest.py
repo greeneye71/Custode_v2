@@ -32,6 +32,11 @@ def app(tmp_path):
     applicazione = modulo_app.create_app()
     applicazione.config['DATABASE_PATH'] = str(tmp_path / 'data' / 'test.sqlite')
     applicazione.config['UPLOADS_PATH'] = str(tmp_path / 'uploads')
+    # Senza questo, BACKUPS_PATH resterebbe quello calcolato da create_app()
+    # sulla cartella reale del progetto (backups/, relativa a app.py): un test
+    # che esporta o fa un backup scriverebbe dentro l'installazione vera dello
+    # sviluppatore invece che in una cartella temporanea.
+    applicazione.config['BACKUPS_PATH'] = str(tmp_path / 'backups')
     applicazione.config['WTF_CSRF_ENABLED'] = False
     return applicazione
 
