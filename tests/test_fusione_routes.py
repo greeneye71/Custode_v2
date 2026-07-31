@@ -92,3 +92,82 @@ def test_l_elenco_dice_perche_propone_la_coppia(client, dati):
     entra(client, 'admin@a.it')
     testo = client.get('/apparecchi/duplicati').get_data(as_text=True)
     assert 'matricola identica a meno di trattini' in testo
+
+
+def test_la_fusione_dalla_rotta_somma_gli_interventi(client, app, dati):
+    from models import execute, query_one
+    with app.app_context():
+        for ap in (dati['uno'], dati['due']):
+            execute("INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento) "
+                    "VALUES (?,'preventiva','2026-03-12')", (ap,))
+    entra(client, 'admin@a.it')
+    risposta = client.post(
+        f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+        data={'principale': dati['uno']}, follow_redirects=True)
+    assert risposta.status_code == 200
+    with app.app_context():
+        assert query_one("SELECT COUNT(*) AS n FROM manutenzioni WHERE apparecchio_id=?",
+                         (dati['uno'],))['n'] == 2
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is None
+
+
+def test_la_fusione_e_negata_fra_strutture_diverse(client, app, dati):
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['estraneo']}",
+                data={'principale': dati['uno']}, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['estraneo'],)) is not None
+
+
+def test_la_fusione_e_negata_a_un_utente_semplice(client, app, dati):
+    from models import query_one
+    entra(client, 'utente@a.it')
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+                data={'principale': dati['uno']}, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
+
+
+def test_il_registro_conserva_la_scheda_scartata(client, app, dati):
+    """La fusione e' definitiva: senza i campi nel registro, ricostruire a
+    mano la scheda cancellata diventa impossibile."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+                data={'principale': dati['uno']}, follow_redirects=True)
+    with app.app_context():
+        voce = query_one("SELECT dettagli FROM log_attivita WHERE azione='fusione'")
+        assert voce is not None
+        # 'R00015' e 'OZY' compaiono anche nel riassunto iniziale del
+        # messaggio ("Fusi ... in id ..."): da soli non proverebbero che il
+        # blocco "Scheda scartata: campo=valore ..." campo per campo esiste
+        # davvero. ubicazione non compare altrove nel messaggio, quindi la
+        # sua presenza dimostra che quel blocco e' stato scritto.
+        assert "Scheda scartata: matricola='R00015'" in voce['dettagli']
+        assert "ubicazione='Sala 1'" in voce['dettagli']
+
+
+def test_la_pagina_di_confronto_mostra_i_campi_diversi(client, dati):
+    entra(client, 'admin@a.it')
+    testo = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}").get_data(as_text=True)
+    assert 'R-00015' in testo
+    assert 'R00015' in testo
+    assert 'Matricola' in testo
+
+
+def test_la_collisione_con_un_terzo_viene_spiegata_non_lanciata(client, app, dati):
+    from models import execute, query_one
+    with app.app_context():
+        execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato) "
+                "VALUES (?,?,'COLLIDE','REXXAM','OZY','funzionante')",
+                (dati['div_a'], dati['a']))
+    entra(client, 'admin@a.it')
+    risposta = client.post(
+        f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+        data={'principale': dati['uno'], 'campo_matricola': 'COLLIDE'},
+        follow_redirects=True)
+    assert risposta.status_code == 200
+    assert 'Esiste gia' in risposta.get_data(as_text=True)
+    with app.app_context():
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None

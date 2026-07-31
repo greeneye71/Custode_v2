@@ -18,7 +18,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile, filtro_divisione)
+                    apparecchio_accessibile, filtro_divisione, get_db)
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -366,6 +366,119 @@ def duplicati():
 
     coppie = candidati_duplicati(righe)
     return render_template('apparecchi/duplicati.html', coppie=coppie, criteri=CRITERI)
+
+
+def _due_schede_fondibili(id, altro_id):
+    """Le due schede, se l'utente puo' agire su entrambe. Altrimenti (None, None).
+
+    apparecchio_accessibile controlla struttura E divisione: e' l'unico modo
+    accettabile di raggiungere un apparecchio per id.
+    """
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        return None, None
+    return apparecchio_accessibile(id), apparecchio_accessibile(altro_id)
+
+
+@apparecchi_bp.route('/apparecchi/<int:id>/fondi/<int:altro_id>')
+@login_required
+def fondi(id, altro_id):
+    """Confronto delle due schede prima della fusione."""
+    from fusione_service import CAMPI_FONDIBILI, valori_predefiniti
+
+    uno, due = _due_schede_fondibili(id, altro_id)
+    if not uno or not due:
+        flash('Apparecchio non trovato o non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    differenze = [
+        {'campo': c, 'a': uno.get(c), 'b': due.get(c)}
+        for c in CAMPI_FONDIBILI if uno.get(c) != due.get(c)
+    ]
+    interventi = query_all(
+        """SELECT 'manutenzione' AS tipo, id, data_intervento AS data, tipo AS sottotipo,
+                  verbale_path AS allegato, apparecchio_id
+           FROM manutenzioni WHERE apparecchio_id IN (?, ?)
+           UNION ALL
+           SELECT 'verifica', id, data_verifica, esito, documento_path, apparecchio_id
+           FROM verifiche WHERE apparecchio_id IN (?, ?)
+           ORDER BY data DESC""",
+        (id, altro_id, id, altro_id))
+
+    return render_template('apparecchi/fondi.html', uno=uno, due=due,
+                           differenze=differenze, interventi=interventi,
+                           predefiniti=valori_predefiniti(uno, due))
+
+
+@apparecchi_bp.route('/apparecchi/<int:id>/fondi/<int:altro_id>', methods=['POST'])
+@login_required
+def esegui_fusione(id, altro_id):
+    """Esegue la fusione. Tutto in una transazione sola."""
+    from fusione_service import (fondi_apparecchi, CAMPI_FONDIBILI,
+                                 FusioneCollisioneError, FusioneRifiutataError)
+
+    uno, due = _due_schede_fondibili(id, altro_id)
+    if not uno or not due:
+        flash('Apparecchio non trovato o non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    try:
+        id_principale = int(request.form.get('principale', 0))
+    except (TypeError, ValueError):
+        id_principale = 0
+    if id_principale not in (id, altro_id):
+        flash('Scegli quale scheda deve sopravvivere.', 'warning')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+    id_scartato = altro_id if id_principale == id else id
+
+    valori = {}
+    for campo in CAMPI_FONDIBILI:
+        if f'campo_{campo}' in request.form:
+            valore = request.form.get(f'campo_{campo}')
+            valori[campo] = valore if valore != '' else None
+
+    interventi_scartati = []
+    for chiave in request.form.getlist('scarta'):
+        tipo, _sep, id_int = chiave.partition(':')
+        if id_int.isdigit():
+            interventi_scartati.append((tipo, int(id_int)))
+
+    db = get_db()
+    try:
+        esito = fondi_apparecchi(db, id_principale, id_scartato, valori,
+                                 interventi_scartati)
+        db.commit()
+    except FusioneCollisioneError as e:
+        db.rollback()
+        flash(str(e), 'danger')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+    except FusioneRifiutataError as e:
+        db.rollback()
+        flash(f'Fusione non eseguita: {e}', 'danger')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+    except Exception as e:
+        db.rollback()
+        current_app.logger.error(f'Fusione {id_principale}<-{id_scartato} fallita: {e}',
+                                 exc_info=True)
+        flash('Fusione fallita, nulla e\' stato modificato. Controlla il log.', 'danger')
+        return redirect(url_for('apparecchi.fondi', id=id, altro_id=altro_id))
+
+    scartato = esito['scartato']
+    campi = ' '.join(
+        f"{c}={scartato.get(c)!r}" for c in CAMPI_FONDIBILI
+        if scartato.get(c) not in (None, ''))
+    log_attivita(
+        g.user['id'], 'fusione', 'apparecchi', id_principale,
+        f"Fusi \"{scartato['marca']} {scartato['modello']} {scartato['matricola']}\" "
+        f"(id {id_scartato}) in id {id_principale}. Scheda scartata: {campi}. "
+        f"Spostati: {esito['manutenzioni']} manutenzioni, {esito['verifiche']} verifiche, "
+        f"{esito['documenti']} documenti, {esito['accessori']} accessori. "
+        f"Scartati: {esito['interventi_scartati']} interventi. "
+        f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}",
+        request.remote_addr)
+
+    flash(f"Schede fuse: {esito['manutenzioni']} manutenzioni e "
+          f"{esito['verifiche']} verifiche trasferite.", 'success')
+    return redirect(url_for('apparecchi.dettaglio', id=id_principale))
 
 
 @apparecchi_bp.route('/apparecchi/nuovo', methods=['GET', 'POST'])

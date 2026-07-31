@@ -31,10 +31,10 @@
       </div>
       {% if not loop.last %}<div class="col-md-1 text-center align-self-center">↔</div>{% endif %}
       {% endfor %}
-      {# Il pulsante "Confronta" arriva col Task 5, insieme alla rotta che
-         apre: un collegamento a una rotta inesistente farebbe sollevare
-         BuildError, e un segnaposto che non porta da nessuna parte e' peggio
-         di un pulsante che ancora non c'e'. #}
+      <div class="col-md-1 text-end align-self-center">
+        <a href="{{ url_for('apparecchi.fondi', id=c.a.id, altro_id=c.b.id) }}"
+           class="btn btn-sm btn-outline-primary">Confronta</a>
+      </div>
     </div>
     <div class="mt-2 small text-secondary">
       <i class="bi bi-info-circle me-1"></i>{{ criteri[c.criterio] }}
