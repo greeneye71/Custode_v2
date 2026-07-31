@@ -496,6 +496,16 @@ def esegui_fusione(id, altro_id):
         # sotto e db.rollback() annulla anche la fusione: meglio nessuna
         # fusione che una fusione senza alcuna traccia di cosa conteneva la
         # scheda cancellata.
+        # struttura_id e' il settimo parametro di log_attivita: senza,
+        # la voce nasce con struttura_id NULL, e admin.py filtra
+        # "l.struttura_id = ?" per chiunque non sia superadmin - NULL = ?
+        # non e' mai vero. L'admin (o il tecnico) che ha appena eseguito
+        # la fusione non vedrebbe la propria voce ne' a schermo ne'
+        # nell'export CSV, l'unica traccia rimasta di una scheda
+        # cancellata in modo definitivo. uno e due sono nella stessa
+        # struttura a questo punto (fondi_apparecchi lo garantisce, o
+        # avrebbe gia' sollevato FusioneRifiutataError prima di arrivare
+        # qui), quindi la struttura della principale e' quella giusta.
         log_attivita(
             g.user['id'], 'fusione', 'apparecchi', id_principale,
             f"Fusi \"{scartato['marca']} {scartato['modello']} {scartato['matricola']}\" "
@@ -505,7 +515,7 @@ def esegui_fusione(id, altro_id):
             f"Scartati: {esito['interventi_scartati']} interventi. "
             f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}. "
             f"Valori precedenti sulla scheda superstite (sovrascritti): {valori_prec}",
-            request.remote_addr)
+            request.remote_addr, struttura_id=uno['struttura_id'])
 
         # A questo punto la fusione e' gia' durevole: models.execute(),
         # chiamata da log_attivita qui sopra, ha gia' fatto commit() sulla

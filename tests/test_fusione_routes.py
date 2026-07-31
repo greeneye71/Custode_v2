@@ -202,6 +202,21 @@ def test_il_registro_conserva_i_valori_precedenti_della_superstite(client, app, 
                 "matricola='R-00015'") in voce['dettagli']
 
 
+def test_la_voce_di_registro_e_visibile_a_chi_ha_fuso(client, app, dati):
+    """log_attivita chiamata senza struttura_id (settimo parametro) nasce con
+    struttura_id NULL: admin.py filtra 'l.struttura_id = ?' per chiunque non
+    sia superadmin, e NULL = ? non e' mai vero. L'admin che ha eseguito la
+    fusione non vedrebbe la propria voce - l'unica traccia rimasta di una
+    scheda cancellata in modo definitivo."""
+    entra(client, 'admin@a.it')
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+                data={'principale': dati['uno']}, follow_redirects=True)
+    risposta = client.get('/admin/log-attivita')
+    assert risposta.status_code == 200
+    testo = risposta.get_data(as_text=True)
+    assert 'fusione' in testo
+
+
 def test_la_pagina_di_confronto_mostra_i_campi_diversi(client, dati):
     entra(client, 'admin@a.it')
     testo = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}").get_data(as_text=True)
