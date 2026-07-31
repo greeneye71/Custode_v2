@@ -108,3 +108,79 @@ def candidati_duplicati(righe):
             if criterio:
                 trovate.append(Coppia(righe[i], righe[j], criterio))
     return trovate
+
+
+# Tabelle figlie di apparecchi con ON DELETE CASCADE: se non si spostano
+# PRIMA di cancellare la scheda scartata, la cascata le cancella insieme a lei.
+TABELLE_FIGLIE = (
+    ('manutenzioni', 'apparecchio_id'),
+    ('verifiche', 'apparecchio_id'),
+    ('documenti', 'apparecchio_id'),
+    ('accessori', 'apparecchio_id'),
+)
+
+
+class FusioneRifiutataError(Exception):
+    """La fusione non puo' essere eseguita: le due schede non sono fondibili
+    (stessa scheda, struttura diversa, una delle due non esiste)."""
+
+
+def fondi_apparecchi(conn, id_principale, id_scartato, valori=None,
+                     interventi_scartati=()):
+    """Fonde la scheda scartata dentro la principale, che conserva il proprio id.
+
+    Il chiamante apre e chiude la transazione, come per
+    struttura_service.rimuovi_strutture: la rotta la vuole tutta in una, e un
+    test la vuole poter annullare.
+
+    L'ORDINE delle operazioni non e' una preferenza di stile.
+    manutenzioni, verifiche, documenti e accessori hanno ON DELETE CASCADE
+    verso apparecchi: se si cancella la scheda scartata prima di spostarli, la
+    cascata porta via proprio i dati che la fusione doveva salvare, e
+    l'operazione riesce senza errori. E import_preview.apparecchio_match_id non
+    ha ON DELETE affatto, quindi bloccherebbe la cancellazione.
+
+    Restituisce i conteggi di cio' che ha spostato, la scheda scartata per
+    intero (il registro la conserva campo per campo: la fusione e' definitiva)
+    e l'elenco dei valori scelti dalla scartata.
+
+    valori e interventi_scartati sono accettati ma non ancora usati: li
+    implementera' un task successivo.
+    """
+    if id_principale == id_scartato:
+        raise FusioneRifiutataError(
+            "La scheda principale e quella da fondere sono la stessa.")
+
+    principale = conn.execute(
+        "SELECT * FROM apparecchi WHERE id = ?", (id_principale,)).fetchone()
+    scartato = conn.execute(
+        "SELECT * FROM apparecchi WHERE id = ?", (id_scartato,)).fetchone()
+    if principale is None or scartato is None:
+        raise FusioneRifiutataError("Una delle due schede non esiste.")
+    if principale['struttura_id'] != scartato['struttura_id']:
+        raise FusioneRifiutataError(
+            "Le due schede appartengono a strutture diverse.")
+
+    esito = {'manutenzioni': 0, 'verifiche': 0, 'documenti': 0, 'accessori': 0,
+             'preview': 0, 'interventi_scartati': 0, 'valori_scelti': []}
+
+    # 1-2. I figli si spostano PRIMA di qualunque cancellazione.
+    for tabella, colonna in TABELLE_FIGLIE:
+        cur = conn.execute(
+            f"UPDATE {tabella} SET {colonna} = ? WHERE {colonna} = ?",
+            (id_principale, id_scartato))
+        esito[tabella] = cur.rowcount
+
+    # 3. import_preview: nessun ON DELETE, bloccherebbe la cancellazione.
+    cur = conn.execute(
+        "UPDATE import_preview SET apparecchio_match_id = ? "
+        "WHERE apparecchio_match_id = ?", (id_principale, id_scartato))
+    esito['preview'] = cur.rowcount
+
+    # 4. La scheda scartata va letta finche' esiste.
+    esito['scartato'] = dict(scartato)
+
+    # 5. Ora la cancellazione non porta via nulla: non ha piu' figli.
+    conn.execute("DELETE FROM apparecchi WHERE id = ?", (id_scartato,))
+
+    return esito

@@ -111,3 +111,184 @@ def test_matricole_cortissime_non_si_propongono_nemmeno_a_parita_di_modello():
     di essere usata."""
     from fusione_service import candidati_duplicati
     assert candidati_duplicati([riga(1, 'A-1'), riga(2, 'A-2')]) == []
+
+
+@pytest.fixture
+def conn(tmp_path):
+    """Due apparecchi duplicati della stessa struttura, ciascuno con la sua
+    storia, piu' un terzo apparecchio che non deve essere toccato."""
+    percorso = str(tmp_path / 'prova.db')
+    con = sqlite3.connect(percorso)
+    con.row_factory = sqlite3.Row
+    with open(os.path.join(RADICE, 'schema.sql'), encoding='utf-8') as f:
+        con.executescript(f.read())
+    con.execute("PRAGMA foreign_keys = ON")
+
+    s = con.execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica A','A',1)").lastrowid
+    d = con.execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Oculistica','OCU',?)",
+                    (s,)).lastrowid
+    ids = {}
+    for etichetta, matricola, anno, note in (
+            ('principale', 'R-00015', None, None),
+            ('scartato', 'R00015', 2019, 'Rev. 2024'),
+            ('terzo', 'ALTRO-1', None, None)):
+        ids[etichetta] = con.execute(
+            "INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,"
+            "stato,ubicazione,anno_fabbricazione,note) "
+            "VALUES (?,?,?,'REXXAM','OZY','funzionante','Sala 1',?,?)",
+            (d, s, matricola, anno, note)).lastrowid
+
+    for etichetta, quante in (('principale', 3), ('scartato', 1)):
+        for n in range(quante):
+            con.execute(
+                "INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento,verbale_path) "
+                "VALUES (?,'preventiva','2026-03-12',?)",
+                (ids[etichetta], f'strutture/{s}/verbali/{etichetta}{n}.pdf'))
+    for etichetta, quante in (('principale', 1), ('scartato', 2)):
+        for n in range(quante):
+            con.execute(
+                "INSERT INTO verifiche (apparecchio_id,data_verifica,esito,documento_path) "
+                "VALUES (?,'2025-11-08','positivo',?)",
+                (ids[etichetta], f'strutture/{s}/verifiche/{etichetta}{n}.pdf'))
+    con.execute("INSERT INTO documenti (apparecchio_id,tipo,filename,filepath) "
+                "VALUES (?,'manuale','m.pdf','x/m.pdf')", (ids['scartato'],))
+    con.execute("INSERT INTO accessori (apparecchio_id,descrizione) VALUES (?,'Sonda')",
+                (ids['scartato'],))
+    # Un apparecchio del terzo, per dimostrare che non viene toccato
+    con.execute("INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento) "
+                "VALUES (?,'correttiva','2026-01-01')", (ids['terzo'],))
+    con.commit()
+    return con, ids, s
+
+
+def conta(con, tabella, apparecchio_id):
+    return con.execute(
+        f"SELECT COUNT(*) FROM {tabella} WHERE apparecchio_id = ?",
+        (apparecchio_id,)).fetchone()[0]
+
+
+def test_la_fusione_somma_gli_interventi_delle_due_schede(conn):
+    """L'unica asserzione che distingue "ha fuso" da "ha fuso senza perdere
+    niente". I figli hanno ON DELETE CASCADE: cancellare la scheda scartata
+    prima di spostarli li porta via, e l'operazione riesce lo stesso."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'])
+    con.commit()
+
+    assert conta(con, 'manutenzioni', ids['principale']) == 4   # 3 + 1
+    assert conta(con, 'verifiche', ids['principale']) == 3      # 1 + 2
+    assert conta(con, 'documenti', ids['principale']) == 1
+    assert conta(con, 'accessori', ids['principale']) == 1
+    assert esito['manutenzioni'] == 1    # quante ne ha SPOSTATE
+    assert esito['verifiche'] == 2
+    assert esito['documenti'] == 1
+    assert esito['accessori'] == 1
+
+
+def test_la_scheda_scartata_sparisce_e_la_principale_conserva_il_proprio_id(conn):
+    """L'id della principale non cambia: i QR code stampati e attaccati
+    sull'apparecchio restano validi. E' il motivo per cui la scelta di quale
+    scheda sopravvive non e' indifferente."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    fondi_apparecchi(con, ids['principale'], ids['scartato'])
+    con.commit()
+
+    assert con.execute("SELECT COUNT(*) FROM apparecchi WHERE id=?",
+                       (ids['scartato'],)).fetchone()[0] == 0
+    riga = con.execute("SELECT id, matricola FROM apparecchi WHERE id=?",
+                       (ids['principale'],)).fetchone()
+    assert riga is not None and riga['matricola'] == 'R-00015'
+
+
+def test_un_terzo_apparecchio_non_viene_toccato(conn):
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    fondi_apparecchi(con, ids['principale'], ids['scartato'])
+    con.commit()
+    assert conta(con, 'manutenzioni', ids['terzo']) == 1
+    assert con.execute("SELECT COUNT(*) FROM apparecchi WHERE id=?",
+                       (ids['terzo'],)).fetchone()[0] == 1
+
+
+def test_nessun_allegato_resta_orfano(conn):
+    """Nessun file si sposta: gli allegati stanno in
+    uploads/strutture/<id>/<tipo>/, non in cartelle per apparecchio, quindi
+    fondere due schede della stessa struttura cambia solo la riga che li
+    referenzia. Il test lo inchioda: i percorsi devono essere ancora tutti
+    li', invariati."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    prima = {r[0] for r in con.execute("SELECT verbale_path FROM manutenzioni")}
+    prima |= {r[0] for r in con.execute("SELECT documento_path FROM verifiche")}
+
+    fondi_apparecchi(con, ids['principale'], ids['scartato'])
+    con.commit()
+
+    dopo = {r[0] for r in con.execute("SELECT verbale_path FROM manutenzioni")}
+    dopo |= {r[0] for r in con.execute("SELECT documento_path FROM verifiche")}
+    assert dopo == prima
+
+
+def test_i_riferimenti_di_import_preview_seguono_la_scheda_principale(conn):
+    """import_preview.apparecchio_match_id non ha ON DELETE: se non lo si
+    sposta, la cancellazione della scheda scartata fallisce con un errore di
+    chiave esterna e l'intera fusione si annulla."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    imp = con.execute(
+        "INSERT INTO import_history (struttura_id,tipo_import,filename,filepath) "
+        "VALUES (?,'inventario','x.xlsx','x/x.xlsx')", (_s,)).lastrowid
+    con.execute("INSERT INTO import_preview (import_id,riga_numero,dati_estratti,"
+                "apparecchio_match_id) VALUES (?,1,'{}',?)", (imp, ids['scartato']))
+    con.commit()
+
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'])
+    con.commit()
+
+    assert esito['preview'] == 1
+    assert con.execute("SELECT apparecchio_match_id FROM import_preview").fetchone()[0] \
+        == ids['principale']
+
+
+def test_la_scheda_scartata_viene_restituita_per_intero(conn):
+    """Il registro deve poter contenere la scheda cancellata campo per campo,
+    cosi' ricostruirla a mano resta possibile: la fusione e' definitiva."""
+    from fusione_service import fondi_apparecchi
+    con, ids, _s = conn
+    esito = fondi_apparecchi(con, ids['principale'], ids['scartato'])
+    con.commit()
+
+    scartato = esito['scartato']
+    assert scartato['matricola'] == 'R00015'
+    assert scartato['anno_fabbricazione'] == 2019
+    assert scartato['note'] == 'Rev. 2024'
+    assert scartato['modello'] == 'OZY'
+
+
+def test_fondere_una_scheda_con_se_stessa_e_rifiutato(conn):
+    from fusione_service import fondi_apparecchi, FusioneRifiutataError
+    con, ids, _s = conn
+    with pytest.raises(FusioneRifiutataError):
+        fondi_apparecchi(con, ids['principale'], ids['principale'])
+
+
+def test_fondere_fra_strutture_diverse_e_rifiutato(conn):
+    """La rotta controlla gia' l'accessibilita' di entrambe, ma la primitiva
+    non deve dipendere dal fatto che il suo unico chiamante odierno lo faccia:
+    e' l'ultima difesa dell'isolamento fra strutture."""
+    from fusione_service import fondi_apparecchi, FusioneRifiutataError
+    con, ids, _s = conn
+    altra = con.execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica B','B',1)").lastrowid
+    div = con.execute("INSERT INTO divisioni (nome,codice,struttura_id) VALUES ('Cardio','CAR',?)",
+                      (altra,)).lastrowid
+    estraneo = con.execute(
+        "INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,stato) "
+        "VALUES (?,?,'B-1','SIEMENS','Y1','funzionante')", (div, altra)).lastrowid
+    con.commit()
+
+    with pytest.raises(FusioneRifiutataError):
+        fondi_apparecchi(con, ids['principale'], estraneo)
+    assert con.execute("SELECT COUNT(*) FROM apparecchi WHERE id=?",
+                       (estraneo,)).fetchone()[0] == 1
