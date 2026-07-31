@@ -15,7 +15,7 @@
       </p>
       {% for s in (uno, due) %}
       <div class="form-check">
-        <input class="form-check-input" type="radio" name="principale"
+        <input class="form-check-input principale-radio" type="radio" name="principale"
                value="{{ s.id }}" id="p{{ s.id }}" {% if loop.first %}checked{% endif %}>
         <label class="form-check-label" for="p{{ s.id }}">
           {{ s.marca }} {{ s.modello }} <code>{{ s.matricola }}</code>
@@ -38,11 +38,13 @@
           {% for d in differenze %}
           <tr>
             <td class="text-capitalize">{{ d.campo.replace('_', ' ')|capitalize }}</td>
-            {% for valore in (d.a, d.b) %}
+            {% for valore, proprietario in ((d.a, uno.id), (d.b, due.id)) %}
             <td>
               <div class="form-check">
-                <input class="form-check-input" type="radio"
+                <input class="form-check-input campo-radio" type="radio"
                        name="campo_{{ d.campo }}" value="{{ valore if valore is not none }}"
+                       data-owner="{{ proprietario }}"
+                       data-vuoto="{{ 'true' if valore in (none, '') else 'false' }}"
                        {% if predefiniti.get(d.campo) == valore %}checked{% endif %}>
                 <label class="form-check-label">
                   {% if valore in (none, '') %}<em class="text-muted">vuoto</em>
@@ -97,4 +99,43 @@
        class="btn btn-outline-secondary">Annulla</a>
   </div>
 </form>
+
+<script>
+// Il predefinito di ogni campo diverso segue la scheda scelta come
+// principale: alla prima resa della pagina i predefiniti (calcolati dal
+// server in valori_predefiniti) favoriscono sempre "uno", perche' non si sa
+// ancora quale scheda l'operatore terra'. Se sceglie "due", i predefiniti
+// vanno ricalcolati SUBITO, altrimenti confermare la scelta sovrascriverebbe
+// la principale con i valori dell'altra scheda.
+// Senza JavaScript questo blocco non gira e la pagina resta quella di
+// sempre: i predefiniti restano quelli calcolati per "uno" finche' l'utente
+// non li cambia lui stesso, radio per radio - non peggio di prima.
+(function() {
+    var radioPrincipale = document.querySelectorAll('.principale-radio');
+    if (!radioPrincipale.length) return;
+
+    var gruppi = {};
+    document.querySelectorAll('.campo-radio').forEach(function(r) {
+        (gruppi[r.name] = gruppi[r.name] || []).push(r);
+    });
+
+    function riallinea(principaleId) {
+        Object.keys(gruppi).forEach(function(nome) {
+            var radios = gruppi[nome];
+            var mio = radios.find(function(r) { return r.dataset.owner === principaleId; });
+            var altro = radios.find(function(r) { return r.dataset.owner !== principaleId; });
+            // Stessa regola del server (valori_predefiniti): il valore della
+            // principale vince, TRANNE dove e' vuoto e l'altra scheda ne ha uno.
+            var scelta = (mio && mio.dataset.vuoto === 'false') ? mio : (altro || mio);
+            if (scelta) scelta.checked = true;
+        });
+    }
+
+    radioPrincipale.forEach(function(radio) {
+        radio.addEventListener('change', function() {
+            riallinea(this.value);
+        });
+    });
+})();
+</script>
 {% endblock %}

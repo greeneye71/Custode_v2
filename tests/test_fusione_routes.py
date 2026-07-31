@@ -210,6 +210,19 @@ def test_la_pagina_di_confronto_mostra_i_campi_diversi(client, dati):
     assert 'Matricola' in testo
 
 
+def test_la_pagina_di_confronto_marca_il_proprietario_di_ogni_valore(client, dati):
+    """Il predefinito deve poter seguire la scelta di quale scheda
+    sopravvive: lo script della pagina si affida a data-owner per sapere a
+    quale scheda (uno o due) appartiene ciascun valore proposto per un campo
+    diverso. Senza questi attributi il predefinito resterebbe sempre quello
+    calcolato per 'uno', a prescindere da quale principale l'operatore
+    sceglie."""
+    entra(client, 'admin@a.it')
+    testo = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}").get_data(as_text=True)
+    assert f'data-owner="{dati["uno"]}"' in testo
+    assert f'data-owner="{dati["due"]}"' in testo
+
+
 def test_la_collisione_con_un_terzo_viene_spiegata_non_lanciata(client, app, dati):
     from models import execute, query_one
     with app.app_context():
