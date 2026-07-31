@@ -478,6 +478,24 @@ def esegui_fusione(id, altro_id):
             f"Valori scelti: {', '.join(esito['valori_scelti']) or 'nessuno'}",
             request.remote_addr)
 
+        # A questo punto la fusione e' gia' durevole: models.execute(),
+        # chiamata da log_attivita qui sopra, ha gia' fatto commit() sulla
+        # stessa connessione di richiesta (get_db() e' per-richiesta), e
+        # quel commit copre tutto cio' che fondi_apparecchi ha scritto prima
+        # di lei. Questa riga e' quindi un no-op in ogni fusione che arriva
+        # fin qui - non e' lei a rendere durevole la fusione, oggi. Resta
+        # comunque, e non va tolta credendola ridondante: e' la rete per il
+        # giorno in cui la registrazione verra' spostata, sostituita da
+        # un'implementazione che non passa piu' da models.execute(), o
+        # tolta del tutto - a quel punto sarebbe l'unica cosa a reggere, e
+        # la sua assenza sarebbe un bug silenzioso scoperto solo quando
+        # qualcuno si accorge che le fusioni non sopravvivono al riavvio.
+        # E l'ordine sopra - registrazione PRIMA, commit DOPO - e' voluto,
+        # non un dettaglio: se log_attivita fallisce, l'eccezione arriva al
+        # blocco "except Exception" sotto e db.rollback() annulla anche la
+        # fusione. Una fusione senza la sua voce di registro non deve
+        # risultare avvenuta: e' l'unica traccia che resta della scheda
+        # cancellata, e la fusione non si annulla dall'interfaccia.
         db.commit()
     except FusioneCollisioneError as e:
         db.rollback()
