@@ -369,6 +369,48 @@ def test_una_fusione_fallita_non_lascia_scritture_durevoli(client, app, dati, mo
         assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
 
 
+def test_un_guasto_reale_dopo_la_delete_non_lascia_la_scheda_cancellata(client, app, dati):
+    """test_una_fusione_fallita_non_lascia_scritture_durevoli sostituisce
+    fondi_apparecchi per intero con un monkeypatch: non esercita mai
+    l'ordinamento vero della funzione ne' un guasto che il database stesso
+    solleva. Qui il guasto e' reale e passa dal codice di produzione fino in
+    fondo: 'rottamato' supera la validazione della rotta (CAMPI_FONDIBILI
+    ammette 'stato') ma non CHECK(stato IN ('funzionante', 'in_manutenzione',
+    'dismesso', 'da_sostituire')) dello schema. fondi_apparecchi applica i
+    valori scelti SOLO dopo la DELETE della scheda scartata (altrimenti
+    UNIQUE(struttura_id, modello, matricola) rifiuterebbe l'UPDATE mentre la
+    scartata esiste ancora - vedi test_la_principale_puo_prendere_la_
+    matricola_della_scartata): l'IntegrityError del CHECK arriva quindi
+    QUANDO la scheda scartata e' gia' cancellata e le sue manutenzioni gia'
+    spostate. E' il percorso piu' pericoloso della funzione - quello in cui
+    un rollback mancante lascerebbe una scheda cancellata per sempre - e
+    nessun test lo esercitava con codice vero."""
+    from models import execute, query_one
+    with app.app_context():
+        m = execute("INSERT INTO manutenzioni (apparecchio_id,tipo,data_intervento) "
+                    "VALUES (?,'preventiva','2026-01-01')", (dati['due'],)).lastrowid
+
+    entra(client, 'admin@a.it')
+    risposta = client.post(
+        f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+        data={'principale': dati['uno'], 'campo_stato': 'rottamato'},
+        follow_redirects=True)
+
+    assert risposta.status_code == 200
+    assert 'Fusione fallita' in risposta.get_data(as_text=True)
+
+    with app.app_context():
+        # La scheda 'due' torna, con la sua manutenzione al suo posto (non
+        # spostata su 'uno'), e nessuna voce di registro: il rollback ha
+        # annullato tutto cio' che fondi_apparecchi aveva gia' scritto,
+        # DELETE della scartata compresa.
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
+        riga = query_one("SELECT apparecchio_id FROM manutenzioni WHERE id=?", (m,))
+        assert riga['apparecchio_id'] == dati['due']
+        assert query_one(
+            "SELECT COUNT(*) AS n FROM log_attivita WHERE azione='fusione'")['n'] == 0
+
+
 def test_il_registro_conserva_anche_i_campi_non_scegibili_dal_form(client, app, dati):
     """CAMPI_FONDIBILI governa cosa il FORM puo' far scegliere ed esclude di
     proposito divisione_id e le colonne di audit: spostare un apparecchio di
