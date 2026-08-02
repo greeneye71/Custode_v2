@@ -152,3 +152,68 @@ def test_conteggi_riferimenti_conta_tutte_le_colonne(conn):
     con.execute("UPDATE apparecchi SET updated_by = ? WHERE id = ?", (ids['mario'], ap))
     con.commit()
     assert conteggi_riferimenti(con, ids['mario'])['apparecchi'] == 2
+
+
+def test_l_ultimo_admin_di_una_struttura_non_si_cancella(conn):
+    """Senza, quella struttura resta senza nessuno che possa amministrarla."""
+    from utente_service import motivo_rifiuto, cancella_utente
+    con, ids, _s, _ap = conn
+    assert motivo_rifiuto(con, ids['admin1']) is None   # ce ne sono due
+    cancella_utente(con, ids['admin1'])
+    con.commit()
+    assert motivo_rifiuto(con, ids['admin2']) == 'ultimo_admin'
+
+
+def test_si_contano_tutti_gli_admin_esistenti_non_solo_gli_attivi(conn):
+    """Il freno non deve obbligare l'operatore a ragionare sullo stato di
+    attivazione mentre sta cancellando."""
+    from utente_service import motivo_rifiuto
+    con, ids, _s, _ap = conn
+    con.execute("UPDATE utenti SET attivo = 0 WHERE id = ?", (ids['admin2'],))
+    con.commit()
+    assert motivo_rifiuto(con, ids['admin1']) is None
+
+
+def test_l_ultimo_superadmin_non_si_cancella(conn):
+    from utente_service import motivo_rifiuto
+    con, _ids, _s, _ap = conn
+    sa = con.execute(
+        "INSERT INTO utenti (email,password_hash,nome,cognome,ruolo) "
+        "VALUES ('super@x.it','h','S','S','superadmin')").lastrowid
+    con.commit()
+    assert motivo_rifiuto(con, sa) == 'ultimo_superadmin'
+
+
+def test_con_due_superadmin_si_puo_cancellare(conn):
+    from utente_service import motivo_rifiuto
+    con, _ids, _s, _ap = conn
+    uno = con.execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo) "
+                      "VALUES ('s1@x.it','h','S','1','superadmin')").lastrowid
+    con.execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo) "
+                "VALUES ('s2@x.it','h','S','2','superadmin')")
+    con.commit()
+    assert motivo_rifiuto(con, uno) is None
+
+
+def test_un_utente_gia_cancellato_non_si_ricancella(conn):
+    from utente_service import motivo_rifiuto, cancella_utente
+    con, ids, _s, _ap = conn
+    cancella_utente(con, ids['mario'])
+    con.commit()
+    assert motivo_rifiuto(con, ids['mario']) == 'gia_cancellato'
+
+
+def test_un_admin_gia_cancellato_non_conta_come_ultimo(conn):
+    """admin2 cancellato non e' piu' un amministratore della struttura: se
+    contasse, admin1 risulterebbe cancellabile mentre e' l'unico rimasto."""
+    from utente_service import motivo_rifiuto, cancella_utente
+    con, ids, _s, _ap = conn
+    cancella_utente(con, ids['admin2'])
+    con.commit()
+    assert motivo_rifiuto(con, ids['admin1']) == 'ultimo_admin'
+
+
+def test_utente_inesistente(conn):
+    from utente_service import motivo_rifiuto
+    con, _ids, _s, _ap = conn
+    assert motivo_rifiuto(con, 99999) == 'inesistente'

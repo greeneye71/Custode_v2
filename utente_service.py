@@ -77,3 +77,41 @@ def cancella_utente(conn, utente_id):
          datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), utente_id))
     return esito
+
+
+def motivo_rifiuto(conn, utente_id):
+    """Perche' questo utente non si puo' cancellare, o None se si puo'.
+
+    Guarda solo il database: i rifiuti che dipendono da CHI chiede (se stessi,
+    l'ambito dell'admin) stanno nella rotta, che e' l'unica a sapere chi e'
+    l'utente corrente.
+
+    Un utente gia' cancellato non conta come amministratore della struttura:
+    se contasse, l'ultimo admin rimasto risulterebbe cancellabile.
+    """
+    riga = conn.execute(
+        "SELECT ruolo, struttura_id, eliminato_il FROM utenti WHERE id = ?",
+        (utente_id,)).fetchone()
+    if riga is None:
+        return 'inesistente'
+    ruolo, struttura_id, eliminato_il = riga
+    if eliminato_il is not None:
+        return 'gia_cancellato'
+
+    if ruolo == 'superadmin':
+        rimasti = conn.execute(
+            "SELECT COUNT(*) FROM utenti WHERE ruolo = 'superadmin' "
+            "AND eliminato_il IS NULL AND id != ?", (utente_id,)).fetchone()[0]
+        if rimasti == 0:
+            return 'ultimo_superadmin'
+
+    if ruolo == 'admin' and struttura_id is not None:
+        # Tutti gli admin esistenti, attivi o no: il freno non deve obbligare
+        # a ragionare sullo stato di attivazione mentre si cancella.
+        rimasti = conn.execute(
+            "SELECT COUNT(*) FROM utenti WHERE ruolo = 'admin' AND struttura_id = ? "
+            "AND eliminato_il IS NULL AND id != ?", (struttura_id, utente_id)).fetchone()[0]
+        if rimasti == 0:
+            return 'ultimo_admin'
+
+    return None
