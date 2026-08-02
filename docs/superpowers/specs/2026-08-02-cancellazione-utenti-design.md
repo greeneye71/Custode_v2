@@ -200,7 +200,9 @@ dimentica, un utente cancellato ricompare selezionabile. L'elenco e' esatto, ric
 
 **Da filtrare con `eliminato_il IS NULL`:**
 
-- `admin.py:96` e `admin.py:106` — la gestione utenti, due rami (superadmin e admin)
+- `admin.py:96` e `admin.py:106` — la gestione utenti, due rami (superadmin e admin).
+  Il ramo del superadmin (`:96`) va anche filtrato per **escludere i tecnici**, per la
+  ragione spiegata piu' sotto
 - `admin.py:1218` — l'elenco dei tecnici
 - `strutture_bp.py:389` e `strutture_bp.py:392` — utenti e tecnici nella scheda della
   struttura
@@ -221,7 +223,60 @@ cancellati devono sparire con lei.
 
 ---
 
-## Un difetto esistente che questa modifica chiude
+## Tre difetti esistenti che questa modifica chiude
+
+Sono emersi verificando l'area, non cercandoli. Tutti e tre stanno nella gestione utenti,
+e il secondo puo' chiudere fuori dal proprio deployment chi lo usa.
+
+### 1. Il modulo utenti generico declassa in silenzio tecnici e superadmin
+
+`/admin/utenti` per il superadmin **non filtra per ruolo**: elenca tutti, tecnici e
+superadmin compresi. Le loro schede si aprono nel modulo di modifica generico
+(`admin.py:195`), che riduce il ruolo a `('admin', 'utente')` — `admin.py:240-241` — con
+un'assegnazione silenziosa, non un errore.
+
+Verificato eseguendo le rotte vere, tre volte:
+
+```
+[tecnico]     compare nell'elenco: True | la scheda si apre: 200
+              DOPO il salvataggio -> ruolo: utente | struttura_id: 1
+              assegnazioni in tecnici_strutture rimaste: [1, 2]
+
+[altro superadmin]  compare nell'elenco: True
+              DOPO il salvataggio -> ruolo: utente | struttura_id: 1
+              superadmin rimasti nel deployment: 1
+
+[se stesso, unico superadmin]
+              ruolo dopo il salvataggio: utente
+              superadmin rimasti nel deployment: 0
+              /strutture -> 308    /admin/backup -> 302
+```
+
+Un tecnico salvato da li' smette di essere un tecnico e si porta dietro due assegnazioni
+in `tecnici_strutture` che ora descrivono come tecnico qualcuno che non lo e' piu'.
+
+Il caso peggiore e' l'ultimo: **l'unico superadmin che apre la propria scheda e salva si
+declassa a `utente`, e il deployment resta senza superadmin.** Nessuno puo' piu' creare
+strutture, fare backup, o riparare una struttura rimasta senza admin. L'unica via di
+rientro e' `crea_superadmin.py` da riga di comando, che un operatore non ha motivo di
+conoscere.
+
+**Correzione.** Il modulo utenti generico gestisce `admin` e `utente`, e basta.
+
+- I **tecnici** spariscono da `/admin/utenti` — hanno gia' la loro pagina, che sa gestire
+  le assegnazioni alle strutture, cosa che il modulo generico non fa. Le rotte che
+  agiscono su un utente per id (modifica, attivazione, reimpostazione password,
+  cancellazione) rifiutano un tecnico e rimandano alla pagina dei tecnici: un URL scritto
+  a mano non deve poter declassare nessuno.
+- I **superadmin** restano visibili al superadmin, perche' oggi quella scheda e' l'unico
+  posto dove uno puo' correggere il proprio nome o la propria email — non esiste una
+  pagina di profilo, `/cambio-password` fa solo la password. Ma il ruolo di un superadmin
+  non e' modificabile da li', e non gli si assegna una struttura.
+- **Il ruolo non viene piu' riscritto in silenzio.** Cambiarlo e' ammesso solo fra `admin`
+  e `utente`; qualunque altro valore su un utente di quei due ruoli e' un errore mostrato,
+  non una correzione muta.
+
+### 2. Cancellare un tecnico restituisce 500
 
 `admin.py:1369-1400`, `tecnico_elimina`, cancella gia' fisicamente un utente — ed **e'
 rotta**. Azzera dieci colonne, fra cui `manutenzioni.updated_by` e `verifiche.updated_by`,
@@ -238,6 +293,17 @@ sulla primitiva nuova: elimina il 500, e fa sparire la copia.
 
 Nota di merito: cancellare un tecnico oggi azzererebbe comunque l'autore ovunque, mentre
 con la primitiva nuova il nome resta — un miglioramento, non solo una riparazione.
+
+### 3. Il quarto elenco divergente delle stesse colonne
+
+Le otto colonne che referenziano un utente sono elencate a mano in quattro punti diversi
+del progetto, e le quattro copie **non coincidono**: quella di `tecnico_elimina` ne ha
+dieci, due delle quali inesistenti. E' la stessa famiglia di difetto che nella 2.6.0
+produsse un Critico, quando due copie dell'elenco degli allegati si disallinearono e
+l'archivio usciva senza i file.
+
+Portando `tecnico_elimina` sulla primitiva condivisa le copie scendono da quattro a tre.
+Le altre due sono fuori da questa modifica.
 
 ---
 
@@ -259,6 +325,14 @@ Poi:
 - un utente gia' cancellato non e' modificabile ne' ri-cancellabile;
 - `attivo` si cambia dal modulo di modifica, e un utente disattivato all'avvio dal
   controllo sugli orfani torna riattivabile;
+- **un tecnico non compare in `/admin/utenti`**, e nessuna delle rotte per id lo tocca
+  nemmeno chiamandole a mano: dopo il tentativo il suo ruolo e' ancora `tecnico`, la sua
+  `struttura_id` e' ancora nulla e le sue assegnazioni sono intatte;
+- **salvare la scheda di un superadmin non ne cambia il ruolo** e non gli assegna una
+  struttura — provato anche sul caso in cui il superadmin salva se stesso ed e' l'unico
+  del deployment, che oggi lo lascia a zero superadmin;
+- un ruolo non ammesso inviato per un utente `admin`/`utente` produce un errore mostrato,
+  non una riscrittura silenziosa;
 - la voce di registro contiene l'email originale ed e' visibile all'admin della struttura
   in `/admin/log-attivita`;
 - `POST /admin/tecnici/<id>/elimina` non restituisce piu' 500 e il tecnico sparisce.
