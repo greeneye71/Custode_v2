@@ -643,9 +643,14 @@ def test_la_pagina_di_conferma_dice_chi_si_sta_cancellando(client, dati):
 
 
 def test_la_pagina_di_conferma_dice_cosa_resta(client, dati):
+    """I tre punti che la pagina deve dire prima del pulsante: che non si torna
+    indietro, che il nome resta sulle schede inserite, che l'indirizzo si
+    libera. Le tre asserzioni separate, cosi' se ne sparisce una si sa quale."""
     entra(client, 'admin@a.it')
     testo = client.get(f"/admin/utenti/{dati['mario']}/elimina").get_data(as_text=True)
-    assert 'non e' in testo.lower() and 'reversibile' in testo.lower()
+    assert 'reversibile' in testo.lower()
+    assert 'resta' in testo.lower()
+    assert 'libero' in testo.lower()
 
 
 def test_la_cancellazione_riuscita(client, app, dati):
