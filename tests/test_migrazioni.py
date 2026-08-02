@@ -178,3 +178,25 @@ def test_un_errore_di_schema_diverso_non_viene_mascherato(app):
             init_db()
         assert 'no such column' not in str(errore.value)
         assert 'migrate.py' not in str(errore.value)
+
+
+def test_la_colonna_eliminato_il_arriva_anche_su_un_database_esistente(app):
+    """La colonna sta in schema.sql per le installazioni nuove, ma
+    un'installazione gia' in servizio non riesegue schema.sql sulle tabelle che
+    esistono gia' (sono tutte CREATE TABLE IF NOT EXISTS): serve la migrazione
+    incrementale, che gira a ogni avvio."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("ALTER TABLE utenti DROP COLUMN eliminato_il")
+        db.commit()
+        assert 'eliminato_il' not in [r[1] for r in db.execute("PRAGMA table_info(utenti)")]
+
+        apply_schema_updates()
+
+        colonne = [r[1] for r in db.execute("PRAGMA table_info(utenti)")]
+        assert 'eliminato_il' in colonne
+        # E gli utenti esistenti non risultano cancellati.
+        assert db.execute(
+            "SELECT COUNT(*) FROM utenti WHERE eliminato_il IS NOT NULL").fetchone()[0] == 0

@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS utenti (
   -- che fino alla 2.6 significava vedere gli apparecchi di tutte le strutture.
   -- Chi elimina una struttura deve cancellarne prima gli utenti (lo fa
   -- struttura_service.rimuovi_strutture).
+  -- Valorizzata = utente cancellato: l'account e' distrutto ma la riga resta,
+  -- perche' otto colonne *_by referenziano utenti(id) e su un registro di
+  -- elettromedicali "chi ha inserito questo apparecchio" non deve sparire.
+  eliminato_il DATETIME,
   FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE RESTRICT,
   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
 );

@@ -480,6 +480,9 @@ WHERE a.stato != 'dismesso'
 ORDER BY prossima_scadenza ASC""",
         # Logo mostrato nella testata dei prospetti stampati.
         "ALTER TABLE strutture ADD COLUMN logo_path TEXT",
+        # Cancellazione degli utenti (2.6.2): la riga sopravvive come voce
+        # storica, questa colonna la distingue da un utente normale.
+        "ALTER TABLE utenti ADD COLUMN eliminato_il DATETIME",
     ]
     for sql in migrations:
         try:
