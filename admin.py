@@ -16,7 +16,7 @@ from werkzeug.security import generate_password_hash
 
 from auth import (admin_required, superadmin_required,
                   tecnico_o_admin_required, operazione_globale_required)
-from models import query_one, query_all, execute, log_attivita
+from models import query_one, query_all, execute, log_attivita, get_db
 from ai_service import AI_PROVIDERS
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -324,6 +324,89 @@ def utente_reset_password(id):
                  f"Reset password per: {utente['nome']} {utente['cognome']}", request.remote_addr)
     flash(f"Password resettata per {utente['nome']} {utente['cognome']}. "
           f"Nuova password temporanea: {temp_password}", 'warning')
+    return redirect(url_for('admin.utenti'))
+
+
+MESSAGGI_RIFIUTO = {
+    'inesistente': 'Utente non trovato.',
+    'gia_cancellato': 'Questo utente e\' gia\' stato cancellato.',
+    'ultimo_admin': "E' l'ultimo amministratore della struttura: senza di lui "
+                    "nessuno potrebbe piu' gestirla. Nomina prima un altro "
+                    "amministratore, poi cancella questo.",
+    'ultimo_superadmin': "E' l'ultimo superamministratore: cancellandolo nessuno "
+                         "potrebbe piu' creare strutture, fare backup o riparare "
+                         "una struttura rimasta senza amministratore.",
+}
+
+
+def _utente_cancellabile(id):
+    """(utente, messaggio_di_rifiuto). Se il messaggio c'e', non si procede."""
+    utente = query_one(
+        """SELECT u.*, s.nome AS struttura_nome
+           FROM utenti u LEFT JOIN strutture s ON s.id = u.struttura_id
+           WHERE u.id = ?""", (id,))
+    if not utente:
+        return None, MESSAGGI_RIFIUTO['inesistente']
+    if not _check_utente_scope(utente):
+        return None, 'Non hai i permessi per questa operazione.'
+    if utente['ruolo'] == 'tecnico':
+        return None, ('I tecnici si gestiscono dalla loro pagina: sono account '
+                      'condivisi fra strutture.')
+    if utente['id'] == g.user['id']:
+        return None, 'Non puoi cancellare il tuo account.'
+    from utente_service import motivo_rifiuto
+    motivo = motivo_rifiuto(get_db(), id)
+    if motivo:
+        return None, MESSAGGI_RIFIUTO[motivo]
+    return utente, None
+
+
+@admin_bp.route('/utenti/<int:id>/elimina', methods=['GET'])
+@admin_required
+def utente_elimina_conferma(id):
+    from utente_service import conteggi_riferimenti
+
+    utente, rifiuto = _utente_cancellabile(id)
+    if rifiuto:
+        flash(rifiuto, 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    return render_template('admin/utente_elimina.html', utente=utente,
+                           conteggi=conteggi_riferimenti(get_db(), id))
+
+
+@admin_bp.route('/utenti/<int:id>/elimina', methods=['POST'])
+@admin_required
+def utente_elimina(id):
+    from utente_service import cancella_utente
+
+    utente, rifiuto = _utente_cancellabile(id)
+    if rifiuto:
+        flash(rifiuto, 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    db = get_db()
+    try:
+        esito = cancella_utente(db, id)
+        conteggi = ', '.join(f"{n} {t}" for t, n in sorted(esito['conteggi'].items()) if n)
+        # Dentro la transazione e prima del commit, con struttura_id: e' la
+        # lezione della 2.6.1, dove la voce nasceva fuori dal try e con
+        # struttura_id nullo, quindi invisibile proprio a chi doveva leggerla.
+        log_attivita(
+            g.user['id'], 'eliminazione', 'utenti', id,
+            f"Utente eliminato: {esito['nome']} {esito['cognome']} <{esito['email']}>, "
+            f"ruolo {esito['ruolo']}. Righe che portano il suo nome: "
+            f"{conteggi or 'nessuna'}",
+            request.remote_addr, esito['struttura_id'])
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        current_app.logger.error(f'Cancellazione utente {id} fallita: {e}', exc_info=True)
+        flash("Cancellazione fallita, nulla e' stato modificato. Controlla il log.", 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    flash(f"Utente {esito['nome']} {esito['cognome']} eliminato. "
+          f"L'indirizzo {esito['email']} e' di nuovo utilizzabile.", 'success')
     return redirect(url_for('admin.utenti'))
 
 
