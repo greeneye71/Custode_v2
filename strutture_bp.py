@@ -387,11 +387,11 @@ def scheda(struttura_id):
     divisioni = _get_divisioni_struttura(struttura_id)
     utenti = query_all(
         "SELECT nome, cognome, email, ruolo, attivo FROM utenti "
-        "WHERE struttura_id = ? ORDER BY cognome, nome", (struttura_id,))
+        "WHERE struttura_id = ? AND eliminato_il IS NULL ORDER BY cognome, nome", (struttura_id,))
     tecnici = query_all(
         "SELECT u.nome, u.cognome, u.email FROM utenti u "
         "JOIN tecnici_strutture ts ON ts.tecnico_id = u.id "
-        "WHERE ts.struttura_id = ? ORDER BY u.cognome, u.nome", (struttura_id,))
+        "WHERE ts.struttura_id = ? AND u.eliminato_il IS NULL ORDER BY u.cognome, u.nome", (struttura_id,))
 
     return render_template('strutture/scheda.html', struttura=struttura,
                            contenuto=contenuto, divisioni=divisioni,

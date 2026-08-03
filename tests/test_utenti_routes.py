@@ -186,3 +186,62 @@ def test_un_guasto_dopo_la_registrazione_non_dice_che_nulla_e_cambiato(client, a
     assert 'alert-warning' in testo
     assert 'cancellato' in testo.lower()
     assert 'subito dopo' in testo.lower()
+
+
+def _cancella(client, id):
+    client.post(f"/admin/utenti/{id}/elimina", follow_redirects=True)
+
+
+def test_non_compare_nell_elenco_utenti_dell_admin(client, dati):
+    entra(client, 'admin@a.it')
+    _cancella(client, dati['mario'])
+    assert 'mario@a.it' not in client.get('/admin/utenti').get_data(as_text=True)
+
+
+def test_non_compare_nell_elenco_utenti_del_superadmin(client, dati):
+    entra(client, 'admin@a.it')
+    _cancella(client, dati['mario'])
+    client.get('/logout')
+    entra(client, 'super@x.it')
+    assert 'mario@a.it' not in client.get('/admin/utenti').get_data(as_text=True)
+
+
+def test_un_tecnico_cancellato_non_compare_nell_elenco_tecnici(client, app, dati):
+    """La rotta /admin/utenti/<id>/elimina rifiuta SEMPRE un tecnico, anche per
+    un superadmin (e' l'unica difesa verificata da
+    test_un_superadmin_non_cancella_un_tecnico in questo stesso file): non e'
+    la sua via di cancellazione, quindi _cancella() qui non produrrebbe nulla
+    da filtrare. Cio' che questo test deve coprire e' il filtro della lista
+    tecnici, non l'autorizzazione (gia' coperta altrove): si usa percio' la
+    primitiva cancella_utente direttamente, che a differenza della rotta non
+    discrimina per ruolo."""
+    from utente_service import cancella_utente
+    from models import get_db
+    entra(client, 'super@x.it')
+    with app.app_context():
+        conn = get_db()
+        cancella_utente(conn, dati['tec'])
+        conn.commit()
+    assert 'tec@x.it' not in client.get('/admin/tecnici').get_data(as_text=True)
+
+
+def test_non_compare_nella_scheda_della_struttura(client, dati):
+    entra(client, 'admin@a.it')
+    _cancella(client, dati['mario'])
+    client.get('/logout')
+    entra(client, 'super@x.it')
+    assert 'mario@a.it' not in client.get(f"/strutture/{dati['a']}").get_data(as_text=True)
+
+
+def test_non_e_contato_fra_gli_utenti_della_struttura(client, app, dati):
+    """contenuto_struttura conta gli utenti prima di cancellare una struttura:
+    contarne di cancellati direbbe all'operatore un numero che non esiste."""
+    from struttura_service import contenuto_struttura
+    from models import get_db
+    entra(client, 'admin@a.it')
+    with app.app_context():
+        prima = contenuto_struttura(get_db(), dati['a'], '/tmp/x')['utenti']
+    _cancella(client, dati['mario'])
+    with app.app_context():
+        dopo = contenuto_struttura(get_db(), dati['a'], '/tmp/x')['utenti']
+    assert dopo == prima - 1

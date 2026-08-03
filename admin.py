@@ -97,6 +97,7 @@ def utenti():
             LEFT JOIN strutture s ON s.id = u.struttura_id
             LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
             LEFT JOIN divisioni d ON ud.divisione_id = d.id
+            WHERE u.eliminato_il IS NULL
             GROUP BY u.id ORDER BY u.ruolo, u.cognome, u.nome
         """)
     else:
@@ -106,7 +107,7 @@ def utenti():
             FROM utenti u
             LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
             LEFT JOIN divisioni d ON ud.divisione_id = d.id
-            WHERE u.struttura_id = ? AND u.ruolo != 'superadmin'
+            WHERE u.struttura_id = ? AND u.ruolo != 'superadmin' AND u.eliminato_il IS NULL
             GROUP BY u.id ORDER BY u.cognome, u.nome
         """, (struttura_id,))
     return render_template('admin/utenti.html', utenti=users, is_superadmin=is_superadmin)
@@ -1322,7 +1323,7 @@ def tecnici():
         FROM utenti u
         LEFT JOIN tecnici_strutture ts ON u.id = ts.tecnico_id
         LEFT JOIN strutture s ON ts.struttura_id = s.id
-        WHERE u.ruolo = 'tecnico'
+        WHERE u.ruolo = 'tecnico' AND u.eliminato_il IS NULL
         GROUP BY u.id
         ORDER BY u.cognome, u.nome
     """)
