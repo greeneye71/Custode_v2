@@ -276,3 +276,129 @@ def test_non_e_contato_fra_gli_utenti_della_struttura(client, app, dati):
     with app.app_context():
         dopo = contenuto_struttura(get_db(), dati['a'], '/tmp/x')['utenti']
     assert dopo == prima - 1
+
+
+def test_un_tecnico_non_compare_nell_elenco_utenti(client, dati):
+    """I tecnici hanno la loro pagina, che sa gestire le assegnazioni alle
+    strutture; il modulo generico no."""
+    entra(client, 'super@x.it')
+    assert 'tec@x.it' not in client.get('/admin/utenti').get_data(as_text=True)
+
+
+def test_il_modulo_generico_rifiuta_un_tecnico(client, app, dati):
+    """Un URL scritto a mano non deve poter declassare nessuno.
+
+    Il payload usa ruolo='utente', non 'tecnico': il <select> del modulo
+    generico offre solo 'admin' e 'utente', quindi 'utente' e' cio' che una
+    sottomissione reale del modulo produrrebbe per un tecnico -- ed e' esattamente
+    il declassamento descritto nel difetto. Con ruolo='tecnico' il test sarebbe
+    cieco alla guardia di testa rimossa: quel valore viene comunque respinto
+    dal ramo 'ruolo non ammesso' della validazione generica (che non lo
+    riconosce), quindi il test passerebbe anche senza il controllo esplicito
+    sui tecnici che questa route deve avere."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    client.post(f"/admin/utenti/{dati['tec']}/modifica",
+                data={'nome': 'T', 'cognome': 'T', 'email': 'tec@x.it',
+                      'ruolo': 'utente', 'struttura_id': dati['a']},
+                follow_redirects=True)
+    with app.app_context():
+        u = query_one("SELECT ruolo, struttura_id FROM utenti WHERE id=?", (dati['tec'],))
+        assert u['ruolo'] == 'tecnico'
+        assert u['struttura_id'] is None
+
+
+def test_salvare_un_superadmin_non_lo_declassa(client, app, dati):
+    """Il caso peggiore: l'unico superadmin salva la propria scheda e il
+    deployment resta senza superadmin. Misurato prima della correzione:
+    ruolo 'utente', zero superadmin, /admin/backup 302."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    with app.app_context():
+        sa = query_one("SELECT id FROM utenti WHERE email='super@x.it'")['id']
+    client.post(f"/admin/utenti/{sa}/modifica",
+                data={'nome': 'S', 'cognome': 'S', 'email': 'super@x.it',
+                      'ruolo': 'superadmin', 'struttura_id': dati['a']},
+                follow_redirects=True)
+    with app.app_context():
+        u = query_one("SELECT ruolo, struttura_id FROM utenti WHERE id=?", (sa,))
+        assert u['ruolo'] == 'superadmin'
+        assert u['struttura_id'] is None
+        assert query_one("SELECT COUNT(*) AS n FROM utenti "
+                         "WHERE ruolo='superadmin'")['n'] == 1
+
+
+def test_un_superadmin_puo_ancora_correggersi_il_nome(client, app, dati):
+    """Non esiste una pagina di profilo: /cambio-password fa solo la password.
+    Quella scheda e' l'unico posto dove un superadmin puo' correggersi."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    with app.app_context():
+        sa = query_one("SELECT id FROM utenti WHERE email='super@x.it'")['id']
+    client.post(f"/admin/utenti/{sa}/modifica",
+                data={'nome': 'Giovanni', 'cognome': 'Bergamaschi',
+                      'email': 'super@x.it', 'ruolo': 'superadmin'},
+                follow_redirects=True)
+    with app.app_context():
+        u = query_one("SELECT nome, ruolo FROM utenti WHERE id=?", (sa,))
+        assert u['nome'] == 'Giovanni'
+        assert u['ruolo'] == 'superadmin'
+
+
+def test_un_ruolo_non_ammesso_su_un_utente_normale_e_un_errore(client, app, dati):
+    """Non piu' una riscrittura muta: chi manda un valore che non esiste deve
+    vedere un errore, non ritrovarsi l'utente declassato in silenzio.
+
+    Mario e' gia' 'utente': la vecchia riscrittura muta (ruolo = 'utente')
+    porta esattamente allo stesso valore finale, quindi il solo controllo sul
+    ruolo salvato non distinguerebbe correzione e difetto -- e' cieco. Il
+    segno che distingue i due casi e' che la correzione NON esegue affatto
+    l'UPDATE e ripresenta il modulo (200, nessun redirect, nessun messaggio
+    di successo), mentre la riscrittura muta salva e reindirizza."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    r = client.post(f"/admin/utenti/{dati['mario']}/modifica",
+                    data={'nome': 'M', 'cognome': 'Rossi', 'email': 'mario@a.it',
+                          'ruolo': 'superadmin'},
+                    follow_redirects=True)
+    assert not r.history
+    assert 'aggiornato' not in r.get_data(as_text=True).lower()
+    with app.app_context():
+        assert query_one("SELECT ruolo FROM utenti WHERE id=?",
+                         (dati['mario'],))['ruolo'] == 'utente'
+
+
+def test_un_utente_cancellato_non_e_modificabile(client, app, dati):
+    """La specifica vieta di modificare un utente gia' cancellato: il modulo
+    generico deve rifiutare, non riscrivere una riga che non rappresenta piu'
+    nessuno."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    _cancella(client, dati['mario'])
+    r = client.post(f"/admin/utenti/{dati['mario']}/modifica",
+                    data={'nome': 'Altro', 'cognome': 'Nome',
+                          'email': 'nuovo@a.it', 'ruolo': 'utente'},
+                    follow_redirects=True)
+    assert 'stato cancellato' in r.get_data(as_text=True).lower()
+    with app.app_context():
+        u = query_one("SELECT nome, email FROM utenti WHERE id=?", (dati['mario'],))
+        assert u['nome'] == 'M'
+        assert u['email'] != 'nuovo@a.it'
+
+
+def test_la_password_di_un_utente_cancellato_non_si_resetta(client, app, dati):
+    """Idem per il reset password: un account gia' cancellato ha gia' una
+    password inutilizzabile, resettarla sarebbe una via di rientro."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    _cancella(client, dati['mario'])
+    with app.app_context():
+        prima = query_one("SELECT password_hash FROM utenti WHERE id=?",
+                          (dati['mario'],))['password_hash']
+    r = client.post(f"/admin/utenti/{dati['mario']}/reset-password",
+                    follow_redirects=True)
+    assert 'stato cancellato' in r.get_data(as_text=True).lower()
+    with app.app_context():
+        dopo = query_one("SELECT password_hash FROM utenti WHERE id=?",
+                         (dati['mario'],))['password_hash']
+    assert dopo == prima

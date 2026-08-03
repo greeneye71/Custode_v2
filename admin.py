@@ -97,7 +97,7 @@ def utenti():
             LEFT JOIN strutture s ON s.id = u.struttura_id
             LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
             LEFT JOIN divisioni d ON ud.divisione_id = d.id
-            WHERE u.eliminato_il IS NULL
+            WHERE u.eliminato_il IS NULL AND u.ruolo != 'tecnico'
             GROUP BY u.id ORDER BY u.ruolo, u.cognome, u.nome
         """)
     else:
@@ -206,6 +206,14 @@ def utente_modifica(id):
         flash('Non hai i permessi per modificare questo utente.', 'danger')
         return redirect(url_for('admin.utenti'))
 
+    if utente['ruolo'] == 'tecnico':
+        flash('I tecnici si gestiscono dalla loro pagina.', 'warning')
+        return redirect(url_for('admin.tecnici'))
+
+    if utente['eliminato_il'] is not None:
+        flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
+        return redirect(url_for('admin.utenti'))
+
     is_superadmin = g.user['ruolo'] == 'superadmin'
     mia_struttura_id = _get_mia_struttura_id()
     struttura_id_utente = utente.get('struttura_id') or mia_struttura_id
@@ -238,8 +246,17 @@ def utente_modifica(id):
     struttura_id = (form.get('struttura_id', type=int) or struttura_id_utente
                     if is_superadmin else mia_struttura_id)
 
-    if ruolo not in ('admin', 'utente'):
-        ruolo = 'utente'
+    # Il modulo generico gestisce 'admin' e 'utente'. Il ruolo di un superadmin
+    # non e' modificabile da qui, e non gli si assegna una struttura: fino alla
+    # 2.6.1 salvare la propria scheda declassava l'unico superadmin del
+    # deployment a 'utente', lasciando nessuno che potesse creare strutture o
+    # fare backup.
+    if utente['ruolo'] == 'superadmin':
+        ruolo = 'superadmin'
+        struttura_id = None
+    elif ruolo not in ('admin', 'utente'):
+        errors['ruolo'] = 'Ruolo non ammesso.'
+        ruolo = utente['ruolo']
 
     if not nome:
         errors['nome'] = 'Il nome è obbligatorio.'
@@ -310,6 +327,10 @@ def utente_reset_password(id):
         return redirect(url_for('admin.utenti'))
     if not _check_utente_scope(utente):
         flash('Non hai i permessi per questa operazione.', 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    if utente['eliminato_il'] is not None:
+        flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
         return redirect(url_for('admin.utenti'))
 
     import secrets
