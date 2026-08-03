@@ -233,6 +233,31 @@ def test_non_compare_nella_scheda_della_struttura(client, dati):
     assert 'mario@a.it' not in client.get(f"/strutture/{dati['a']}").get_data(as_text=True)
 
 
+def test_un_tecnico_cancellato_non_compare_nella_scheda_della_struttura(client, app, dati):
+    """strutture_bp.py:392 (elenco tecnici della scheda struttura) non era
+    coperto da nessuno dei test precedenti: la fixture non assegna mai il
+    tecnico a una struttura via tecnici_strutture, quindi la query a JOIN non
+    lo restituiva a prescindere dal filtro. Qui lo si assegna davvero e si
+    verifica PRIMA che compaia: senza questa meta' un test che controlla solo
+    l'assenza passerebbe anche se il tecnico non fosse mai stato li'. Poi lo
+    si cancella con la primitiva -- la rotta rifiuta sempre i tecnici, di
+    proposito -- e si verifica che sparisca."""
+    from models import execute, get_db
+    from utente_service import cancella_utente
+    entra(client, 'super@x.it')
+    with app.app_context():
+        execute("INSERT INTO tecnici_strutture (tecnico_id, struttura_id) VALUES (?, ?)",
+                (dati['tec'], dati['a']))
+    prima = client.get(f"/strutture/{dati['a']}").get_data(as_text=True)
+    assert 'tec@x.it' in prima
+    with app.app_context():
+        conn = get_db()
+        cancella_utente(conn, dati['tec'])
+        conn.commit()
+    dopo = client.get(f"/strutture/{dati['a']}").get_data(as_text=True)
+    assert 'tec@x.it' not in dopo
+
+
 def test_non_e_contato_fra_gli_utenti_della_struttura(client, app, dati):
     """contenuto_struttura conta gli utenti prima di cancellare una struttura:
     contarne di cancellati direbbe all'operatore un numero che non esiste."""
