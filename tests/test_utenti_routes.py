@@ -681,3 +681,23 @@ def test_tecnico_modifica_rifiuta_un_tecnico_cancellato(client, app, dati):
         assegnazioni = query_all(
             "SELECT * FROM tecnici_strutture WHERE tecnico_id=?", (dati['tec'],))
         assert assegnazioni == []
+
+
+def test_utente_reset_password_rifiuta_un_tecnico(client, app, dati):
+    """L'unica delle sei rotte per id senza questa guardia. In pratica passa
+    solo il superadmin (un admin e' gia' fermato da _check_utente_scope, il
+    cui struttura_id nullo non coincide con nessuna struttura), quindi non ci
+    sono conseguenze sfruttabili -- ma senza la guardia le sessioni di un
+    tecnico al lavoro verrebbero chiuse da una pagina che non e' la sua."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    with app.app_context():
+        prima = query_one("SELECT password_hash FROM utenti WHERE id=?",
+                          (dati['tec'],))['password_hash']
+    r = client.post(f"/admin/utenti/{dati['tec']}/reset-password",
+                    follow_redirects=True)
+    assert 'loro pagina' in r.get_data(as_text=True).lower()
+    with app.app_context():
+        dopo = query_one("SELECT password_hash FROM utenti WHERE id=?",
+                         (dati['tec'],))['password_hash']
+    assert dopo == prima

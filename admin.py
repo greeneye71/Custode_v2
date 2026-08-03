@@ -367,6 +367,10 @@ def utente_reset_password(id):
         flash('Non hai i permessi per questa operazione.', 'danger')
         return redirect(url_for('admin.utenti'))
 
+    if utente['ruolo'] == 'tecnico':
+        flash('I tecnici si gestiscono dalla loro pagina.', 'warning')
+        return redirect(url_for('admin.tecnici'))
+
     if utente['eliminato_il'] is not None:
         flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
         return redirect(url_for('admin.utenti'))
