@@ -87,9 +87,13 @@ def test_l_ultimo_admin_non_si_cancella_dalla_rotta(client, app, dati):
 
 
 def test_nessuno_cancella_se_stesso(client, app, dati):
+    """Guardava solo il database: passerebbe anche se il messaggio di
+    rifiuto fosse muto o dicesse un'altra cosa. Qui si asserisce anche il
+    testo esatto scritto in _utente_cancellabile."""
     from models import query_one
     entra(client, 'admin@a.it')
-    client.post(f"/admin/utenti/{dati['admin_a']}/elimina", follow_redirects=True)
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/elimina", follow_redirects=True)
+    assert 'non puoi cancellare il tuo account' in r.get_data(as_text=True).lower()
     with app.app_context():
         assert query_one("SELECT eliminato_il FROM utenti WHERE id=?",
                          (dati['admin_a'],))['eliminato_il'] is None
