@@ -388,6 +388,14 @@ def scheda(struttura_id):
     utenti = query_all(
         "SELECT nome, cognome, email, ruolo, attivo FROM utenti "
         "WHERE struttura_id = ? AND eliminato_il IS NULL ORDER BY cognome, nome", (struttura_id,))
+    # eliminato_il IS NULL qui non e' mai il motivo per cui un tecnico
+    # cancellato sparisce da questa lista: utente_service.cancella_utente gli
+    # toglie gia' le righe di tecnici_strutture, quindi il JOIN sotto non lo
+    # trova comunque. Il filtro resta come rete per il giorno in cui quella
+    # scelta cambiasse (es. si decidesse di conservare lo storico delle
+    # assegnazioni invece di cancellarlo) — per questo nessun test lo copre,
+    # non per dimenticanza: vedi test_un_tecnico_cancellato_non_compare_nella_scheda_della_struttura
+    # in tests/test_utenti_routes.py.
     tecnici = query_all(
         "SELECT u.nome, u.cognome, u.email FROM utenti u "
         "JOIN tecnici_strutture ts ON ts.tecnico_id = u.id "

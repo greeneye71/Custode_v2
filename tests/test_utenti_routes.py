@@ -234,14 +234,20 @@ def test_non_compare_nella_scheda_della_struttura(client, dati):
 
 
 def test_un_tecnico_cancellato_non_compare_nella_scheda_della_struttura(client, app, dati):
-    """strutture_bp.py:392 (elenco tecnici della scheda struttura) non era
-    coperto da nessuno dei test precedenti: la fixture non assegna mai il
-    tecnico a una struttura via tecnici_strutture, quindi la query a JOIN non
-    lo restituiva a prescindere dal filtro. Qui lo si assegna davvero e si
-    verifica PRIMA che compaia: senza questa meta' un test che controlla solo
-    l'assenza passerebbe anche se il tecnico non fosse mai stato li'. Poi lo
-    si cancella con la primitiva -- la rotta rifiuta sempre i tecnici, di
-    proposito -- e si verifica che sparisca."""
+    """Cio' che questo test dimostra e' vero e vale la pena difenderlo: un
+    tecnico cancellato non compare nella scheda della sua struttura. Lo si
+    assegna davvero via tecnici_strutture e si verifica PRIMA che compaia
+    (senza questa meta' un test che controlla solo l'assenza passerebbe anche
+    se il tecnico non fosse mai stato li'), poi lo si cancella con la
+    primitiva -- la rotta rifiuta sempre i tecnici, di proposito -- e si
+    verifica che sparisca.
+
+    Ma oggi e' vero per un motivo che NON e' il filtro eliminato_il di
+    strutture_bp.py:392: cancella_utente toglie la riga di tecnici_strutture,
+    quindi il JOIN di quella query non trova piu' il tecnico a prescindere dal
+    filtro (vedi il commento li' accanto). Questo test protegge il
+    comportamento visibile, non quella riga di SQL: se il filtro sparisse, la
+    suite resterebbe verde, e sarebbe corretto che lo fosse."""
     from models import execute, get_db
     from utente_service import cancella_utente
     entra(client, 'super@x.it')
