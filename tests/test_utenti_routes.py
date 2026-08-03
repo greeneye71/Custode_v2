@@ -485,3 +485,37 @@ def test_non_si_disattiva_l_ultimo_admin_di_una_struttura(client, app, dati):
     with app.app_context():
         assert query_one("SELECT attivo FROM utenti WHERE id=?",
                          (dati['admin_a'],))['attivo'] == 1
+
+
+def test_cancellare_un_tecnico_non_restituisce_piu_500(client, app, dati):
+    """Prima della correzione: HTTP 500 e tecnico ancora presente, perche' la
+    rotta azzerava manutenzioni.updated_by e verifiche.updated_by, colonne che
+    non esistono."""
+    from models import execute, query_one
+    with app.app_context():
+        div = query_one("SELECT id FROM divisioni WHERE struttura_id=?", (dati['a'],))['id']
+        execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,"
+                "stato,created_by) VALUES (?,?,'T-1','A','B','funzionante',?)",
+                (div, dati['a'], dati['tec']))
+    entra(client, 'super@x.it')
+    r = client.post(f"/admin/tecnici/{dati['tec']}/elimina", follow_redirects=False)
+    assert r.status_code != 500
+    with app.app_context():
+        assert query_one("SELECT eliminato_il FROM utenti WHERE id=?",
+                         (dati['tec'],))['eliminato_il'] is not None
+
+
+def test_cancellando_un_tecnico_l_autore_resta(client, app, dati):
+    """Con la primitiva nuova il nome resta: un miglioramento, non solo una
+    riparazione."""
+    from models import execute, query_one
+    with app.app_context():
+        div = query_one("SELECT id FROM divisioni WHERE struttura_id=?", (dati['a'],))['id']
+        ap = execute("INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,"
+                     "modello,stato,created_by) VALUES (?,?,'T-2','A','B','funzionante',?)",
+                     (div, dati['a'], dati['tec'])).lastrowid
+    entra(client, 'super@x.it')
+    client.post(f"/admin/tecnici/{dati['tec']}/elimina", follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT created_by FROM apparecchi WHERE id=?",
+                         (ap,))['created_by'] == dati['tec']

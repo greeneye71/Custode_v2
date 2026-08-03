@@ -1493,33 +1493,37 @@ def tecnico_modifica(id):
 @admin_bp.route('/tecnici/<int:id>/elimina', methods=['POST'])
 @superadmin_required
 def tecnico_elimina(id):
-    """Elimina un tecnico (le assegnazioni strutture vengono rimosse per CASCADE)."""
+    """Elimina un tecnico sulla stessa primitiva usata per gli altri utenti."""
     tecnico = query_one("SELECT * FROM utenti WHERE id = ? AND ruolo = 'tecnico'", (id,))
     if not tecnico:
         flash('Tecnico non trovato.', 'danger')
         return redirect(url_for('admin.tecnici'))
 
-    # Invalida esplicitamente le sessioni attive del tecnico
-    execute("DELETE FROM sessioni WHERE utente_id = ?", (id,))
+    from utente_service import cancella_utente, motivo_rifiuto
 
-    # Annulla i riferimenti FK nullable prima di cancellare (no CASCADE su queste tabelle)
-    for tbl, col in [
-        ('log_attivita',   'utente_id'),
-        ('apparecchi',     'created_by'),
-        ('apparecchi',     'updated_by'),
-        ('manutenzioni',   'created_by'),
-        ('manutenzioni',   'updated_by'),
-        ('verifiche',      'created_by'),
-        ('verifiche',      'updated_by'),
-        ('documenti',      'uploaded_by'),
-        ('accessori',      'created_by'),
-        ('import_history', 'imported_by'),
-    ]:
-        execute(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = ?", (id,))
+    motivo = motivo_rifiuto(get_db(), id)
+    if motivo:
+        flash(MESSAGGI_RIFIUTO[motivo], 'danger')
+        return redirect(url_for('admin.tecnici'))
 
-    execute("DELETE FROM utenti WHERE id = ?", (id,))
-    log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
-                 f"Tecnico eliminato: {tecnico['nome']} {tecnico['cognome']}",
-                 request.remote_addr)
-    flash(f"Tecnico {tecnico['nome']} {tecnico['cognome']} eliminato.", 'success')
+    db = get_db()
+    try:
+        esito = cancella_utente(db, id)
+        log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
+                     f"Tecnico eliminato: {esito['nome']} {esito['cognome']} "
+                     f"<{esito['email']}>", request.remote_addr)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        current_app.logger.error(f'Cancellazione tecnico {id} fallita: {e}', exc_info=True)
+        riga = query_one("SELECT eliminato_il FROM utenti WHERE id = ?", (id,))
+        if riga and riga['eliminato_il'] is not None:
+            flash("Il tecnico risulta gia' cancellato: la registrazione era "
+                  "andata a buon fine, ma subito dopo qualcosa e' fallito. "
+                  "Controlla il log applicativo per i dettagli.", 'warning')
+        else:
+            flash("Cancellazione fallita, nulla e' stato modificato. Controlla il log.", 'danger')
+        return redirect(url_for('admin.tecnici'))
+
+    flash(f"Tecnico {esito['nome']} {esito['cognome']} eliminato.", 'success')
     return redirect(url_for('admin.tecnici'))
