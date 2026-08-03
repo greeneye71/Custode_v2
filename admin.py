@@ -247,16 +247,36 @@ def utente_modifica(id):
                     if is_superadmin else mia_struttura_id)
     attivo = 1 if form.get('attivo') else 0
 
-    # Non ci si puo' disattivare da soli. Il freno era esplicito nella rotta
-    # /toggle rimossa da questo task: spostare 'attivo' nel modulo generico
-    # senza portarlo con se' bastava a renderlo raggiungibile in silenzio,
-    # anche solo salvando la propria scheda senza spuntare la casella. Per
-    # l'unico superadmin - o l'unico admin di un'installazione
-    # single-struttura, che puo' non avere alcun superadmin - sarebbe un
-    # blocco totale: auth.py pretende attivo=1 sia in sessione sia al login,
-    # e dall'applicazione non ci sarebbe piu' modo di rimediare.
+    # Due cose non si possono cambiare su se stessi da questo modulo: 'attivo'
+    # e 'ruolo'. Entrambe vengono ignorate (non bloccano il resto del
+    # salvataggio: correggersi il nome deve continuare a funzionare), e
+    # l'operatore viene avvisato di cosa e' stato ignorato — un flash muto
+    # ("Utente aggiornato") sarebbe una piccola bugia.
+    ignorati_su_se_stessi = []
+
     if utente['id'] == g.user['id']:
+        # Non ci si puo' disattivare da soli. Il freno era esplicito nella
+        # rotta /toggle rimossa da questo task: spostare 'attivo' nel modulo
+        # generico senza portarlo con se' bastava a renderlo raggiungibile in
+        # silenzio, anche solo salvando la propria scheda senza spuntare la
+        # casella. Per l'unico superadmin - o l'unico admin di un'installazione
+        # single-struttura, che puo' non avere alcun superadmin - sarebbe un
+        # blocco totale: auth.py pretende attivo=1 sia in sessione sia al
+        # login, e dall'applicazione non ci sarebbe piu' modo di rimediare.
+        if not attivo:
+            ignorati_su_se_stessi.append('disattivare il tuo account')
         attivo = 1
+        # Simmetrico: non ci si puo' declassare (ne' promuovere) da soli.
+        # Senza questo freno, un admin che apre la propria scheda e sceglie
+        # 'Utente' nel menu Ruolo si autodeclassa con un solo POST — e se e'
+        # l'ultimo admin della struttura (o l'unico admin di
+        # un'installazione single-struttura senza superadmin) la struttura
+        # resta senza nessuno che possa amministrarla, con la stessa identica
+        # conseguenza e lo stesso rimedio da riga di comando che questo piano
+        # ha gia' chiuso per la cancellazione.
+        if ruolo != utente['ruolo']:
+            ignorati_su_se_stessi.append('cambiare il tuo ruolo')
+        ruolo = utente['ruolo']
     # Stesso motivo per cui la cancellazione rifiuta l'ultimo admin di una
     # struttura: disattivarlo la lascerebbe senza nessuno che possa
     # gestirla. Si applica solo quando l'account si sta davvero spegnendo
@@ -267,6 +287,20 @@ def utente_modifica(id):
     elif utente['attivo'] and not attivo:
         from utente_service import motivo_rifiuto
         motivo = motivo_rifiuto(get_db(), id, per_disattivazione=True)
+        if motivo:
+            flash(MESSAGGI_RIFIUTO[motivo], 'danger')
+            return redirect(url_for('admin.utenti'))
+
+    # Stesso rifiuto della cancellazione, per la stessa ragione: declassare
+    # l'ultimo admin di una struttura la lascerebbe senza nessuno che possa
+    # gestirla. Si applica solo alla transizione vera admin -> utente:
+    # promuovere un utente ad admin, o lasciare il ruolo invariato, non deve
+    # mai essere bloccato da qui. Qui la domanda e' "esiste ancora un altro
+    # admin" (non "e' attivo"), quindi si usa motivo_rifiuto senza
+    # per_disattivazione, come per la cancellazione.
+    if utente['ruolo'] == 'admin' and ruolo == 'utente':
+        from utente_service import motivo_rifiuto
+        motivo = motivo_rifiuto(get_db(), id)
         if motivo:
             flash(MESSAGGI_RIFIUTO[motivo], 'danger')
             return redirect(url_for('admin.utenti'))
@@ -313,7 +347,11 @@ def utente_modifica(id):
     log_attivita(g.user['id'], 'modifica', 'utenti', id,
                  f"Modificato utente: {nome} {cognome}", request.remote_addr,
                  struttura_id=struttura_id)
-    flash('Utente aggiornato.', 'success')
+    if ignorati_su_se_stessi:
+        flash("Non puoi " + " ne' ".join(ignorati_su_se_stessi) +
+              " da solo: il resto della modifica e' stato salvato.", 'warning')
+    else:
+        flash('Utente aggiornato.', 'success')
     return redirect(url_for('admin.utenti'))
 
 

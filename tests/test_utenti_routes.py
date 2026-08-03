@@ -455,17 +455,88 @@ def test_non_ci_si_puo_disattivare_da_soli(client, app, dati):
     casella per restare fuori per sempre (auth.py pretende attivo=1 sia in
     sessione sia al login, e dall'applicazione non si potrebbe piu' rimediare).
     Il resto della scheda deve pero' continuare a salvarsi: qui il nome cambia
-    davvero, solo 'attivo' resta a 1."""
+    davvero, solo 'attivo' resta a 1. Il vecchio /toggle diceva esplicitamente
+    "Non puoi disattivare il tuo account": qui il freno e' silenzioso sul
+    valore ma non deve esserlo sul messaggio, quindi si asserisce anche il
+    flash che dice cosa e' stato ignorato."""
     from models import query_one
     entra(client, 'admin@a.it')
-    client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
                 data={'nome': 'Nuovo', 'cognome': 'A', 'email': 'admin@a.it',
                       'ruolo': 'admin'},
                 follow_redirects=True)
+    assert 'disattivare il tuo account' in r.get_data(as_text=True).lower()
     with app.app_context():
         u = query_one("SELECT nome, attivo FROM utenti WHERE id=?", (dati['admin_a'],))
         assert u['attivo'] == 1
         assert u['nome'] == 'Nuovo'
+
+
+def test_non_ci_si_puo_declassare_da_soli(client, app, dati):
+    """Simmetrico al freno sull'autodisattivazione, e per la stessa ragione:
+    un admin che apre la propria scheda e sceglie 'Utente' nel menu Ruolo si
+    autodeclassa con un solo POST. Se e' l'ultimo admin della struttura (o
+    l'unico admin di un'installazione single-struttura senza superadmin, il
+    caso reale di seed.py) il deployment resta senza nessuno che possa
+    amministrare quella struttura, con la stessa conseguenza e lo stesso
+    rimedio da riga di comando (crea_superadmin.py) del difetto gia' chiuso
+    per 'attivo'. Il resto della scheda deve continuare a salvarsi."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
+                data={'nome': 'Nuovo', 'cognome': 'A', 'email': 'admin@a.it',
+                      'ruolo': 'utente'},
+                follow_redirects=True)
+    assert 'cambiare il tuo ruolo' in r.get_data(as_text=True).lower()
+    with app.app_context():
+        u = query_one("SELECT nome, ruolo FROM utenti WHERE id=?", (dati['admin_a'],))
+        assert u['ruolo'] == 'admin'
+        assert u['nome'] == 'Nuovo'
+
+
+def test_l_ultimo_admin_non_si_declassa_dal_modulo(client, app, dati):
+    """Stessa conseguenza che la cancellazione vieta gia' per l'ultimo admin,
+    e che il modulo vieta gia' per la disattivazione: declassarlo ad
+    'utente' lascerebbe comunque la struttura senza nessuno che possa
+    gestirla. 'secondo' viene prima cancellato cosi' 'admin_a' e' davvero
+    l'ultimo; l'operatore e' il superadmin, cosi' non e' il freno da soli a
+    scattare qui.
+
+    Il payload manda esplicitamente attivo='1': senza, il form omesso
+    varrebbe 0 e farebbe scattare INSIEME anche il freno sulla
+    disattivazione dell'ultimo admin, mascherando se sia quello o il freno
+    sul ruolo a bloccare il salvataggio -- e' esattamente il modo in cui la
+    prima versione di questo test si e' rivelata cieca al freno che dice di
+    coprire: rimuovendo SOLO quello sul ruolo la suite restava verde, perche'
+    il freno sull'attivo bloccava comunque per un motivo diverso."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    client.post(f"/admin/utenti/{dati['secondo']}/elimina", follow_redirects=True)
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
+                    data={'nome': 'A', 'cognome': 'A', 'email': 'admin@a.it',
+                          'ruolo': 'utente', 'attivo': '1'},
+                    follow_redirects=True)
+    assert 'amministratore' in r.get_data(as_text=True).lower()
+    with app.app_context():
+        assert query_one("SELECT ruolo FROM utenti WHERE id=?",
+                         (dati['admin_a'],))['ruolo'] == 'admin'
+
+
+def test_si_puo_promuovere_un_utente_ad_admin(client, app, dati):
+    """La correzione del rilievo sull'autodeclassamento non deve ostacolare
+    l'altro verso: un admin che promuove un utente della propria struttura ad
+    admin deve continuare a funzionare senza che nessun freno pensato per
+    l'ultimo amministratore si metta di traverso (la transizione qui e'
+    utente -> admin, non admin -> utente)."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/admin/utenti/{dati['mario']}/modifica",
+                data={'nome': 'M', 'cognome': 'Rossi', 'email': 'mario@a.it',
+                      'ruolo': 'admin'},
+                follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT ruolo FROM utenti WHERE id=?",
+                         (dati['mario'],))['ruolo'] == 'admin'
 
 
 def test_non_si_disattiva_l_ultimo_admin_di_una_struttura(client, app, dati):
