@@ -245,6 +245,7 @@ def utente_modifica(id):
 
     struttura_id = (form.get('struttura_id', type=int) or struttura_id_utente
                     if is_superadmin else mia_struttura_id)
+    attivo = 1 if form.get('attivo') else 0
 
     # Il modulo generico gestisce 'admin' e 'utente'. Il ruolo di un superadmin
     # non e' modificabile da qui, e non gli si assegna una struttura: fino alla
@@ -280,8 +281,8 @@ def utente_modifica(id):
 
     execute(
         """UPDATE utenti SET nome=?, cognome=?, email=?, ruolo=?, struttura_id=?,
-           updated_at=datetime('now') WHERE id=?""",
-        (nome, cognome, email, ruolo, struttura_id, id)
+           attivo=?, updated_at=datetime('now') WHERE id=?""",
+        (nome, cognome, email, ruolo, struttura_id, attivo, id)
     )
     _assegna_divisioni(id, divisioni_sel, struttura_id, ruolo)
 
@@ -289,31 +290,6 @@ def utente_modifica(id):
                  f"Modificato utente: {nome} {cognome}", request.remote_addr,
                  struttura_id=struttura_id)
     flash('Utente aggiornato.', 'success')
-    return redirect(url_for('admin.utenti'))
-
-
-@admin_bp.route('/utenti/<int:id>/toggle', methods=['POST'])
-@admin_required
-def utente_toggle(id):
-    """Attiva/disattiva utente. Admin può agire solo sulla propria struttura."""
-    utente = query_one("SELECT * FROM utenti WHERE id = ?", (id,))
-    if not utente:
-        flash('Utente non trovato.', 'danger')
-        return redirect(url_for('admin.utenti'))
-    if not _check_utente_scope(utente):
-        flash('Non hai i permessi per questa operazione.', 'danger')
-        return redirect(url_for('admin.utenti'))
-    if utente['id'] == g.user['id']:
-        flash('Non puoi disattivare il tuo account.', 'warning')
-        return redirect(url_for('admin.utenti'))
-
-    new_status = 0 if utente['attivo'] else 1
-    execute("UPDATE utenti SET attivo=?, updated_at=datetime('now') WHERE id=?",
-            (new_status, id))
-    action = 'attivato' if new_status else 'disattivato'
-    log_attivita(g.user['id'], action, 'utenti', id,
-                 f"Utente {action}: {utente['nome']} {utente['cognome']}", request.remote_addr)
-    flash(f"Utente {utente['nome']} {utente['cognome']} {action}.", 'success')
     return redirect(url_for('admin.utenti'))
 
 

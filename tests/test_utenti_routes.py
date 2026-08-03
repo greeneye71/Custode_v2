@@ -414,3 +414,36 @@ def test_la_password_di_un_utente_cancellato_non_si_resetta(client, app, dati):
         dopo = query_one("SELECT password_hash FROM utenti WHERE id=?",
                          (dati['mario'],))['password_hash']
     assert dopo == prima
+
+
+def test_un_utente_disattivato_si_riattiva_dal_modulo(client, app, dati):
+    """Il sistema disattiva da solo gli utenti rimasti senza struttura: senza
+    questa casella resterebbero disattivati per sempre."""
+    from models import execute, query_one
+    with app.app_context():
+        execute("UPDATE utenti SET attivo = 0 WHERE id = ?", (dati['mario'],))
+    entra(client, 'admin@a.it')
+    client.post(f"/admin/utenti/{dati['mario']}/modifica",
+                data={'nome': 'M', 'cognome': 'Rossi', 'email': 'mario@a.it',
+                      'ruolo': 'utente', 'attivo': '1'},
+                follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT attivo FROM utenti WHERE id=?", (dati['mario'],))['attivo'] == 1
+
+
+def test_si_puo_disattivare_dal_modulo(client, app, dati):
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/admin/utenti/{dati['mario']}/modifica",
+                data={'nome': 'M', 'cognome': 'Rossi', 'email': 'mario@a.it',
+                      'ruolo': 'utente'},
+                follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT attivo FROM utenti WHERE id=?", (dati['mario'],))['attivo'] == 0
+
+
+def test_l_elenco_offre_elimina_e_non_disattiva(client, dati):
+    entra(client, 'admin@a.it')
+    testo = client.get('/admin/utenti').get_data(as_text=True)
+    assert f"/admin/utenti/{dati['mario']}/elimina" in testo
+    assert '/toggle' not in testo

@@ -53,6 +53,22 @@
                                 L'amministratore può creare e gestire utenti della propria struttura.
                             </div>
                         </div>
+                        {% if utente %}
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="attivo"
+                                       id="attivo" value="1"
+                                       {% if form_data.get('attivo') %}checked{% endif %}>
+                                <label class="form-check-label" for="attivo">
+                                    Account attivo
+                                </label>
+                                <div class="form-text">
+                                    Un utente rimasto senza struttura viene disattivato
+                                    automaticamente all'avvio: riassegnalo e riattivalo qui.
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
                         {% if not utente %}
                         <div class="col-md-6">
                             <label class="form-label">Password <span class="text-danger">*</span></label>
