@@ -368,6 +368,18 @@ def test_un_ruolo_non_ammesso_su_un_utente_normale_e_un_errore(client, app, dati
                          (dati['mario'],))['ruolo'] == 'utente'
 
 
+def test_il_ruolo_non_ammesso_si_vede_nella_pagina(client, dati):
+    """Un rifiuto che non si spiega e' indistinguibile da un guasto: non
+    basta che il salvataggio sia bloccato (gia' coperto dal test sopra), il
+    modulo ripresentato deve mostrare perche'."""
+    entra(client, 'admin@a.it')
+    r = client.post(f"/admin/utenti/{dati['mario']}/modifica",
+                    data={'nome': 'M', 'cognome': 'Rossi', 'email': 'mario@a.it',
+                          'ruolo': 'superadmin'},
+                    follow_redirects=True)
+    assert 'ruolo non ammesso' in r.get_data(as_text=True).lower()
+
+
 def test_un_utente_cancellato_non_e_modificabile(client, app, dati):
     """La specifica vieta di modificare un utente gia' cancellato: il modulo
     generico deve rifiutare, non riscrivere una riga che non rappresenta piu'

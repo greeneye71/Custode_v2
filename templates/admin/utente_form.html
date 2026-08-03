@@ -38,7 +38,7 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Ruolo</label>
-                            <select class="form-select" name="ruolo">
+                            <select class="form-select {% if errors.get('ruolo') %}is-invalid{% endif %}" name="ruolo">
                                 <option value="utente" {% if form_data.get('ruolo', 'utente') == 'utente' %}selected{% endif %}>
                                     Utente (sola lettura)
                                 </option>
@@ -46,6 +46,9 @@
                                     Amministratore
                                 </option>
                             </select>
+                            {% if errors.get('ruolo') %}
+                            <div class="invalid-feedback">{{ errors.ruolo }}</div>
+                            {% endif %}
                             <div class="form-text">
                                 L'amministratore può creare e gestire utenti della propria struttura.
                             </div>
