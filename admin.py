@@ -247,6 +247,28 @@ def utente_modifica(id):
                     if is_superadmin else mia_struttura_id)
     attivo = 1 if form.get('attivo') else 0
 
+    # Non ci si puo' disattivare da soli. Il freno era esplicito nella rotta
+    # /toggle rimossa da questo task: spostare 'attivo' nel modulo generico
+    # senza portarlo con se' bastava a renderlo raggiungibile in silenzio,
+    # anche solo salvando la propria scheda senza spuntare la casella. Per
+    # l'unico superadmin - o l'unico admin di un'installazione
+    # single-struttura, che puo' non avere alcun superadmin - sarebbe un
+    # blocco totale: auth.py pretende attivo=1 sia in sessione sia al login,
+    # e dall'applicazione non ci sarebbe piu' modo di rimediare.
+    if utente['id'] == g.user['id']:
+        attivo = 1
+    # Stesso motivo per cui la cancellazione rifiuta l'ultimo admin di una
+    # struttura: disattivarlo la lascerebbe senza nessuno che possa
+    # gestirla. Si applica solo quando l'account si sta davvero spegnendo
+    # (1 -> 0): riattivare, o lasciare 'attivo' invariato, non deve mai
+    # essere ostacolato da qui.
+    elif utente['attivo'] and not attivo:
+        from utente_service import motivo_rifiuto
+        motivo = motivo_rifiuto(get_db(), id)
+        if motivo:
+            flash(MESSAGGI_RIFIUTO[motivo], 'danger')
+            return redirect(url_for('admin.utenti'))
+
     # Il modulo generico gestisce 'admin' e 'utente'. Il ruolo di un superadmin
     # non e' modificabile da qui, e non gli si assegna una struttura: fino alla
     # 2.6.1 salvare la propria scheda declassava l'unico superadmin del

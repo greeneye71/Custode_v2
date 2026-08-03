@@ -1239,8 +1239,9 @@ Vista SQL precalcolata che mostra tutte le scadenze future con priorita automati
 |---|---|---|
 | GET | `/admin/utenti` | Lista utenti |
 | GET/POST | `/admin/utenti/nuovo` | Nuovo utente |
-| GET/POST | `/admin/utenti/<id>/modifica` | Modifica utente |
-| POST | `/admin/utenti/<id>/toggle` | Attiva/disattiva utente |
+| GET/POST | `/admin/utenti/<id>/modifica` | Modifica utente (include lo stato attivo/disattivo) |
+| GET | `/admin/utenti/<id>/elimina` | Conferma cancellazione utente |
+| POST | `/admin/utenti/<id>/elimina` | Cancella utente |
 | POST | `/admin/utenti/<id>/reset-password` | Reset password |
 | GET | `/admin/divisioni` | Lista divisioni |
 | POST | `/admin/divisioni/nuova` | Nuova divisione |

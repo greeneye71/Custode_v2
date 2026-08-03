@@ -447,3 +447,41 @@ def test_l_elenco_offre_elimina_e_non_disattiva(client, dati):
     testo = client.get('/admin/utenti').get_data(as_text=True)
     assert f"/admin/utenti/{dati['mario']}/elimina" in testo
     assert '/toggle' not in testo
+
+
+def test_non_ci_si_puo_disattivare_da_soli(client, app, dati):
+    """Il freno esplicito della vecchia rotta /toggle va portato nel modulo
+    generico: senza, bastava salvare la propria scheda senza spuntare la
+    casella per restare fuori per sempre (auth.py pretende attivo=1 sia in
+    sessione sia al login, e dall'applicazione non si potrebbe piu' rimediare).
+    Il resto della scheda deve pero' continuare a salvarsi: qui il nome cambia
+    davvero, solo 'attivo' resta a 1."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
+                data={'nome': 'Nuovo', 'cognome': 'A', 'email': 'admin@a.it',
+                      'ruolo': 'admin'},
+                follow_redirects=True)
+    with app.app_context():
+        u = query_one("SELECT nome, attivo FROM utenti WHERE id=?", (dati['admin_a'],))
+        assert u['attivo'] == 1
+        assert u['nome'] == 'Nuovo'
+
+
+def test_non_si_disattiva_l_ultimo_admin_di_una_struttura(client, app, dati):
+    """Stessa conseguenza che la cancellazione vieta gia' per l'ultimo admin:
+    disattivarlo lascerebbe comunque la struttura senza nessuno che possa
+    gestirla. 'secondo' viene prima cancellato cosi' 'admin_a' e' davvero
+    l'ultimo; l'operatore e' il superadmin, cosi' non e' il freno da soli a
+    scattare qui."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    client.post(f"/admin/utenti/{dati['secondo']}/elimina", follow_redirects=True)
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
+                    data={'nome': 'A', 'cognome': 'A', 'email': 'admin@a.it',
+                          'ruolo': 'admin'},
+                    follow_redirects=True)
+    assert 'amministratore' in r.get_data(as_text=True).lower()
+    with app.app_context():
+        assert query_one("SELECT attivo FROM utenti WHERE id=?",
+                         (dati['admin_a'],))['attivo'] == 1
