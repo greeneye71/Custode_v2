@@ -261,10 +261,12 @@ def utente_modifica(id):
     # struttura: disattivarlo la lascerebbe senza nessuno che possa
     # gestirla. Si applica solo quando l'account si sta davvero spegnendo
     # (1 -> 0): riattivare, o lasciare 'attivo' invariato, non deve mai
-    # essere ostacolato da qui.
+    # essere ostacolato da qui. Conta solo gli admin ATTIVI: uno gia'
+    # disattivato non puo' amministrare nulla, quindi non basta a salvare
+    # la struttura dalla disattivazione di questo (vedi motivo_rifiuto).
     elif utente['attivo'] and not attivo:
         from utente_service import motivo_rifiuto
-        motivo = motivo_rifiuto(get_db(), id)
+        motivo = motivo_rifiuto(get_db(), id, per_disattivazione=True)
         if motivo:
             flash(MESSAGGI_RIFIUTO[motivo], 'danger')
             return redirect(url_for('admin.utenti'))

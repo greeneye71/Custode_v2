@@ -471,12 +471,23 @@ def test_non_ci_si_puo_disattivare_da_soli(client, app, dati):
 def test_non_si_disattiva_l_ultimo_admin_di_una_struttura(client, app, dati):
     """Stessa conseguenza che la cancellazione vieta gia' per l'ultimo admin:
     disattivarlo lascerebbe comunque la struttura senza nessuno che possa
-    gestirla. 'secondo' viene prima cancellato cosi' 'admin_a' e' davvero
-    l'ultimo; l'operatore e' il superadmin, cosi' non e' il freno da soli a
-    scattare qui."""
-    from models import query_one
+    gestirla. L'operatore e' il superadmin, cosi' non e' il freno da soli a
+    scattare qui.
+
+    'secondo' viene DISATTIVATO, non cancellato: e' il caso che distingue le
+    due domande di motivo_rifiuto. Cancellarlo lo farebbe sparire anche dal
+    conteggio "tutti gli admin esistenti" della cancellazione, quindi non
+    direbbe niente sulla disattivazione, che deve invece contare solo gli
+    admin ATTIVI. Con la versione precedente di questo test (che cancellava
+    'secondo') il difetto era invisibile: motivo_rifiuto usato senza
+    distinzione contava 'secondo' come amministratore superstite (la sua
+    riga esiste ancora, solo attivo=0) e lasciava disattivare admin_a,
+    svuotando la struttura di amministratori funzionanti senza che nessun
+    test se ne accorgesse."""
+    from models import query_one, execute
     entra(client, 'super@x.it')
-    client.post(f"/admin/utenti/{dati['secondo']}/elimina", follow_redirects=True)
+    with app.app_context():
+        execute("UPDATE utenti SET attivo = 0 WHERE id = ?", (dati['secondo'],))
     r = client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
                     data={'nome': 'A', 'cognome': 'A', 'email': 'admin@a.it',
                           'ruolo': 'admin'},
