@@ -42,11 +42,15 @@ def entra(client, email):
 
 def test_la_pagina_di_conferma_dice_chi_si_sta_cancellando(client, dati):
     """Non si digita nulla per confermare: l'unica difesa contro "ho cliccato la
-    riga sbagliata" e' che la pagina dica di chi si tratta."""
+    riga sbagliata" e' che la pagina dica di chi si tratta — nome, email e
+    struttura. Senza l'ultima asserzione, ripristinare la query letterale del
+    brief (senza il LEFT JOIN su strutture) farebbe comunque passare tutti gli
+    altri test: e' questa a difendere la deviazione."""
     entra(client, 'admin@a.it')
     testo = client.get(f"/admin/utenti/{dati['mario']}/elimina").get_data(as_text=True)
     assert 'mario@a.it' in testo
     assert 'Rossi' in testo
+    assert 'Clinica A' in testo
 
 
 def test_la_pagina_di_conferma_dice_cosa_resta(client, dati):
@@ -130,3 +134,55 @@ def test_un_utente_cancellato_non_entra_piu(client, app, dati):
     r = client.post('/login', data={'email': 'mario@a.it', 'password': 'Passw0rd!'},
                     follow_redirects=True)
     assert 'dashboard' not in r.get_data(as_text=True).lower()
+
+
+def test_un_superadmin_non_cancella_un_tecnico(client, app, dati):
+    """Per un admin, il tecnico e' gia' fermato da _check_utente_scope (il suo
+    struttura_id nullo non coincide con nessuna struttura). Per un superadmin
+    _check_utente_scope restituisce sempre True: qui il controllo esplicito
+    sul ruolo 'tecnico' in _utente_cancellabile e' l'UNICA difesa, e questo
+    test e' l'unico a coprirla."""
+    from models import query_one
+    entra(client, 'super@x.it')
+    client.post(f"/admin/utenti/{dati['tec']}/elimina", follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT eliminato_il FROM utenti WHERE id=?",
+                         (dati['tec'],))['eliminato_il'] is None
+
+
+def test_un_guasto_dopo_la_registrazione_non_dice_che_nulla_e_cambiato(client, app, dati, monkeypatch):
+    """Il vero punto di non ritorno e' dentro log_attivita: passa da
+    models.execute(), che fa gia' db.commit() sulla stessa connessione. Un
+    guasto DOPO quella chiamata (qui simulato facendo esplodere log_attivita
+    subito dopo aver fatto il suo lavoro vero) trova l'utente gia' cancellato
+    in modo durevole: il messaggio all'operatore deve dirlo, non deve
+    affermare che "nulla e' stato modificato"."""
+    import admin as modulo_admin
+    from models import query_one
+
+    log_vero = modulo_admin.log_attivita
+
+    def registra_e_poi_esplodi(*args, **kwargs):
+        log_vero(*args, **kwargs)
+        raise RuntimeError('guasto simulato dopo la registrazione')
+
+    monkeypatch.setattr(modulo_admin, 'log_attivita', registra_e_poi_esplodi)
+
+    entra(client, 'admin@a.it')
+    r = client.post(f"/admin/utenti/{dati['mario']}/elimina", follow_redirects=True)
+    testo = r.get_data(as_text=True)
+
+    # La cancellazione e' davvero avvenuta (la registrazione l'ha resa
+    # durevole prima del guasto simulato) ...
+    with app.app_context():
+        assert query_one("SELECT eliminato_il FROM utenti WHERE id=?",
+                         (dati['mario'],))['eliminato_il'] is not None
+    # ... quindi il messaggio mostrato non puo' essere quello per il caso in
+    # cui non e' successo nulla (severita' 'danger', frase "fallita, nulla") ...
+    assert 'alert-danger' not in testo
+    assert 'fallita, nulla' not in testo
+    # ... deve invece avvisare con severita' 'warning' che l'operazione e'
+    # avvenuta ma qualcosa e' andato storto dopo.
+    assert 'alert-warning' in testo
+    assert 'cancellato' in testo.lower()
+    assert 'subito dopo' in testo.lower()

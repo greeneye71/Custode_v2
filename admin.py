@@ -398,11 +398,32 @@ def utente_elimina(id):
             f"ruolo {esito['ruolo']}. Righe che portano il suo nome: "
             f"{conteggi or 'nessuna'}",
             request.remote_addr, esito['struttura_id'])
+        # Il punto di non ritorno vero e' la chiamata sopra, non questa riga:
+        # log_attivita passa da models.execute(), che fa gia' db.commit() su
+        # questa stessa connessione (g.db), rendendo durevoli sia la voce di
+        # log sia l'UPDATE di cancella_utente() fatto poco sopra. Il commit
+        # qui sotto resta comunque come rete di sicurezza — se domani
+        # log_attivita smettesse di commitare da sola, l'ordine "registra
+        # prima, commit dopo" continuerebbe a valere — ma non e' lui il
+        # varco: e' per questo che il ramo except sotto non puo' assumere
+        # che un'eccezione qui significhi "non e' successo nulla".
         db.commit()
     except Exception as e:
-        db.rollback()
         current_app.logger.error(f'Cancellazione utente {id} fallita: {e}', exc_info=True)
-        flash("Cancellazione fallita, nulla e' stato modificato. Controlla il log.", 'danger')
+        # log_attivita puo' aver gia' reso durevole la cancellazione (vedi
+        # sopra) prima che il guasto avvenisse: db.rollback() non annulla
+        # cio' che e' gia' stato committato da un'altra chiamata a commit
+        # sulla stessa connessione. Bisogna quindi controllare lo stato
+        # reale della riga, non presumerlo dal fatto che sia arrivata
+        # un'eccezione, prima di scegliere il messaggio per l'operatore.
+        db.rollback()
+        riga = query_one("SELECT eliminato_il FROM utenti WHERE id = ?", (id,))
+        if riga and riga['eliminato_il'] is not None:
+            flash("L'utente risulta gia' cancellato: la registrazione era "
+                  "andata a buon fine, ma subito dopo qualcosa e' fallito. "
+                  "Controlla il log applicativo per i dettagli.", 'warning')
+        else:
+            flash("Cancellazione fallita, nulla e' stato modificato. Controlla il log.", 'danger')
         return redirect(url_for('admin.utenti'))
 
     flash(f"Utente {esito['nome']} {esito['cognome']} eliminato. "
