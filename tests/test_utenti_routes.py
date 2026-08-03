@@ -641,3 +641,43 @@ def test_un_guasto_dopo_la_registrazione_di_un_tecnico_non_dice_che_nulla_e_camb
     assert 'alert-warning' in testo
     assert 'cancellato' in testo.lower()
     assert 'subito dopo' in testo.lower()
+
+
+def test_tecnico_modifica_rifiuta_un_tecnico_cancellato(client, app, dati):
+    """tecnico_modifica e' una delle sei rotte per id che devono rifiutare un
+    utente con eliminato_il valorizzato, ma era rimasta fuori: raggiungibile
+    con un URL scritto a mano (l'elenco tecnici la filtra correttamente, ma
+    la rotta stessa no). Senza la guardia, salvare il modulo su un tecnico
+    gia' cancellato riscrive l'email originale sopra alla forma spostata --
+    riprendendosi l'indirizzo che la cancellazione aveva liberato, in modo
+    invisibile in ogni schermata -- e ricrea le assegnazioni in
+    tecnici_strutture su un account che non esiste piu'."""
+    from models import query_one, query_all, get_db
+    from utente_service import cancella_utente
+    entra(client, 'super@x.it')
+    with app.app_context():
+        conn = get_db()
+        cancella_utente(conn, dati['tec'])
+        conn.commit()
+        email_spostata = query_one("SELECT email FROM utenti WHERE id=?",
+                                   (dati['tec'],))['email']
+
+    r_get = client.get(f"/admin/tecnici/{dati['tec']}/modifica")
+    assert r_get.status_code in (301, 302)
+
+    r_post = client.post(f"/admin/tecnici/{dati['tec']}/modifica",
+                data={'nome': 'RESUSCITATO', 'cognome': 'T', 'email': 'tec@x.it',
+                      'strutture': [str(dati['a'])]},
+                follow_redirects=True)
+    assert r_post.status_code == 200
+
+    with app.app_context():
+        u = query_one("SELECT nome, email, eliminato_il FROM utenti WHERE id=?",
+                      (dati['tec'],))
+        assert u['eliminato_il'] is not None
+        assert u['nome'] != 'RESUSCITATO'
+        assert u['email'] == email_spostata
+        assert u['email'] != 'tec@x.it'
+        assegnazioni = query_all(
+            "SELECT * FROM tecnici_strutture WHERE tecnico_id=?", (dati['tec'],))
+        assert assegnazioni == []

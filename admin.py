@@ -1468,6 +1468,10 @@ def tecnico_modifica(id):
         flash('Tecnico non trovato.', 'danger')
         return redirect(url_for('admin.tecnici'))
 
+    if tecnico['eliminato_il'] is not None:
+        flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
+        return redirect(url_for('admin.tecnici'))
+
     strutture = query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
     strutture_assegnate = [
         r['struttura_id'] for r in
