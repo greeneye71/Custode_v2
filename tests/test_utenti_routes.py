@@ -519,3 +519,43 @@ def test_cancellando_un_tecnico_l_autore_resta(client, app, dati):
     with app.app_context():
         assert query_one("SELECT created_by FROM apparecchi WHERE id=?",
                          (ap,))['created_by'] == dati['tec']
+
+
+def test_un_guasto_dopo_la_registrazione_di_un_tecnico_non_dice_che_nulla_e_cambiato(
+        client, app, dati, monkeypatch):
+    """Stesso schema di test_un_guasto_dopo_la_registrazione_non_dice_che_nulla_e_cambiato
+    (Task 4), qui per tecnico_elimina: il vero punto di non ritorno e' dentro
+    log_attivita, che passa da models.execute() e committa gia' sulla stessa
+    connessione. Un guasto DOPO quella chiamata (qui simulato facendo esplodere
+    log_attivita subito dopo aver fatto il suo lavoro vero) trova il tecnico
+    gia' cancellato in modo durevole: il messaggio all'operatore deve dirlo,
+    non deve affermare che "nulla e' stato modificato"."""
+    import admin as modulo_admin
+    from models import query_one
+
+    log_vero = modulo_admin.log_attivita
+
+    def registra_e_poi_esplodi(*args, **kwargs):
+        log_vero(*args, **kwargs)
+        raise RuntimeError('guasto simulato dopo la registrazione')
+
+    monkeypatch.setattr(modulo_admin, 'log_attivita', registra_e_poi_esplodi)
+
+    entra(client, 'super@x.it')
+    r = client.post(f"/admin/tecnici/{dati['tec']}/elimina", follow_redirects=True)
+    testo = r.get_data(as_text=True)
+
+    # La cancellazione e' davvero avvenuta (la registrazione l'ha resa
+    # durevole prima del guasto simulato) ...
+    with app.app_context():
+        assert query_one("SELECT eliminato_il FROM utenti WHERE id=?",
+                         (dati['tec'],))['eliminato_il'] is not None
+    # ... quindi il messaggio mostrato non puo' essere quello per il caso in
+    # cui non e' successo nulla (severita' 'danger', frase "fallita, nulla") ...
+    assert 'alert-danger' not in testo
+    assert 'fallita, nulla' not in testo
+    # ... deve invece avvisare con severita' 'warning' che l'operazione e'
+    # avvenuta ma qualcosa e' andato storto dopo.
+    assert 'alert-warning' in testo
+    assert 'cancellato' in testo.lower()
+    assert 'subito dopo' in testo.lower()
