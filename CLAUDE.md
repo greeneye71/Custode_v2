@@ -82,7 +82,7 @@ Key fields (all in `config.local.json`):
 - `encryption_key` — derives the Fernet key for IMAP/SMTP password encryption (auto-generated)
 - `force_https`, `cloudflare_mode` — deployment behind a tunnel/reverse proxy
 
-**Per-struttura config** lives in the `strutture_config` table (`get_struttura_config()` / `set_struttura_config()` in `models.py`), and falls back to the global values above. AI keys, models and SMTP can all be overridden per facility.
+**Per-struttura config** lives in the `strutture_config` table (`get_struttura_config()` / `set_struttura_config()` in `models.py`), and falls back to the global values above. AI keys and models can be overridden per facility. **The mail server cannot**: since 2.6.2 SMTP is system-wide only, and each facility keeps just the deadline-alert preferences (`avvisi_scadenza_attivi`, `avvisi_scadenza_formato`, `report_frequenza`). All alerts therefore leave from the same sender, and name their facility in the subject and body.
 
 ## Architecture
 
