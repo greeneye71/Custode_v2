@@ -51,8 +51,9 @@ CREATE INDEX IF NOT EXISTS idx_strutture_config_struttura ON strutture_config(st
 
 -- Chiavi valide: ai_provider, anthropic_api_key, ai_import_model,
 -- ai_email_model, ai_local_base_url, ai_local_model,
--- smtp_host, smtp_port, smtp_user, smtp_password_encrypted, smtp_from,
--- smtp_use_tls, report_frequenza, report_schedulato_attivo, report_pdf_attivo
+-- report_frequenza, avvisi_scadenza_attivi, avvisi_scadenza_formato
+-- Dalla 2.6.2 il server di posta e' solo di sistema: nessuna chiave smtp_*
+-- vive qui. La migrazione in models.apply_schema_updates() le cancella.
 
 -- ============================================
 -- API_TOKENS
