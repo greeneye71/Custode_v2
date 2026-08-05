@@ -187,56 +187,30 @@ class BackgroundScheduler:
                     logger.error(f"Errore avvisi struttura {struttura['nome']}: {e}")
 
     def _config_smtp(self):
-        """I parametri del server di posta, solo di sistema.
-
-        Fino alla 2.6.1 ognuno di questi valori aveva un gemello in
-        strutture_config e vinceva quello. Un server di posta pero' e'
-        infrastruttura del deployment, non un dato della clinica: averlo per
-        struttura moltiplicava le credenziali da tenere aggiornate e se le
-        portava dietro negli archivi esportati.
-
-        smtp_use_tls arriva dal JSON globale come booleano (true), non come la
-        stringa '1' che si usava in strutture_config: si accettano entrambi.
-        """
-        cfg = self.app.config.get('APP_CONFIG') or {}
-        tls = cfg.get('smtp_use_tls', True)
-        return {
-            'host': cfg.get('smtp_host', ''),
-            'porta': int(cfg.get('smtp_port') or 587),
-            'utente': cfg.get('smtp_user', ''),
-            'password': cfg.get('smtp_password', ''),
-            # Il mittente e' unico per tutte le strutture: chi riceve capisce
-            # di quale si tratta dal messaggio, non dall'indirizzo.
-            'mittente': cfg.get('smtp_user', ''),
-            'usa_tls': str(tls).lower() not in ('0', 'false', ''),
-        }
+        """I parametri del server di posta, solo di sistema (vedi posta.py)."""
+        from posta import parametri
+        return parametri(self.app.config.get('APP_CONFIG'))
 
     def _invia(self, struttura, messaggio):
-        """Spedisce un messaggio gia' pronto. True se e' partito."""
-        import smtplib
+        """Spedisce un messaggio gia' pronto. True se e' partito.
 
-        smtp = self._config_smtp()
-        if not smtp['host'] or not smtp['utente']:
+        L'invio vero sta in posta.py, unico posto da cui parte la posta; qui
+        restano le righe di log, che nominano la struttura.
+        """
+        from posta import invia
+
+        if not self._config_smtp()['host']:
             logger.warning("SMTP di sistema non configurato: avviso non inviato "
                            f"a {struttura['nome']}.")
             return False
 
-        messaggio['From'] = smtp['mittente']
-        messaggio['To'] = struttura['email_notifiche']
-        try:
-            with smtplib.SMTP(smtp['host'], smtp['porta'], timeout=15) as server:
-                if smtp['usa_tls']:
-                    server.starttls()
-                if smtp['utente'] and smtp['password']:
-                    server.login(smtp['utente'], smtp['password'])
-                server.sendmail(smtp['mittente'], struttura['email_notifiche'],
-                                messaggio.as_string())
+        if invia(self.app.config.get('APP_CONFIG'), struttura['email_notifiche'],
+                 messaggio):
             logger.info(f"Avviso inviato a {struttura['email_notifiche']} "
                         f"({struttura['nome']})")
             return True
-        except Exception as e:
-            logger.error(f"Errore invio avviso {struttura['nome']}: {e}")
-            return False
+        logger.error(f"Avviso non partito per {struttura['nome']}.")
+        return False
 
     def _invia_report_pdf(self, struttura):
         """Genera il report PDF delle scadenze e lo allega."""
