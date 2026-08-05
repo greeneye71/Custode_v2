@@ -4,6 +4,7 @@ Handles login, logout, password change, session management, and access decorator
 """
 
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta
@@ -15,9 +16,11 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from models import query_one, query_all, execute, log_attivita
+from models import query_one, query_all, execute, log_attivita, get_db
 
 auth_bp = Blueprint('auth', __name__)
+
+logger = logging.getLogger('medinventory.auth')
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +390,17 @@ def login():
         (email,)
     )
 
-    if not user or not check_password_hash(user['password_hash'], password):
+    from reset_password import azzera_reset, consuma_temporanea
+
+    # La password temporanea del reset vale ACCANTO a quella attuale, non al
+    # suo posto: si prova solo dopo che quella vera ha fallito. Chi non ha
+    # chiesto nessun reset non passa mai di qui — reset_hash e' NULL.
+    con_temporanea = False
+    if user and not check_password_hash(user['password_hash'], password):
+        con_temporanea = consuma_temporanea(get_db(), user['id'], password)
+
+    if not user or not (con_temporanea
+                        or check_password_hash(user['password_hash'], password)):
         execute(
             "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'fallito')",
             (ip, email)
@@ -395,6 +408,18 @@ def login():
         _time.sleep(1)  # Rallenta il brute force: 1 tentativo/sec per IP
         flash('Credenziali non valide.', 'danger')
         return render_template('login.html', email=email)
+
+    if con_temporanea:
+        # consuma_temporanea ha gia' messo primo_accesso = 1 e chiuso le altre
+        # sessioni; la riga letta prima dice ancora il valore vecchio.
+        log_attivita(user['id'], 'reset_password_usato', 'utenti', user['id'],
+                     'Accesso con la password temporanea richiesta dalla schermata '
+                     'di accesso', request.remote_addr, user['struttura_id'])
+    else:
+        # Entrato con la sua password: se aveva un reset in sospeso non ha piu'
+        # motivo di restare valido, ne' qui ne' nella casella di chi l'ha
+        # ricevuto.
+        azzera_reset(get_db(), user['id'])
 
     # Create session
     config = current_app.config['APP_CONFIG']
@@ -439,8 +464,9 @@ def login():
         (ip,)
     )
 
-    # Redirect based on primo_accesso
-    if user['primo_accesso']:
+    # Redirect based on primo_accesso. Chi e' entrato con la temporanea deve
+    # sceglierne una nuova subito: la riga letta all'inizio diceva ancora 0.
+    if user['primo_accesso'] or con_temporanea:
         return redirect(url_for('auth.cambio_password'))
 
     # Tecnico: seleziona struttura se non ancora impostata
@@ -462,6 +488,94 @@ def login():
             return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
 
     return redirect(url_for('index'))
+
+
+@auth_bp.route('/password-dimenticata', methods=['GET', 'POST'])
+def password_dimenticata():
+    """Chiede una password temporanea per email.
+
+    La risposta e' sempre la stessa, che l'indirizzo esista o no, sia attivo o
+    no, sia cancellato o no. Non si dice se un account esiste: il progetto
+    prevede di stare dietro un tunnel Cloudflare ed essere raggiungibile da
+    fuori, e su Internet quella differenza e' l'elenco degli indirizzi validi
+    su cui poi provare le password.
+    """
+    from email.mime.text import MIMEText
+
+    from posta import invia, smtp_configurato
+    from reset_password import (destinatario_valido, genera_temporanea,
+                                messaggio_email, registra_reset,
+                                registra_richiesta, troppe_richieste)
+
+    config = current_app.config['APP_CONFIG']
+    if not smtp_configurato(config):
+        # Senza posta la funzione non ha come consegnare niente. Nel log resta
+        # scritto perche', cosi' chi la cerca non la cerca a lungo.
+        logger.warning("Richiesta di reset password ignorata: SMTP di sistema "
+                       "non configurato.")
+        flash("Il reset della password non e' disponibile: il server di posta "
+              "non e' configurato. Rivolgiti all'amministratore.", 'warning')
+        return redirect(url_for('auth.login'))
+
+    if request.method == 'GET':
+        return render_template('password_dimenticata.html')
+
+    email = request.form.get('email', '').strip().lower()
+    ip = request.remote_addr
+    RISPOSTA = ("Se l'indirizzo e' registrato, riceverai a breve un'email con una "
+                "password temporanea. Se non arriva nulla, controlla l'indirizzo "
+                "inserito o rivolgiti all'amministratore.")
+
+    if not email:
+        flash('Inserisci il tuo indirizzo email.', 'danger')
+        return render_template('password_dimenticata.html')
+
+    db = get_db()
+
+    # Il limite si guarda PRIMA di sapere se l'utente esiste: al contrario, il
+    # tempo di risposta diverso fra indirizzo noto e ignoto rivelerebbe quello
+    # che il messaggio unico nasconde.
+    if troppe_richieste(db, ip, email):
+        registra_richiesta(db, ip, email)
+        db.commit()
+        flash(RISPOSTA, 'info')
+        return redirect(url_for('auth.login'))
+
+    # Il commit va fatto SUBITO, non alla fine: le due uscite qui sotto
+    # tornano prima di arrivarci, e senza questa riga la richiesta non
+    # verrebbe contata proprio nei due casi che il limite deve fermare — le
+    # ripetute su un indirizzo che non esiste.
+    registra_richiesta(db, ip, email)
+    db.commit()
+
+    utente = destinatario_valido(db, email)
+    if utente is None:  # nota: la riga del contatore e' gia' committata sopra
+        # Nessuna voce in log_attivita: non c'e' un utente a cui legarla, e
+        # scriverci dentro indirizzi forniti da chi passa vorrebbe dire
+        # lasciare a un estraneo la penna sul registro di sistema. La riga in
+        # login_attempts, che e' il posto fatto per questo, c'e' gia'.
+        flash(RISPOSTA, 'info')
+        return redirect(url_for('auth.login'))
+
+    utente_id, nome, _cognome, indirizzo, struttura_id = utente
+    temporanea = genera_temporanea()
+    scadenza = registra_reset(db, utente_id, temporanea)
+    oggetto, corpo = messaggio_email(nome, temporanea, scadenza)
+
+    if invia(config, indirizzo, MIMEText(corpo, 'plain', 'utf-8')):
+        log_attivita(utente_id, 'reset_password_richiesto', 'utenti', utente_id,
+                     'Password temporanea inviata per email', ip, struttura_id)
+    else:
+        # L'email non e' partita: la temporanea non deve restare valida, o
+        # resterebbe un reset aperto che nessuno ha in mano.
+        from reset_password import azzera_reset
+        azzera_reset(db, utente_id)
+        logger.error("Password temporanea non spedita a %s: reset annullato.",
+                     indirizzo)
+
+    db.commit()
+    flash(RISPOSTA, 'info')
+    return redirect(url_for('auth.login'))
 
 
 @auth_bp.route('/logout')
