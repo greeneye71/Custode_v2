@@ -1,4 +1,4 @@
-# MedInventory v2.6.1
+# MedInventory v2.6.2
 
 **Gestione Apparecchi Elettromedicali** — applicazione web per strutture sanitarie
 by Studio Bergamaschi
@@ -560,4 +560,4 @@ Vedere il file [LICENSE](LICENSE) per i termini di licenza.
 
 ---
 
-*MedInventory v2.6.1 — by Studio Bergamaschi*
+*MedInventory v2.6.2 — by Studio Bergamaschi*

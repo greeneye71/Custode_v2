@@ -6,6 +6,97 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.6.2] - 2026-08-05
+
+### Aggiunto
+
+- **Cancellazione degli utenti.** Fino a ieri un utente si poteva solo disattivare, e la
+  sua riga restava in elenco per sempre. Ora si cancella: l'account viene distrutto —
+  password resa inutilizzabile, indirizzo liberato per un eventuale nuovo account della
+  stessa persona, sessioni chiuse — ma **la riga resta come voce storica**, perche' otto
+  colonne referenziano `utenti(id)` e su un registro di elettromedicali «chi ha inserito
+  questo apparecchio» non deve sparire. La pagina di conferma dice **chi** si sta
+  cancellando e **cosa resta** a suo nome, riga per riga.
+- **Reset della password dalla schermata di accesso.** «Password dimenticata?» manda per
+  email una temporanea valida 30 minuti, che al primo accesso obbliga a sceglierne una
+  nuova. La temporanea vale **accanto** alla password attuale, non al suo posto: sulla
+  pagina di accesso chiunque puo' digitare l'indirizzo di un collega, e sostituirgli la
+  password sarebbe il modo di buttarlo fuori dal suo account. L'email lo dice
+  esplicitamente a chi la riceve senza averla chiesta. Il collegamento compare solo se il
+  server di posta e' configurato.
+- **Fusione manuale di due schede.** «Fondi con…» nella scheda dell'apparecchio apre una
+  ricerca e porta alla stessa pagina di confronto dell'elenco automatico. Serve alle
+  coppie che nessun criterio accosta — `R-00015` e `INV/2019/887` sono la stessa macchina,
+  ma nessun algoritmo puo' saperlo — che fino a ieri non erano fondibili affatto. La
+  ricerca trova anche gli apparecchi **dismessi**, contrassegnandoli: e' il caso di chi si
+  e' accorto del doppione e, invece di fondere, ne ha dismessa una delle due.
+- **Il report PDF delle scadenze si puo' finalmente accendere.** Il codice c'era, completo,
+  dalla 2.5: si attivava con una chiave di configurazione che nessun modulo e nessun
+  template hanno mai scritto, quindi non e' mai stato raggiungibile. Ora gli avvisi di
+  scadenza hanno un interruttore e un formato — elenco nel corpo dell'email, oppure report
+  PDF allegato.
+
+### Corretto
+
+- **Il blocco anti-forza-bruta del login non e' mai scattato.** I tentativi falliti si
+  contano su una finestra temporale che veniva calcolata con l'ora locale e confrontata
+  con una colonna scritta in UTC da SQLite: su qualunque installazione a est di Greenwich
+  una riga appena scritta risultava gia' fuori finestra, e il conteggio tornava sempre
+  zero. Ne' il blocco per IP (5 tentativi in 15 minuti) ne' quello per indirizzo (10 in 30)
+  hanno mai funzionato; l'unico freno era il secondo di attesa dopo ogni tentativo. Per lo
+  stesso motivo la pagina Sicurezza mostrava sempre un elenco vuoto, e le sessioni
+  duravano le ore configurate **piu'** lo scarto del fuso.
+- **L'ultimo amministratore di una struttura non si perde piu' in nessun modo.** Cancellarlo
+  era gia' vietato; ora lo sono anche disattivarlo e declassarlo a utente semplice, e le
+  tre operazioni contano allo stesso modo — solo gli amministratori **attivi**. Prima un
+  amministratore disattivato contava come superstite, e bastava a lasciare una struttura
+  senza nessuno in grado di entrarci.
+- **Non ci si puo' piu' disattivare o declassare da soli** dal modulo di modifica utente,
+  e l'operatore viene avvisato di cosa e' stato ignorato invece di ricevere un «Utente
+  aggiornato» che non dice la verita'. Per l'unico superadmin — o l'unico admin di
+  un'installazione a struttura singola — era un blocco totale rimediabile solo da riga di
+  comando.
+- **Cancellare un tecnico** non restituisce piu' un errore 500, e l'autore resta sulle
+  schede che aveva inserito.
+- **I tecnici si gestiscono solo dalla loro pagina**: il modulo generico degli utenti li
+  rifiuta, cosi' come rifiuta un utente gia' cancellato.
+
+### Modificato
+
+- **Il server di posta e' unico e di sistema.** Ogni struttura poteva averne uno proprio,
+  credenziali comprese: significava moltiplicare le password da tenere aggiornate e
+  portarsele dietro in ogni archivio esportato. Alla struttura restano le preferenze — se
+  vuole gli avvisi, in che formato, con che frequenza. Tutte le email partono dallo stesso
+  mittente e **nominano la struttura** nell'oggetto e nel corpo. Le impostazioni del server
+  presenti nelle strutture vengono cancellate alla prima partenza, password cifrata
+  compresa; chi riceveva gli avvisi continua a riceverli.
+- **La barra di navigazione mostra la struttura quando la divisione e' una sola.** Un menu
+  con una voce sola non e' una scelta, e il nome che mostrava sembrava quello della
+  struttura solo perche' la divisione predefinita nasce con lo stesso nome. Per un
+  amministratore o un utente semplice, in che struttura stesse lavorando non era scritto da
+  nessuna parte. Con una sola divisione l'ambito di amministratori e tecnici diventa quello
+  di struttura, cosi' gli apparecchi delle divisioni **disattivate** restano visibili: erano
+  raggiungibili solo con il comando «Tutte le divisioni», che spariva insieme al menu.
+- **«Possibili duplicati» si e' spostato nell'elenco degli apparecchi**, accanto a «Nuovo
+  apparecchio»: riguarda tutto il parco, e stava dentro la scheda di un singolo apparecchio.
+- Il monitoraggio di una casella di posta per struttura compare nella configurazione
+  **disabilitato**, in attesa di un'implementazione vera. Non ha una chiave di
+  configurazione: un valore che niente puo' scrivere e' esattamente il difetto trovato con
+  il report PDF.
+
+### Note
+
+- **Aggiornamento senza interventi manuali.** Le migrazioni girano alla prima partenza:
+  aggiungono le colonne nuove su `utenti`, convertono le preferenze di posta e cancellano
+  le impostazioni del server per struttura.
+- La cancellazione di un utente **non e' reversibile** e non restituisce la password: per
+  rimettere in servizio la stessa persona si crea un account nuovo con lo stesso indirizzo.
+- Il reset della password richiede un server SMTP configurato. Senza, il collegamento non
+  compare affatto e nel log resta scritto perche'.
+- Questa versione introduce la suite di test automatici del progetto: 391 test.
+
+---
+
 ## [2.6.1] - 2026-07-31
 
 ### Aggiunto

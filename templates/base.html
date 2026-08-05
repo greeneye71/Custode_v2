@@ -109,8 +109,21 @@
                       {% endif %}
                     {% endif %}
 
-                    {# Division selector #}
-                    {% if divisioni_accessibili is defined and divisioni_accessibili|length > 0 %}
+                    {# Chi ha gia' un selettore di struttura non deve leggere il
+                       nome due volte: qui si ricalcola la stessa condizione dei
+                       due include qui sopra. #}
+                    {% set ha_selettore_struttura = current_user and not single_struttura and (
+                         current_user.ruolo == 'superadmin' or
+                         (current_user.ruolo == 'tecnico' and strutture_list|length > 1)) %}
+
+                    {# Division selector. Con una sola divisione accessibile il
+                       menu non e' una scelta: e' un clic per scoprire che non fa
+                       niente, e per giunta mostra un nome che sembra quello
+                       della struttura perche' la divisione predefinita nasce
+                       con lo stesso nome. Al suo posto si scrive il nome della
+                       struttura, che per admin e utenti non compare oggi da
+                       nessuna parte. #}
+                    {% if divisioni_accessibili is defined and divisioni_accessibili|length > 1 %}
                     <li class="nav-item dropdown me-2">
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#"
                            data-bs-toggle="dropdown">
@@ -144,6 +157,13 @@
                             </li>
                             {% endfor %}
                         </ul>
+                    </li>
+                    {% elif g_struttura and not ha_selettore_struttura %}
+                    <li class="nav-item me-2">
+                        <span class="nav-link">
+                            <i class="bi bi-hospital me-1"></i>
+                            <span class="d-none d-md-inline">{{ g_struttura.nome }}</span>
+                        </span>
                     </li>
                     {% endif %}
 

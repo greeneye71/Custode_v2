@@ -95,12 +95,11 @@ CONFIG_STRUTTURA = [
     ('ai_email_model',    ['ai_email_model', 'default_ai_email_model']),
     ('ai_local_base_url', ['ai_local_base_url', 'default_ai_local_base_url']),
     ('ai_local_model',    ['ai_local_model', 'default_ai_local_model']),
-    ('smtp_host',         ['smtp_host']),
-    ('smtp_port',         ['smtp_port']),
-    ('smtp_user',         ['smtp_user']),
-    ('smtp_from',         ['smtp_from', 'smtp_user']),
-    ('smtp_use_tls',      ['smtp_use_tls']),
 ]
+# Niente chiavi smtp_*: dalla 2.6.2 il server di posta e' unico e vive nella
+# configurazione di sistema del target. Copiarci dentro quello della sorgente
+# scriverebbe una credenziale che nessuno legge piu' e che la migrazione di
+# models.apply_schema_updates() cancella al primo avvio.
 
 # Entità di log_attivita i cui entita_id sono rimappabili sui nuovi id.
 LOG_ENTITA_RIMAPPABILI = {
@@ -983,7 +982,7 @@ class Importatore:
             self.rep.conta('import_history', 'importati')
 
     def importa_config(self):
-        """Copia le impostazioni AI/SMTP della sorgente in strutture_config."""
+        """Copia le impostazioni AI della sorgente in strutture_config."""
         if not self.opz.con_config:
             return
         config = self.src.config
@@ -1005,34 +1004,17 @@ class Importatore:
                 (self.struttura_id, chiave, str(valore)))
             self.rep.conta('strutture_config', 'importati')
 
-        # La password SMTP arriva in chiaro dal config sorgente ma il target la
-        # vuole cifrata con la propria encryption_key.
-        smtp_pass = config.get('smtp_password')
-        if smtp_pass:
-            cifrata = self._cifra_per_target(smtp_pass)
-            if cifrata:
-                self.conn.execute(
-                    """INSERT INTO strutture_config (struttura_id, chiave, valore)
-                       VALUES (?, 'smtp_password_encrypted', ?)
-                       ON CONFLICT(struttura_id, chiave) DO UPDATE SET valore = excluded.valore""",
-                    (self.struttura_id, cifrata))
-                self.rep.conta('strutture_config', 'importati')
-            else:
-                self.rep.avviso("Password SMTP non cifrabile (encryption_key del target "
-                                "assente): reinseriscila dal pannello di configurazione.")
-
-    def _cifra_per_target(self, testo):
-        try:
-            import base64
-            import hashlib
-            from cryptography.fernet import Fernet
-            chiave = self.opz.target_config.get('encryption_key', '')
-            if not chiave:
-                return None
-            fernet_key = base64.urlsafe_b64encode(hashlib.sha256(chiave.encode()).digest())
-            return Fernet(fernet_key).encrypt(testo.encode()).decode()
-        except Exception:
-            return None
+        # Il server di posta della sorgente NON si importa. Prima finiva qui
+        # dentro, password compresa, ricifrata con la encryption_key del
+        # target; dalla 2.6.2 quelle chiavi non le legge piu' nessuno e la
+        # migrazione le cancella al primo avvio. L'avviso serve perche' il
+        # silenzio farebbe credere che gli avvisi di scadenza partiranno da
+        # soli: vanno configurati una volta nel sistema, non per struttura.
+        if any(config.get(c) for c in ('smtp_host', 'smtp_user', 'smtp_password')):
+            self.rep.avviso("Il server di posta della sorgente non viene importato: "
+                            "dalla 2.6.2 e' unico e si configura nella configurazione "
+                            "di sistema. Controlla che sia impostato, altrimenti gli "
+                            "avvisi di scadenza non partiranno.")
 
     # -- orchestrazione ---------------------------------------------------
 

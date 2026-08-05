@@ -384,6 +384,58 @@ def duplicati():
     return render_template('apparecchi/duplicati.html', coppie=coppie, criteri=CRITERI)
 
 
+@apparecchi_bp.route('/apparecchi/<int:id>/fondi')
+@login_required
+def fondi_cerca(id):
+    """Cerca l'altra scheda da fondere con questa.
+
+    E' la seconda via alla fusione prevista dalla specifica della 2.6.1 e mai
+    costruita: nessun criterio automatico trova tutto, e due schede della
+    stessa macchina con matricole troppo diverse perche' un criterio le
+    accosti — 'R-00015' e 'INV/2019/887' — dall'elenco dei candidati non
+    escono mai.
+    """
+    apparecchio = apparecchio_accessibile(id)
+    if not apparecchio or g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        flash('Non autorizzato.', 'danger')
+        return redirect(url_for('apparecchi.lista'))
+
+    cerca = request.args.get('cerca', '').strip()
+    risultati = []
+    if cerca:
+        # Stesso ambito della pagina dei candidati, e per lo stesso motivo:
+        # NON filtro_divisione(), che onora g.divisione_attiva e per un admin
+        # che non ha ancora scelto "Tutte le divisioni" sarebbe una divisione
+        # specifica — il duplicato nell'altro reparto non si troverebbe.
+        struttura_id = getattr(g, 'struttura_id', None)
+        if struttura_id:
+            like = f'%{cerca}%'
+            risultati = query_all(
+                """SELECT a.id, a.matricola, a.marca, a.modello, a.descrizione,
+                          a.ubicazione, a.stato, d.nome AS divisione_nome
+                   FROM apparecchi a
+                   LEFT JOIN divisioni d ON d.id = a.divisione_id
+                   WHERE a.struttura_id = ? AND a.id != ?
+                     AND (a.matricola LIKE ? OR a.marca LIKE ? OR a.modello LIKE ?
+                          OR a.descrizione LIKE ? OR a.ubicazione LIKE ?
+                          OR a.fornitore LIKE ?)
+                   ORDER BY a.marca, a.modello, a.matricola
+                   LIMIT 50""",
+                [struttura_id, id, like, like, like, like, like, like])
+
+    # I dismessi si trovano, contrassegnati. L'elenco automatico dei candidati
+    # continua a escluderli: un elenco di proposte generate da un algoritmo
+    # deve stare stretto, o si riempie di rumore e non lo apre nessuno. Una
+    # ricerca digitata e' l'opposto — serve ai casi che l'algoritmo non trova,
+    # e chi la usa sa cosa cerca. Senza, il caso in cui qualcuno si accorge del
+    # doppione e invece di fondere DISMETTE una delle due schede non si
+    # riparerebbe piu': resterebbe una macchina sola con lo storico spezzato,
+    # meta' del quale su una scheda che la ricerca non mostra.
+    return render_template('apparecchi/fondi_cerca.html',
+                           apparecchio=apparecchio, cerca=cerca,
+                           risultati=risultati)
+
+
 def _due_schede_fondibili(id, altro_id):
     """Le due schede, se l'utente puo' agire su entrambe. Altrimenti (None, None).
 

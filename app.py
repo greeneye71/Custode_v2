@@ -19,7 +19,8 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-from flask import Flask, g, session, redirect, url_for, render_template, request
+from flask import (Flask, g, session, redirect, url_for, render_template,
+                   request, current_app)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf.csrf import CSRFProtect
 
@@ -30,7 +31,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.6.1"
+APP_VERSION = "2.6.2"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -257,6 +258,8 @@ def create_app():
     @app.context_processor
     def inject_globals():
         """Make config, user, and division data available in all templates."""
+        from posta import smtp_configurato
+
         single_struttura = config.get('single_struttura', False)
 
         struttura = getattr(g, 'struttura', None)
@@ -302,6 +305,14 @@ def create_app():
             'g_struttura': struttura,
             'g_is_superadmin_impersonating': is_superadmin_impersonating,
             'strutture_list': strutture_list,
+            # La schermata di accesso mostra «Password dimenticata?» solo se
+            # c'e' un server di posta da cui spedire: un pulsante che accetta
+            # la richiesta e non manda niente e' peggio che non averlo, perche'
+            # l'utente aspetta invano. Sta qui e non nella rotta perche'
+            # login.html viene reso da sei punti diversi di auth.py, e passarla
+            # a mano da ognuno e' il modo di dimenticarsene in uno.
+            'smtp_configurato': smtp_configurato(
+                current_app.config.get('APP_CONFIG') or config),
         }
 
         # Add user-related context if authenticated

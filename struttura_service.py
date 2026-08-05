@@ -299,7 +299,8 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
         'accessori': conta(f"SELECT COUNT(*) FROM accessori WHERE apparecchio_id IN ({figli})"),
         'import': conta("SELECT COUNT(*) FROM import_history WHERE struttura_id = ?"),
         'divisioni': conta("SELECT COUNT(*) FROM divisioni WHERE struttura_id = ?"),
-        'utenti': conta("SELECT COUNT(*) FROM utenti WHERE struttura_id = ?"),
+        'utenti': conta("SELECT COUNT(*) FROM utenti WHERE struttura_id = ? "
+                        "AND eliminato_il IS NULL"),
         'tecnici': conta("SELECT COUNT(*) FROM tecnici_strutture WHERE struttura_id = ?"),
     }
 

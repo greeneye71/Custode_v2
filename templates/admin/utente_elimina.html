@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Elimina utente{% endblock %}
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-person-x text-danger me-2"></i>Elimina utente</h2>
+
+<div class="card border-danger shadow-sm mb-4">
+  <div class="card-body">
+    <h4 class="mb-1">{{ utente.nome }} {{ utente.cognome }}</h4>
+    <p class="mb-2">
+      <code>{{ utente.email }}</code>
+      <span class="badge bg-secondary ms-2">{{ utente.ruolo }}</span>
+    </p>
+    <p class="text-muted mb-0">
+      {% if utente.struttura_nome %}Struttura: {{ utente.struttura_nome }}{% endif %}
+    </p>
+  </div>
+</div>
+
+<ul class="mb-4">
+  <li><strong>L'operazione non e' reversibile.</strong> A differenza della
+      disattivazione, non esiste un modo per riportarlo indietro: chi sbaglia
+      ricrea l'account e riassegna le divisioni.</li>
+  <li>Il suo <strong>nome resta</strong> sulle schede che ha inserito:
+    {% set totale = conteggi.values() | sum %}
+    {% if totale %}{{ totale }} righe fra apparecchi, interventi e documenti
+    continueranno a dire che le ha inserite lui.
+    {% else %}non ha inserito nulla.{% endif %}</li>
+  <li>L'indirizzo <code>{{ utente.email }}</code> <strong>torna libero</strong>
+      per un account nuovo.</li>
+</ul>
+
+<form method="post" action="{{ url_for('admin.utente_elimina', id=utente.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="d-flex gap-2">
+    <button class="btn btn-danger">Elimina definitivamente</button>
+    <a href="{{ url_for('admin.utenti') }}" class="btn btn-outline-secondary">Annulla</a>
+  </div>
+</form>
+{% endblock %}

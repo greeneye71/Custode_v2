@@ -452,3 +452,113 @@ def test_la_cancellazione_si_rifiuta_in_modalita_single(client, app, dati):
     assert 'single-struttura' in risposta.get_data(as_text=True).lower()
     with app.app_context():
         assert query_one("SELECT id FROM strutture WHERE id=?", (dati['s'],)) is not None
+
+
+def test_il_modulo_di_configurazione_non_ha_piu_i_campi_del_server(client, dati):
+    """Il server di posta e' infrastruttura del deployment: si configura una
+    volta sola, nella configurazione di sistema. Lasciare i campi qui
+    inviterebbe a compilarli, e da questa versione nessuno li leggerebbe."""
+    entra(client, 'super@x.it')
+
+    pagina = client.get(f"/strutture/{dati['s']}/config").get_data(as_text=True)
+
+    for campo in ('name="smtp_host"', 'name="smtp_port"', 'name="smtp_user"',
+                  'name="smtp_from"', 'name="smtp_password"', 'name="smtp_use_tls"'):
+        assert campo not in pagina
+
+
+def test_si_accendono_gli_avvisi_scegliendo_il_formato(client, app, dati):
+    from models import query_one
+    struttura_id = dati['s']
+    entra(client, 'super@x.it')
+
+    client.post(f"/strutture/{struttura_id}/config",
+                data={'avvisi_scadenza_attivi': '1',
+                      'avvisi_scadenza_formato': 'pdf',
+                      'report_frequenza': 'mensile'},
+                follow_redirects=True)
+
+    with app.app_context():
+        def valore(chiave):
+            riga = query_one("SELECT valore FROM strutture_config "
+                             "WHERE struttura_id=? AND chiave=?", (struttura_id, chiave))
+            return riga['valore'] if riga else None
+        assert valore('avvisi_scadenza_attivi') == '1'
+        assert valore('avvisi_scadenza_formato') == 'pdf'
+        assert valore('report_frequenza') == 'mensile'
+
+
+def test_togliere_la_spunta_spegne_davvero_gli_avvisi(client, app, dati):
+    """Una casella non spuntata non compare affatto nel POST. Se la rotta si
+    limitasse a scrivere i campi presenti, l'interruttore si potrebbe accendere
+    e mai piu' spegnere dall'interfaccia."""
+    from models import query_one, set_struttura_config
+    struttura_id = dati['s']
+    with app.app_context():
+        set_struttura_config(struttura_id, 'avvisi_scadenza_attivi', '1')
+    entra(client, 'super@x.it')
+
+    client.post(f"/strutture/{struttura_id}/config",
+                data={'avvisi_scadenza_formato': 'testo',
+                      'report_frequenza': 'settimanale'},
+                follow_redirects=True)
+
+    with app.app_context():
+        assert query_one("SELECT valore FROM strutture_config "
+                         "WHERE struttura_id=? AND chiave='avvisi_scadenza_attivi'",
+                         (struttura_id,)) is None
+
+
+def test_il_monitoraggio_casella_si_vede_ma_non_si_attiva(client, app, dati):
+    """Compare in pagina perche' e' una funzione annunciata, disabilitata in
+    attesa di un'implementazione migliore. Non ha una chiave di configurazione:
+    un valore che niente puo' scrivere e' esattamente il difetto trovato con
+    report_pdf_attivo, che sembrava configurazione viva e non lo era."""
+    from models import query_all
+    struttura_id = dati['s']
+    entra(client, 'super@x.it')
+
+    import re
+    pagina = client.get(f"/strutture/{struttura_id}/config").get_data(as_text=True)
+    assert 'monitora' in pagina.lower()
+    # Si isola il tag della casella prima di cercarci 'disabled': cercarlo in
+    # tutta la pagina non distingue niente, perche' 'disabled' compare gia'
+    # altrove nel modulo — con quella versione il test restava verde anche
+    # togliendo l'attributo proprio da questa casella.
+    tag = re.search(r'<input[^>]*id="monitoraggio_casella"[^>]*>', pagina)
+    assert tag is not None
+    assert 'disabled' in tag.group(0)
+    # E non ha un name: senza, non entra nel POST nemmeno se qualcuno toglie
+    # 'disabled' dagli strumenti del browser.
+    assert 'name=' not in tag.group(0)
+
+    # E anche forzando un POST a mano non nasce nessuna riga.
+    client.post(f"/strutture/{struttura_id}/config",
+                data={'monitoraggio_casella_attivo': '1',
+                      'report_frequenza': 'settimanale'},
+                follow_redirects=True)
+    with app.app_context():
+        chiavi = [r['chiave'] for r in query_all(
+            "SELECT chiave FROM strutture_config WHERE struttura_id=?", (struttura_id,))]
+    assert not any('monitoraggio' in c or 'imap' in c for c in chiavi)
+
+
+def test_il_modulo_non_scrive_piu_chiavi_del_server(client, app, dati):
+    """Anche con un POST che le contiene: la rotta deve conoscere solo le
+    preferenze, non il server."""
+    from models import query_all
+    struttura_id = dati['s']
+    entra(client, 'super@x.it')
+
+    client.post(f"/strutture/{struttura_id}/config",
+                data={'smtp_host': 'smtp.intruso.it', 'smtp_user': 'intruso@x.it',
+                      'smtp_password': 'segreta', 'smtp_from': 'intruso@x.it',
+                      'report_frequenza': 'settimanale'},
+                follow_redirects=True)
+
+    with app.app_context():
+        righe = query_all("SELECT chiave, valore FROM strutture_config "
+                          "WHERE struttura_id=?", (struttura_id,))
+    chiavi = [r['chiave'] for r in righe]
+    assert not any(c.startswith('smtp_') for c in chiavi)
+    assert 'segreta' not in [r['valore'] for r in righe]

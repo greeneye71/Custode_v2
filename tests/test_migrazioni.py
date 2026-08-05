@@ -178,3 +178,224 @@ def test_un_errore_di_schema_diverso_non_viene_mascherato(app):
             init_db()
         assert 'no such column' not in str(errore.value)
         assert 'migrate.py' not in str(errore.value)
+
+
+def test_la_colonna_eliminato_il_arriva_anche_su_un_database_esistente(app):
+    """La colonna sta in schema.sql per le installazioni nuove, ma
+    un'installazione gia' in servizio non riesegue schema.sql sulle tabelle che
+    esistono gia' (sono tutte CREATE TABLE IF NOT EXISTS): serve la migrazione
+    incrementale, che gira a ogni avvio."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("ALTER TABLE utenti DROP COLUMN eliminato_il")
+        db.commit()
+        assert 'eliminato_il' not in [r[1] for r in db.execute("PRAGMA table_info(utenti)")]
+
+        apply_schema_updates()
+
+        colonne = [r[1] for r in db.execute("PRAGMA table_info(utenti)")]
+        assert 'eliminato_il' in colonne
+        # E gli utenti esistenti non risultano cancellati.
+        assert db.execute(
+            "SELECT COUNT(*) FROM utenti WHERE eliminato_il IS NOT NULL").fetchone()[0] == 0
+
+
+def test_chi_riceveva_il_digest_lo_riceve_ancora_dopo_la_migrazione(app):
+    """L'asserzione che conta piu' di tutte. Prima della 2.6.2 il digest di
+    testo si accendeva con report_schedulato_attivo; quella chiave sparisce, e
+    se la migrazione non la convertisse, un parco di elettromedicali
+    smetterebbe di ricevere gli avvisi di scadenza senza che nessuno se ne
+    accorga — il modo peggiore di consegnare questa modifica."""
+    from models import get_db, execute, query_one, apply_schema_updates
+    with app.app_context():
+        s = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica A','A',1)").lastrowid
+        execute("INSERT INTO strutture_config (struttura_id,chiave,valore) "
+                "VALUES (?,'report_schedulato_attivo','1')", (s,))
+        execute("INSERT INTO strutture_config (struttura_id,chiave,valore) "
+                "VALUES (?,'report_frequenza','settimanale')", (s,))
+
+        apply_schema_updates()
+
+        attivi = query_one("SELECT valore FROM strutture_config "
+                           "WHERE struttura_id=? AND chiave='avvisi_scadenza_attivi'", (s,))
+        formato = query_one("SELECT valore FROM strutture_config "
+                            "WHERE struttura_id=? AND chiave='avvisi_scadenza_formato'", (s,))
+        assert attivi is not None and attivi['valore'] == '1'
+        # Testo, non PDF: chi riceveva un digest di testo deve continuare a
+        # ricevere quello. Cambiargli il formato sarebbe una sorpresa.
+        assert formato is not None and formato['valore'] == 'testo'
+        # La frequenza scelta non si perde per strada.
+        assert query_one("SELECT valore FROM strutture_config "
+                         "WHERE struttura_id=? AND chiave='report_frequenza'",
+                         (s,))['valore'] == 'settimanale'
+
+
+def test_chi_non_riceveva_il_digest_non_inizia_a_riceverlo(app):
+    """Il verso opposto, che il test precedente da solo non copre: una
+    migrazione che accendesse tutti sarebbe verde li' sopra e sbagliata qui.
+    Una struttura con l'interruttore a zero — o senza alcuna riga, il caso
+    normale — non deve trovarsi gli avvisi accesi dopo un aggiornamento."""
+    from models import execute, query_one, apply_schema_updates
+    with app.app_context():
+        spenta = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Spenta','SP',1)").lastrowid
+        muta = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Muta','MU',1)").lastrowid
+        execute("INSERT INTO strutture_config (struttura_id,chiave,valore) "
+                "VALUES (?,'report_schedulato_attivo','')", (spenta,))
+
+        apply_schema_updates()
+
+        for sid in (spenta, muta):
+            assert query_one("SELECT valore FROM strutture_config "
+                             "WHERE struttura_id=? AND chiave='avvisi_scadenza_attivi'",
+                             (sid,)) is None
+
+
+def test_le_chiavi_del_server_spariscono_password_cifrata_compresa(app):
+    """Un server di posta e' infrastruttura del deployment, non un dato della
+    clinica. Lasciare le righe significherebbe tenere configurazione morta che
+    sembra viva, con dentro una credenziale cifrata che finirebbe in ogni
+    archivio esportato."""
+    from models import execute, query_all, apply_schema_updates
+    with app.app_context():
+        s = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica A','A',1)").lastrowid
+        for chiave, valore in [
+            ('smtp_host', 'smtp.clinica.it'), ('smtp_port', '587'),
+            ('smtp_user', 'posta@clinica.it'), ('smtp_from', 'noreply@clinica.it'),
+            ('smtp_use_tls', '1'), ('smtp_password_encrypted', 'gAAAAABmSEGRETO='),
+            ('report_pdf_attivo', '1'),
+        ]:
+            execute("INSERT INTO strutture_config (struttura_id,chiave,valore) VALUES (?,?,?)",
+                    (s, chiave, valore))
+        # Una chiave che NON va toccata, per provare che la cancellazione e'
+        # mirata e non una pulizia a tappeto della configurazione.
+        execute("INSERT INTO strutture_config (struttura_id,chiave,valore) "
+                "VALUES (?,'anthropic_api_key','sk-ant-xxx')", (s,))
+
+        apply_schema_updates()
+
+        rimaste = [r['chiave'] for r in query_all(
+            "SELECT chiave FROM strutture_config WHERE struttura_id=?", (s,))]
+        for sparita in ('smtp_host', 'smtp_port', 'smtp_user', 'smtp_from',
+                        'smtp_use_tls', 'smtp_password_encrypted',
+                        'report_schedulato_attivo', 'report_pdf_attivo'):
+            assert sparita not in rimaste
+        assert 'anthropic_api_key' in rimaste
+        # E il segreto non e' rimasto da nessuna parte sotto un altro nome.
+        valori = [r['valore'] for r in query_all(
+            "SELECT valore FROM strutture_config WHERE struttura_id=?", (s,))]
+        assert 'gAAAAABmSEGRETO=' not in valori
+
+
+def test_la_migrazione_non_riaccende_avvisi_spenti_dall_operatore(app):
+    """apply_schema_updates() gira a OGNI avvio, non una volta sola: e' il
+    punto in cui una migrazione di dati puo' fare danno. Se la conversione
+    restasse ripetibile, il primo riavvio dopo che l'operatore ha tolto la
+    spunta agli avvisi glieli riaccenderebbe, e non capirebbe mai perche'.
+    L'idempotenza qui non e' un dettaglio di eleganza."""
+    from models import execute, query_one, query_all, apply_schema_updates
+    with app.app_context():
+        s = execute("INSERT INTO strutture (nome,codice,attiva) VALUES ('Clinica A','A',1)").lastrowid
+        execute("INSERT INTO strutture_config (struttura_id,chiave,valore) "
+                "VALUES (?,'report_schedulato_attivo','1')", (s,))
+
+        apply_schema_updates()
+        # L'operatore ci ripensa e spegne gli avvisi (il modulo cancella la riga).
+        execute("DELETE FROM strutture_config "
+                "WHERE struttura_id=? AND chiave='avvisi_scadenza_attivi'", (s,))
+        # Riavvio.
+        apply_schema_updates()
+
+        assert query_one("SELECT valore FROM strutture_config "
+                         "WHERE struttura_id=? AND chiave='avvisi_scadenza_attivi'",
+                         (s,)) is None
+        # E la seconda esecuzione non ha nemmeno duplicato il formato.
+        formati = query_all("SELECT valore FROM strutture_config "
+                            "WHERE struttura_id=? AND chiave='avvisi_scadenza_formato'", (s,))
+        assert len(formati) == 1
+
+
+def test_le_colonne_del_reset_arrivano_su_un_database_esistente(app):
+    """Come per eliminato_il: schema.sql non rifa' le tabelle che esistono
+    gia', quindi senza la migrazione incrementale un'installazione in servizio
+    resterebbe senza le due colonne e il reset esploderebbe al primo uso."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("ALTER TABLE utenti DROP COLUMN reset_hash")
+        db.execute("ALTER TABLE utenti DROP COLUMN reset_scadenza")
+        db.commit()
+
+        apply_schema_updates()
+
+        colonne = [r[1] for r in db.execute("PRAGMA table_info(utenti)")]
+        assert 'reset_hash' in colonne
+        assert 'reset_scadenza' in colonne
+
+
+def test_login_attempts_impara_l_esito_reset_senza_perdere_le_righe(app):
+    """Il CHECK di login_attempts non conosceva 'reset' e SQLite non permette
+    di allargarlo se non ricostruendo la tabella. La ricostruzione deve
+    conservare le righe: sono i contatori del blocco anti-forza-bruta, e
+    perderli significherebbe azzerare i blocchi in corso a ogni aggiornamento."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("DROP TABLE login_attempts")
+        db.execute("""
+            CREATE TABLE login_attempts (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              ip_address TEXT NOT NULL,
+              email      TEXT,
+              esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito')),
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                   "VALUES ('10.0.0.9', 'tizio@x.it', 'fallito')")
+        db.commit()
+
+        apply_schema_updates()
+
+        # La riga di prima e' ancora li', con il suo indirizzo.
+        riga = db.execute("SELECT ip_address, email, esito FROM login_attempts").fetchone()
+        assert riga is not None
+        assert (riga[0], riga[1], riga[2]) == ('10.0.0.9', 'tizio@x.it', 'fallito')
+        # E adesso 'reset' e' un esito ammesso.
+        db.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                   "VALUES ('10.0.0.9', 'tizio@x.it', 'reset')")
+        db.commit()
+        assert db.execute("SELECT COUNT(*) FROM login_attempts "
+                          "WHERE esito='reset'").fetchone()[0] == 1
+        # Nessuna tabella di appoggio dimenticata per strada.
+        assert db.execute("SELECT name FROM sqlite_master "
+                          "WHERE name LIKE '%login_attempts_old%'").fetchall() == []
+
+
+def test_la_ricostruzione_di_login_attempts_e_idempotente(app):
+    """apply_schema_updates() gira a ogni avvio: due esecuzioni non devono
+    duplicare le righe, lasciare tabelle di appoggio o rompere le chiavi.
+
+    Quello che questo test NON prova e' la guardia che salta la ricostruzione
+    quando e' gia' stata fatta: togliendola, la tabella verrebbe rifatta tutte
+    le volte conservando comunque le righe, e la suite resterebbe verde
+    (verificato). La guardia e' un risparmio, non una correttezza — vedi il
+    commento in models.apply_schema_updates()."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                   "VALUES ('10.0.0.9', 'tizio@x.it', 'reset')")
+        db.commit()
+
+        apply_schema_updates()
+        apply_schema_updates()
+
+        assert db.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == 1
+        assert db.execute("SELECT name FROM sqlite_master "
+                          "WHERE name LIKE '%login_attempts_old%'").fetchall() == []
+        db.execute("PRAGMA foreign_keys = ON")
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []

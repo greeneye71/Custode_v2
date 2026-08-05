@@ -51,8 +51,9 @@ CREATE INDEX IF NOT EXISTS idx_strutture_config_struttura ON strutture_config(st
 
 -- Chiavi valide: ai_provider, anthropic_api_key, ai_import_model,
 -- ai_email_model, ai_local_base_url, ai_local_model,
--- smtp_host, smtp_port, smtp_user, smtp_password_encrypted, smtp_from,
--- smtp_use_tls, report_frequenza, report_schedulato_attivo, report_pdf_attivo
+-- report_frequenza, avvisi_scadenza_attivi, avvisi_scadenza_formato
+-- Dalla 2.6.2 il server di posta e' solo di sistema: nessuna chiave smtp_*
+-- vive qui. La migrazione in models.apply_schema_updates() le cancella.
 
 -- ============================================
 -- API_TOKENS
@@ -83,7 +84,13 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   ip_address TEXT NOT NULL,
   email      TEXT,
-  esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito')),
+  -- 'reset' e' la richiesta di password dimenticata (2.6.2). Ha un valore
+  -- proprio e non riusa 'fallito' apposta: contarla fra i tentativi falliti
+  -- significherebbe che cinque richieste di reset bloccano il LOGIN da
+  -- quell'IP per un quarto d'ora, e dietro un tunnel dove i client si
+  -- presentano tutti con lo stesso indirizzo sarebbe la serratura
+  -- dell'installazione in mano a chiunque passi.
+  esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito', 'reset')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -132,6 +139,16 @@ CREATE TABLE IF NOT EXISTS utenti (
   -- che fino alla 2.6 significava vedere gli apparecchi di tutte le strutture.
   -- Chi elimina una struttura deve cancellarne prima gli utenti (lo fa
   -- struttura_service.rimuovi_strutture).
+  -- Valorizzata = utente cancellato: l'account e' distrutto ma la riga resta,
+  -- perche' otto colonne *_by referenziano utenti(id) e su un registro di
+  -- elettromedicali "chi ha inserito questo apparecchio" non deve sparire.
+  eliminato_il DATETIME,
+  -- Password temporanea del reset dalla schermata di accesso (2.6.2). Vale
+  -- ACCANTO a password_hash, non al suo posto: sulla pagina di accesso
+  -- chiunque puo' digitare l'indirizzo di un collega, e una temporanea che
+  -- sostituisse la vecchia sarebbe il modo di buttarlo fuori dal suo account.
+  reset_hash TEXT,
+  reset_scadenza DATETIME,
   FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE RESTRICT,
   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
 );

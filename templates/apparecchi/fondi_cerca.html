@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Fondi con… - {{ apparecchio.matricola }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="h4 mb-1">Fondi con&hellip;</h1>
+    <div class="text-muted small">
+      Scheda di partenza:
+      <strong>{{ apparecchio.marca }} {{ apparecchio.modello }}</strong>
+      (matr. {{ apparecchio.matricola or '—' }})
+    </div>
+  </div>
+  <a href="{{ url_for('apparecchi.dettaglio', id=apparecchio.id) }}"
+     class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-left me-1"></i> Torna alla scheda
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <p class="text-muted small">
+      Cerca l&#39;altra scheda dello stesso apparecchio: matricola, marca, modello,
+      descrizione, ubicazione o fornitore. Serve quando le due matricole sono troppo
+      diverse perch&eacute; l&#39;elenco dei possibili duplicati le accosti.
+    </p>
+    <form method="GET" action="{{ url_for('apparecchi.fondi_cerca', id=apparecchio.id) }}"
+          class="row g-2">
+      <div class="col-md-9">
+        <input type="text" class="form-control" name="cerca" value="{{ cerca }}"
+               placeholder="Matricola, marca, modello, ubicazione&hellip;" autofocus>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-primary w-100">
+          <i class="bi bi-search me-1"></i> Cerca
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if cerca %}
+  {% if risultati %}
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead>
+          <tr>
+            <th>Matricola</th>
+            <th>Apparecchio</th>
+            <th>Divisione</th>
+            <th>Ubicazione</th>
+            <th class="text-end">Azione</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in risultati %}
+          <tr>
+            <td>
+              {{ r.matricola or '—' }}
+              {% if r.stato == 'dismesso' %}
+              {# Contrassegno visibile: fondere con una scheda ritirata e' una
+                 scelta legittima — e' anzi il caso di chi ha dismesso il
+                 doppione invece di fonderlo — ma dev'essere consapevole. #}
+              <span class="badge bg-secondary ms-1">dismesso</span>
+              {% endif %}
+            </td>
+            <td>
+              <div>{{ r.marca }} {{ r.modello }}</div>
+              {% if r.descrizione %}
+              <div class="text-muted small">{{ r.descrizione }}</div>
+              {% endif %}
+            </td>
+            <td class="text-muted small">{{ r.divisione_nome or '—' }}</td>
+            <td class="text-muted small">{{ r.ubicazione or '—' }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-primary"
+                 href="{{ url_for('apparecchi.fondi', id=apparecchio.id, altro_id=r.id) }}">
+                <i class="bi bi-union me-1"></i> Confronta
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-secondary">Nessun apparecchio trovato per «{{ cerca }}».</div>
+  {% endif %}
+{% endif %}
+{% endblock %}

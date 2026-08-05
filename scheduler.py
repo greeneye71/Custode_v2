@@ -63,12 +63,6 @@ class BackgroundScheduler:
                 'last_run': 0,
             },
             {
-                'name': 'report_schedulati',
-                'func': self._send_scheduled_reports,
-                'interval': 3600,   # controlla ogni ora
-                'last_run': 0,
-            },
-            {
                 'name': 'cleanup_login_attempts',
                 'func': self._cleanup_login_attempts,
                 'interval': 86400,  # una volta al giorno
@@ -159,141 +153,96 @@ class BackgroundScheduler:
             logger.error(f"Errore pulizia login_attempts: {e}")
 
     def _send_deadline_alerts(self):
-        """Invia digest email scadenze a ogni struttura attiva con email_notifiche configurata."""
+        """Avvisi di scadenza alle strutture che li hanno chiesti.
+
+        Un interruttore e un formato al posto dei due percorsi separati della
+        2.6.1 (report_schedulato_attivo per il testo, report_pdf_attivo per il
+        PDF): la seconda chiave non veniva scritta da nessuna parte, quindi il
+        report PDF non e' mai stato raggiungibile.
+        """
         with self.app.app_context():
             from models import query_all, get_struttura_config
             strutture = query_all(
                 "SELECT * FROM strutture WHERE attiva=1 AND email_notifiche IS NOT NULL"
             )
-            global_cfg = self.app.config.get('APP_CONFIG', {})
 
             for struttura in strutture:
                 sid = struttura['id']
-                frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
-                attivo    = get_struttura_config(sid, 'report_schedulato_attivo', '0')
-                if attivo != '1':
+                if get_struttura_config(sid, 'avvisi_scadenza_attivi', '') != '1':
                     continue
-                if not self._is_digest_due(frequenza):
-                    continue
-
-                scadenze = query_all("""
-                    SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
-                           d.nome as divisione_nome
-                    FROM prossime_scadenze ps
-                    JOIN apparecchi a ON a.id = ps.apparecchio_id
-                    JOIN divisioni d ON d.id = a.divisione_id
-                    WHERE a.struttura_id = ?
-                    AND ps.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
-                    ORDER BY ps.priorita, ps.prossima_scadenza
-                """, (sid,))
-
-                if not scadenze:
+                if not self._is_digest_due(get_struttura_config(sid, 'report_frequenza',
+                                                                'settimanale')):
                     continue
 
-                self._invia_digest(struttura, scadenze, global_cfg)
-
-    def _send_scheduled_reports(self):
-        """Invia report periodici PDF alle strutture con report_pdf_attivo=1."""
-        with self.app.app_context():
-            from models import query_all, get_struttura_config
-            strutture = query_all("SELECT * FROM strutture WHERE attiva=1")
-            global_cfg = self.app.config.get('APP_CONFIG', {})
-
-            for struttura in strutture:
-                sid = struttura['id']
-                if get_struttura_config(sid, 'report_pdf_attivo', '0') != '1':
-                    continue
-                frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
-                if not self._is_digest_due(frequenza):
-                    continue
-                if not struttura.get('email_notifiche'):
-                    continue
-
+                formato = get_struttura_config(sid, 'avvisi_scadenza_formato', 'testo')
                 try:
-                    self._genera_e_invia_report(struttura, global_cfg)
+                    if formato == 'pdf':
+                        self._invia_report_pdf(struttura)
+                    else:
+                        self._invia_digest(struttura)
                 except Exception as e:
-                    logger.error(f"Errore report struttura {struttura['nome']}: {e}")
+                    # Gira in un thread di fondo: un'eccezione qui fermerebbe
+                    # gli avvisi di tutte le strutture successive, e nessuno la
+                    # vedrebbe se non nel log.
+                    logger.error(f"Errore avvisi struttura {struttura['nome']}: {e}")
 
-    def _genera_e_invia_report(self, struttura, global_cfg):
-        """Genera PDF scadenzario e lo invia via email alla struttura."""
-        from export_service import genera_report_scadenze_pdf
-        import tempfile, os
+    def _config_smtp(self):
+        """I parametri del server di posta, solo di sistema (vedi posta.py)."""
+        from posta import parametri
+        return parametri(self.app.config.get('APP_CONFIG'))
 
-        sid = struttura['id']
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
-            tmp_path = tmp.name
+    def _invia(self, struttura, messaggio):
+        """Spedisce un messaggio gia' pronto. True se e' partito.
 
-        try:
-            genera_report_scadenze_pdf(struttura_id=sid, output_path=tmp_path)
-            self._invia_pdf_allegato(struttura, tmp_path, global_cfg)
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        L'invio vero sta in posta.py, unico posto da cui parte la posta; qui
+        restano le righe di log, che nominano la struttura.
+        """
+        from posta import invia
 
-    def _decrypt_smtp_password(self, struttura, global_cfg):
-        """Decripta la password SMTP cifrata con Fernet, o legge quella in chiaro dal config globale."""
-        from models import get_struttura_config
-        sid = struttura['id']
-        smtp_pass_enc = get_struttura_config(sid, 'smtp_password_encrypted')
-        smtp_pass = ''
-        if smtp_pass_enc:
-            try:
-                import base64, hashlib
-                from cryptography.fernet import Fernet
-                key = global_cfg.get('encryption_key', '')
-                if key:
-                    fernet_key = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
-                    smtp_pass = Fernet(fernet_key).decrypt(smtp_pass_enc.encode()).decode()
-            except Exception as e:
-                logger.warning(f"Impossibile decifrare smtp_password per struttura {struttura['nome']}: {e}")
-        if not smtp_pass:
-            smtp_pass = global_cfg.get('smtp_password', '')
-        return smtp_pass
+        if not self._config_smtp()['host']:
+            logger.warning("SMTP di sistema non configurato: avviso non inviato "
+                           f"a {struttura['nome']}.")
+            return False
 
-    def _invia_pdf_allegato(self, struttura, pdf_path, global_cfg):
-        """Invia il PDF come allegato email alla struttura."""
-        import smtplib, os
+        if invia(self.app.config.get('APP_CONFIG'), struttura['email_notifiche'],
+                 messaggio):
+            logger.info(f"Avviso inviato a {struttura['email_notifiche']} "
+                        f"({struttura['nome']})")
+            return True
+        logger.error(f"Avviso non partito per {struttura['nome']}.")
+        return False
+
+    def _invia_report_pdf(self, struttura):
+        """Genera il report PDF delle scadenze e lo allega."""
+        import os
+        import tempfile
+        from email.mime.application import MIMEApplication
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
-        from email.mime.application import MIMEApplication
-        from models import get_struttura_config
+        from export_service import genera_report_scadenze_pdf
 
-        sid = struttura['id']
-        smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
-        smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
-        smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
-
-        smtp_pass = self._decrypt_smtp_password(struttura, global_cfg)
-
-        smtp_from = get_struttura_config(sid, 'smtp_from') or smtp_user
-        use_tls = (get_struttura_config(sid, 'smtp_use_tls') or '1') == '1'
-
-        if not smtp_host or not smtp_user:
-            logger.warning(f"SMTP non configurato per struttura {struttura['nome']}, report non inviato.")
-            return
-
-        msg = MIMEMultipart()
-        msg['From'] = smtp_from
-        msg['To'] = struttura['email_notifiche']
-        msg['Subject'] = f"Report scadenze {struttura['nome']} — {datetime.now().strftime('%d/%m/%Y')}"
-        msg.attach(MIMEText("In allegato il report periodico delle scadenze.", 'plain', 'utf-8'))
-
-        with open(pdf_path, 'rb') as f:
-            attach = MIMEApplication(f.read(), _subtype='pdf')
-            attach.add_header('Content-Disposition', 'attachment',
-                              filename=f"scadenze_{struttura['codice']}.pdf")
-            msg.attach(attach)
-
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            percorso = tmp.name
         try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-                if use_tls:
-                    server.starttls()
-                if smtp_user and smtp_pass:
-                    server.login(smtp_user, smtp_pass)
-                server.sendmail(smtp_from, struttura['email_notifiche'], msg.as_string())
-            logger.info(f"Report PDF inviato a {struttura['email_notifiche']} ({struttura['nome']})")
-        except Exception as e:
-            logger.error(f"Errore invio PDF {struttura['nome']}: {e}")
+            genera_report_scadenze_pdf(struttura_id=struttura['id'], output_path=percorso)
+
+            msg = MIMEMultipart()
+            msg['Subject'] = (f"Report scadenze {struttura['nome']} — "
+                              f"{datetime.now().strftime('%d/%m/%Y')}")
+            # Il corpo nomina la struttura: il mittente e' lo stesso per tutte,
+            # e senza aprire l'allegato non ci sarebbe altro modo di capirlo.
+            msg.attach(MIMEText(
+                f"In allegato il report periodico delle scadenze di {struttura['nome']}.",
+                'plain', 'utf-8'))
+            with open(percorso, 'rb') as f:
+                allegato = MIMEApplication(f.read(), _subtype='pdf')
+            allegato.add_header('Content-Disposition', 'attachment',
+                                filename=f"scadenze_{struttura['codice']}.pdf")
+            msg.attach(allegato)
+            self._invia(struttura, msg)
+        finally:
+            if os.path.exists(percorso):
+                os.remove(percorso)
 
     def _is_digest_due(self, frequenza):
         """Controlla se è il momento giusto per inviare il digest."""
@@ -306,25 +255,29 @@ class BackgroundScheduler:
             return now.day == 1 and now.hour == 7  # primo del mese alle 7:00
         return False
 
-    def _invia_digest(self, struttura, scadenze, global_cfg):
-        """Costruisce e invia l'email digest delle scadenze per una struttura."""
-        import smtplib
-        from email.mime.text import MIMEText
+    def _invia_digest(self, struttura):
+        """Il digest di testo delle scadenze della struttura.
+
+        Ogni riga porta la divisione, e l'intestazione porta la struttura: un
+        avviso di scadenza attraversa piu' divisioni, quindi nominarne una sola
+        nell'oggetto sarebbe falso, ma il destinatario deve comunque poter
+        capire di chi si parla — il mittente non glielo dice piu'.
+        """
         from email.mime.multipart import MIMEMultipart
-        from models import get_struttura_config
+        from email.mime.text import MIMEText
+        from models import query_all
 
-        sid = struttura['id']
-
-        smtp_host = get_struttura_config(sid, 'smtp_host') or global_cfg.get('smtp_host', '')
-        smtp_port = int(get_struttura_config(sid, 'smtp_port') or global_cfg.get('smtp_port', 587))
-        smtp_user = get_struttura_config(sid, 'smtp_user') or global_cfg.get('smtp_user', '')
-        smtp_pass = self._decrypt_smtp_password(struttura, global_cfg)
-
-        smtp_from = get_struttura_config(sid, 'smtp_from') or smtp_user
-        use_tls = (get_struttura_config(sid, 'smtp_use_tls') or '1') == '1'
-
-        if not smtp_host or not smtp_user:
-            logger.warning(f"SMTP non configurato per struttura {struttura['nome']}, digest non inviato.")
+        scadenze = query_all("""
+            SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
+                   d.nome as divisione_nome
+            FROM prossime_scadenze ps
+            JOIN apparecchi a ON a.id = ps.apparecchio_id
+            JOIN divisioni d ON d.id = a.divisione_id
+            WHERE a.struttura_id = ?
+            AND ps.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
+            ORDER BY ps.priorita, ps.prossima_scadenza
+        """, (struttura['id'],))
+        if not scadenze:
             return
 
         priorita_labels = {
@@ -345,24 +298,12 @@ class BackgroundScheduler:
                         f"  {nome_app} (mat. {s['matricola']}) — {s['divisione_nome']} — "
                         f"scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg)"
                     )
-        corpo = "\n".join(righe)
 
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = smtp_from
-            msg['To'] = struttura['email_notifiche']
-            msg['Subject'] = f"Scadenzario {struttura['nome']} — {datetime.now().strftime('%d/%m/%Y')}"
-            msg.attach(MIMEText(corpo, 'plain', 'utf-8'))
-
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-                if use_tls:
-                    server.starttls()
-                if smtp_user and smtp_pass:
-                    server.login(smtp_user, smtp_pass)
-                server.sendmail(smtp_from, struttura['email_notifiche'], msg.as_string())
-            logger.info(f"Digest inviato a {struttura['email_notifiche']} ({struttura['nome']})")
-        except Exception as e:
-            logger.error(f"Errore invio digest {struttura['nome']}: {e}")
+        msg = MIMEMultipart()
+        msg['Subject'] = (f"Scadenzario {struttura['nome']} — "
+                          f"{datetime.now().strftime('%d/%m/%Y')}")
+        msg.attach(MIMEText("\n".join(righe), 'plain', 'utf-8'))
+        self._invia(struttura, msg)
 
     def _check_backup(self):
         """Check if a weekly backup is needed (Sunday 03:00)."""

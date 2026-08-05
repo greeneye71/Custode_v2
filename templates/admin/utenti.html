@@ -79,14 +79,10 @@
                                         <i class="bi bi-key"></i>
                                     </button>
                                 </form>
-                                <form method="POST" action="{{ url_for('admin.utente_toggle', id=u.id) }}" class="d-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                    <button type="submit"
-                                            class="btn btn-outline-{% if u.attivo %}danger{% else %}success{% endif %} btn-action"
-                                            title="{% if u.attivo %}Disattiva{% else %}Attiva{% endif %}">
-                                        <i class="bi bi-{% if u.attivo %}x-circle{% else %}check-circle{% endif %}"></i>
-                                    </button>
-                                </form>
+                                <a href="{{ url_for('admin.utente_elimina_conferma', id=u.id) }}"
+                                   class="btn btn-outline-danger btn-action" title="Elimina">
+                                    <i class="bi bi-person-x"></i>
+                                </a>
                                 {% endif %}
                             </div>
                             {% endif %}

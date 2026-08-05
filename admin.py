@@ -16,7 +16,7 @@ from werkzeug.security import generate_password_hash
 
 from auth import (admin_required, superadmin_required,
                   tecnico_o_admin_required, operazione_globale_required)
-from models import query_one, query_all, execute, log_attivita
+from models import query_one, query_all, execute, log_attivita, get_db
 from ai_service import AI_PROVIDERS
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -97,6 +97,7 @@ def utenti():
             LEFT JOIN strutture s ON s.id = u.struttura_id
             LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
             LEFT JOIN divisioni d ON ud.divisione_id = d.id
+            WHERE u.eliminato_il IS NULL AND u.ruolo != 'tecnico'
             GROUP BY u.id ORDER BY u.ruolo, u.cognome, u.nome
         """)
     else:
@@ -106,7 +107,7 @@ def utenti():
             FROM utenti u
             LEFT JOIN utenti_divisioni ud ON u.id = ud.utente_id
             LEFT JOIN divisioni d ON ud.divisione_id = d.id
-            WHERE u.struttura_id = ? AND u.ruolo != 'superadmin'
+            WHERE u.struttura_id = ? AND u.ruolo != 'superadmin' AND u.eliminato_il IS NULL
             GROUP BY u.id ORDER BY u.cognome, u.nome
         """, (struttura_id,))
     return render_template('admin/utenti.html', utenti=users, is_superadmin=is_superadmin)
@@ -205,6 +206,14 @@ def utente_modifica(id):
         flash('Non hai i permessi per modificare questo utente.', 'danger')
         return redirect(url_for('admin.utenti'))
 
+    if utente['ruolo'] == 'tecnico':
+        flash('I tecnici si gestiscono dalla loro pagina.', 'warning')
+        return redirect(url_for('admin.tecnici'))
+
+    if utente['eliminato_il'] is not None:
+        flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
+        return redirect(url_for('admin.utenti'))
+
     is_superadmin = g.user['ruolo'] == 'superadmin'
     mia_struttura_id = _get_mia_struttura_id()
     struttura_id_utente = utente.get('struttura_id') or mia_struttura_id
@@ -236,9 +245,74 @@ def utente_modifica(id):
 
     struttura_id = (form.get('struttura_id', type=int) or struttura_id_utente
                     if is_superadmin else mia_struttura_id)
+    attivo = 1 if form.get('attivo') else 0
 
-    if ruolo not in ('admin', 'utente'):
-        ruolo = 'utente'
+    # Due cose non si possono cambiare su se stessi da questo modulo: 'attivo'
+    # e 'ruolo'. Entrambe vengono ignorate (non bloccano il resto del
+    # salvataggio: correggersi il nome deve continuare a funzionare), e
+    # l'operatore viene avvisato di cosa e' stato ignorato — un flash muto
+    # ("Utente aggiornato") sarebbe una piccola bugia.
+    ignorati_su_se_stessi = []
+
+    if utente['id'] == g.user['id']:
+        # Non ci si puo' disattivare da soli. Il freno era esplicito nella
+        # rotta /toggle rimossa da questo task: spostare 'attivo' nel modulo
+        # generico senza portarlo con se' bastava a renderlo raggiungibile in
+        # silenzio, anche solo salvando la propria scheda senza spuntare la
+        # casella. Per l'unico superadmin - o l'unico admin di un'installazione
+        # single-struttura, che puo' non avere alcun superadmin - sarebbe un
+        # blocco totale: auth.py pretende attivo=1 sia in sessione sia al
+        # login, e dall'applicazione non ci sarebbe piu' modo di rimediare.
+        if not attivo:
+            ignorati_su_se_stessi.append('disattivare il tuo account')
+        attivo = 1
+        # Simmetrico: non ci si puo' declassare (ne' promuovere) da soli.
+        # Senza questo freno, un admin che apre la propria scheda e sceglie
+        # 'Utente' nel menu Ruolo si autodeclassa con un solo POST — e se e'
+        # l'ultimo admin della struttura (o l'unico admin di
+        # un'installazione single-struttura senza superadmin) la struttura
+        # resta senza nessuno che possa amministrarla, con la stessa identica
+        # conseguenza e lo stesso rimedio da riga di comando che questo piano
+        # ha gia' chiuso per la cancellazione.
+        if ruolo != utente['ruolo']:
+            ignorati_su_se_stessi.append('cambiare il tuo ruolo')
+        ruolo = utente['ruolo']
+    # Stesso motivo per cui la cancellazione rifiuta l'ultimo admin di una
+    # struttura: disattivarlo la lascerebbe senza nessuno che possa
+    # gestirla. Si applica solo quando l'account si sta davvero spegnendo
+    # (1 -> 0): riattivare, o lasciare 'attivo' invariato, non deve mai
+    # essere ostacolato da qui.
+    elif utente['attivo'] and not attivo:
+        from utente_service import motivo_rifiuto
+        motivo = motivo_rifiuto(get_db(), id)
+        if motivo:
+            flash(MESSAGGI_RIFIUTO[motivo], 'danger')
+            return redirect(url_for('admin.utenti'))
+
+    # Stesso rifiuto, per la stessa ragione: declassare l'ultimo admin di una
+    # struttura la lascerebbe senza nessuno che possa gestirla — e' lo stesso
+    # stato finale della disattivazione qui sopra, per di piu' senza la
+    # riattivazione con un clic come rimedio. Si applica solo alla transizione
+    # vera admin -> utente: promuovere un utente ad admin, o lasciare il ruolo
+    # invariato, non deve mai essere bloccato da qui.
+    if utente['ruolo'] == 'admin' and ruolo == 'utente':
+        from utente_service import motivo_rifiuto
+        motivo = motivo_rifiuto(get_db(), id)
+        if motivo:
+            flash(MESSAGGI_RIFIUTO[motivo], 'danger')
+            return redirect(url_for('admin.utenti'))
+
+    # Il modulo generico gestisce 'admin' e 'utente'. Il ruolo di un superadmin
+    # non e' modificabile da qui, e non gli si assegna una struttura: fino alla
+    # 2.6.1 salvare la propria scheda declassava l'unico superadmin del
+    # deployment a 'utente', lasciando nessuno che potesse creare strutture o
+    # fare backup.
+    if utente['ruolo'] == 'superadmin':
+        ruolo = 'superadmin'
+        struttura_id = None
+    elif ruolo not in ('admin', 'utente'):
+        errors['ruolo'] = 'Ruolo non ammesso.'
+        ruolo = utente['ruolo']
 
     if not nome:
         errors['nome'] = 'Il nome è obbligatorio.'
@@ -262,40 +336,19 @@ def utente_modifica(id):
 
     execute(
         """UPDATE utenti SET nome=?, cognome=?, email=?, ruolo=?, struttura_id=?,
-           updated_at=datetime('now') WHERE id=?""",
-        (nome, cognome, email, ruolo, struttura_id, id)
+           attivo=?, updated_at=datetime('now') WHERE id=?""",
+        (nome, cognome, email, ruolo, struttura_id, attivo, id)
     )
     _assegna_divisioni(id, divisioni_sel, struttura_id, ruolo)
 
     log_attivita(g.user['id'], 'modifica', 'utenti', id,
                  f"Modificato utente: {nome} {cognome}", request.remote_addr,
                  struttura_id=struttura_id)
-    flash('Utente aggiornato.', 'success')
-    return redirect(url_for('admin.utenti'))
-
-
-@admin_bp.route('/utenti/<int:id>/toggle', methods=['POST'])
-@admin_required
-def utente_toggle(id):
-    """Attiva/disattiva utente. Admin può agire solo sulla propria struttura."""
-    utente = query_one("SELECT * FROM utenti WHERE id = ?", (id,))
-    if not utente:
-        flash('Utente non trovato.', 'danger')
-        return redirect(url_for('admin.utenti'))
-    if not _check_utente_scope(utente):
-        flash('Non hai i permessi per questa operazione.', 'danger')
-        return redirect(url_for('admin.utenti'))
-    if utente['id'] == g.user['id']:
-        flash('Non puoi disattivare il tuo account.', 'warning')
-        return redirect(url_for('admin.utenti'))
-
-    new_status = 0 if utente['attivo'] else 1
-    execute("UPDATE utenti SET attivo=?, updated_at=datetime('now') WHERE id=?",
-            (new_status, id))
-    action = 'attivato' if new_status else 'disattivato'
-    log_attivita(g.user['id'], action, 'utenti', id,
-                 f"Utente {action}: {utente['nome']} {utente['cognome']}", request.remote_addr)
-    flash(f"Utente {utente['nome']} {utente['cognome']} {action}.", 'success')
+    if ignorati_su_se_stessi:
+        flash("Non puoi " + " ne' ".join(ignorati_su_se_stessi) +
+              " da solo: il resto della modifica e' stato salvato.", 'warning')
+    else:
+        flash('Utente aggiornato.', 'success')
     return redirect(url_for('admin.utenti'))
 
 
@@ -311,10 +364,23 @@ def utente_reset_password(id):
         flash('Non hai i permessi per questa operazione.', 'danger')
         return redirect(url_for('admin.utenti'))
 
+    if utente['ruolo'] == 'tecnico':
+        flash('I tecnici si gestiscono dalla loro pagina.', 'warning')
+        return redirect(url_for('admin.tecnici'))
+
+    if utente['eliminato_il'] is not None:
+        flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
+        return redirect(url_for('admin.utenti'))
+
     import secrets
     temp_password = secrets.token_urlsafe(10)
+    # reset_hash/reset_scadenza si azzerano: se l'utente aveva chiesto una
+    # temporanea dalla schermata di accesso, quella dell'amministratore la
+    # sostituisce. Lasciarle valide entrambe significherebbe due credenziali in
+    # giro per lo stesso account, una delle quali in una casella di posta.
     execute(
-        """UPDATE utenti SET password_hash=?, primo_accesso=1, updated_at=datetime('now')
+        """UPDATE utenti SET password_hash=?, primo_accesso=1,
+                  reset_hash=NULL, reset_scadenza=NULL, updated_at=datetime('now')
            WHERE id=?""",
         (generate_password_hash(temp_password), id)
     )
@@ -324,6 +390,111 @@ def utente_reset_password(id):
                  f"Reset password per: {utente['nome']} {utente['cognome']}", request.remote_addr)
     flash(f"Password resettata per {utente['nome']} {utente['cognome']}. "
           f"Nuova password temporanea: {temp_password}", 'warning')
+    return redirect(url_for('admin.utenti'))
+
+
+MESSAGGI_RIFIUTO = {
+    'inesistente': 'Utente non trovato.',
+    'gia_cancellato': 'Questo utente e\' gia\' stato cancellato.',
+    'ultimo_admin': "E' l'ultimo amministratore attivo della struttura: senza "
+                    "di lui nessuno potrebbe piu' gestirla. Nomina prima un "
+                    "altro amministratore (o riattiva quello disattivato), "
+                    "poi procedi.",
+    'ultimo_superadmin': "E' l'ultimo superamministratore attivo: senza di lui "
+                         "nessuno potrebbe piu' creare strutture, fare backup o "
+                         "riparare una struttura rimasta senza amministratore.",
+}
+
+
+def _utente_cancellabile(id):
+    """(utente, messaggio_di_rifiuto). Se il messaggio c'e', non si procede."""
+    utente = query_one(
+        """SELECT u.*, s.nome AS struttura_nome
+           FROM utenti u LEFT JOIN strutture s ON s.id = u.struttura_id
+           WHERE u.id = ?""", (id,))
+    if not utente:
+        return None, MESSAGGI_RIFIUTO['inesistente']
+    if not _check_utente_scope(utente):
+        return None, 'Non hai i permessi per questa operazione.'
+    if utente['ruolo'] == 'tecnico':
+        return None, ('I tecnici si gestiscono dalla loro pagina: sono account '
+                      'condivisi fra strutture.')
+    if utente['id'] == g.user['id']:
+        return None, 'Non puoi cancellare il tuo account.'
+    from utente_service import motivo_rifiuto
+    motivo = motivo_rifiuto(get_db(), id)
+    if motivo:
+        return None, MESSAGGI_RIFIUTO[motivo]
+    return utente, None
+
+
+@admin_bp.route('/utenti/<int:id>/elimina', methods=['GET'])
+@admin_required
+def utente_elimina_conferma(id):
+    from utente_service import conteggi_riferimenti
+
+    utente, rifiuto = _utente_cancellabile(id)
+    if rifiuto:
+        flash(rifiuto, 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    return render_template('admin/utente_elimina.html', utente=utente,
+                           conteggi=conteggi_riferimenti(get_db(), id))
+
+
+@admin_bp.route('/utenti/<int:id>/elimina', methods=['POST'])
+@admin_required
+def utente_elimina(id):
+    from utente_service import cancella_utente
+
+    utente, rifiuto = _utente_cancellabile(id)
+    if rifiuto:
+        flash(rifiuto, 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    db = get_db()
+    try:
+        esito = cancella_utente(db, id)
+        conteggi = ', '.join(f"{n} {t}" for t, n in sorted(esito['conteggi'].items()) if n)
+        # Dentro la transazione e prima del commit, con struttura_id: e' la
+        # lezione della 2.6.1, dove la voce nasceva fuori dal try e con
+        # struttura_id nullo, quindi invisibile proprio a chi doveva leggerla.
+        log_attivita(
+            g.user['id'], 'eliminazione', 'utenti', id,
+            f"Utente eliminato: {esito['nome']} {esito['cognome']} <{esito['email']}>, "
+            f"ruolo {esito['ruolo']}. Righe che portano il suo nome: "
+            f"{conteggi or 'nessuna'}",
+            request.remote_addr, esito['struttura_id'])
+        # Il punto di non ritorno vero e' la chiamata sopra, non questa riga:
+        # log_attivita passa da models.execute(), che fa gia' db.commit() su
+        # questa stessa connessione (g.db), rendendo durevoli sia la voce di
+        # log sia l'UPDATE di cancella_utente() fatto poco sopra. Il commit
+        # qui sotto resta comunque come rete di sicurezza — se domani
+        # log_attivita smettesse di commitare da sola, l'ordine "registra
+        # prima, commit dopo" continuerebbe a valere — ma non e' lui il
+        # varco: e' per questo che il ramo except sotto non puo' assumere
+        # che un'eccezione qui significhi "non e' successo nulla".
+        db.commit()
+    except Exception as e:
+        current_app.logger.error(f'Cancellazione utente {id} fallita: {e}', exc_info=True)
+        # log_attivita puo' aver gia' reso durevole la cancellazione (vedi
+        # sopra) prima che il guasto avvenisse: db.rollback() non annulla
+        # cio' che e' gia' stato committato da un'altra chiamata a commit
+        # sulla stessa connessione. Bisogna quindi controllare lo stato
+        # reale della riga, non presumerlo dal fatto che sia arrivata
+        # un'eccezione, prima di scegliere il messaggio per l'operatore.
+        db.rollback()
+        riga = query_one("SELECT eliminato_il FROM utenti WHERE id = ?", (id,))
+        if riga and riga['eliminato_il'] is not None:
+            flash("L'utente risulta gia' cancellato: la registrazione era "
+                  "andata a buon fine, ma subito dopo qualcosa e' fallito. "
+                  "Controlla il log applicativo per i dettagli.", 'warning')
+        else:
+            flash("Cancellazione fallita, nulla e' stato modificato. Controlla il log.", 'danger')
+        return redirect(url_for('admin.utenti'))
+
+    flash(f"Utente {esito['nome']} {esito['cognome']} eliminato. "
+          f"L'indirizzo {esito['email']} e' di nuovo utilizzabile.", 'success')
     return redirect(url_for('admin.utenti'))
 
 
@@ -1170,15 +1341,17 @@ def superadmin_dashboard():
 @admin_required
 def sicurezza():
     """Visualizza e sblocca IP/utenti bloccati dal rate limiting."""
-    limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+    # Finestra calcolata da SQLite: created_at e' scritta con
+    # CURRENT_TIMESTAMP, che e' UTC, e confrontarla con l'ora locale teneva
+    # questo elenco sempre vuoto (vedi la nota in auth.login).
     ip_bloccati = query_all("""
         SELECT ip_address, email, COUNT(*) as tentativi, MAX(created_at) as ultimo
         FROM login_attempts
-        WHERE esito = 'fallito' AND created_at > ?
+        WHERE esito = 'fallito' AND created_at > datetime('now', '-15 minutes')
         GROUP BY ip_address
         HAVING COUNT(*) > 5
         ORDER BY ultimo DESC
-    """, (limite,))
+    """)
     return render_template('admin/sicurezza.html', ip_bloccati=ip_bloccati)
 
 
@@ -1218,7 +1391,7 @@ def tecnici():
         FROM utenti u
         LEFT JOIN tecnici_strutture ts ON u.id = ts.tecnico_id
         LEFT JOIN strutture s ON ts.struttura_id = s.id
-        WHERE u.ruolo = 'tecnico'
+        WHERE u.ruolo = 'tecnico' AND u.eliminato_il IS NULL
         GROUP BY u.id
         ORDER BY u.cognome, u.nome
     """)
@@ -1304,6 +1477,10 @@ def tecnico_modifica(id):
         flash('Tecnico non trovato.', 'danger')
         return redirect(url_for('admin.tecnici'))
 
+    if tecnico['eliminato_il'] is not None:
+        flash(MESSAGGI_RIFIUTO['gia_cancellato'], 'danger')
+        return redirect(url_for('admin.tecnici'))
+
     strutture = query_all("SELECT id, nome FROM strutture WHERE attiva=1 ORDER BY nome")
     strutture_assegnate = [
         r['struttura_id'] for r in
@@ -1369,33 +1546,37 @@ def tecnico_modifica(id):
 @admin_bp.route('/tecnici/<int:id>/elimina', methods=['POST'])
 @superadmin_required
 def tecnico_elimina(id):
-    """Elimina un tecnico (le assegnazioni strutture vengono rimosse per CASCADE)."""
+    """Elimina un tecnico sulla stessa primitiva usata per gli altri utenti."""
     tecnico = query_one("SELECT * FROM utenti WHERE id = ? AND ruolo = 'tecnico'", (id,))
     if not tecnico:
         flash('Tecnico non trovato.', 'danger')
         return redirect(url_for('admin.tecnici'))
 
-    # Invalida esplicitamente le sessioni attive del tecnico
-    execute("DELETE FROM sessioni WHERE utente_id = ?", (id,))
+    from utente_service import cancella_utente, motivo_rifiuto
 
-    # Annulla i riferimenti FK nullable prima di cancellare (no CASCADE su queste tabelle)
-    for tbl, col in [
-        ('log_attivita',   'utente_id'),
-        ('apparecchi',     'created_by'),
-        ('apparecchi',     'updated_by'),
-        ('manutenzioni',   'created_by'),
-        ('manutenzioni',   'updated_by'),
-        ('verifiche',      'created_by'),
-        ('verifiche',      'updated_by'),
-        ('documenti',      'uploaded_by'),
-        ('accessori',      'created_by'),
-        ('import_history', 'imported_by'),
-    ]:
-        execute(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = ?", (id,))
+    motivo = motivo_rifiuto(get_db(), id)
+    if motivo:
+        flash(MESSAGGI_RIFIUTO[motivo], 'danger')
+        return redirect(url_for('admin.tecnici'))
 
-    execute("DELETE FROM utenti WHERE id = ?", (id,))
-    log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
-                 f"Tecnico eliminato: {tecnico['nome']} {tecnico['cognome']}",
-                 request.remote_addr)
-    flash(f"Tecnico {tecnico['nome']} {tecnico['cognome']} eliminato.", 'success')
+    db = get_db()
+    try:
+        esito = cancella_utente(db, id)
+        log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
+                     f"Tecnico eliminato: {esito['nome']} {esito['cognome']} "
+                     f"<{esito['email']}>", request.remote_addr)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        current_app.logger.error(f'Cancellazione tecnico {id} fallita: {e}', exc_info=True)
+        riga = query_one("SELECT eliminato_il FROM utenti WHERE id = ?", (id,))
+        if riga and riga['eliminato_il'] is not None:
+            flash("Il tecnico risulta gia' cancellato: la registrazione era "
+                  "andata a buon fine, ma subito dopo qualcosa e' fallito. "
+                  "Controlla il log applicativo per i dettagli.", 'warning')
+        else:
+            flash("Cancellazione fallita, nulla e' stato modificato. Controlla il log.", 'danger')
+        return redirect(url_for('admin.tecnici'))
+
+    flash(f"Tecnico {esito['nome']} {esito['cognome']} eliminato.", 'success')
     return redirect(url_for('admin.tecnici'))
