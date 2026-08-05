@@ -467,3 +467,137 @@ def test_se_la_registrazione_fallisce_la_fusione_non_risulta_avvenuta(client, ap
         assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is not None
         assert query_one(
             "SELECT COUNT(*) AS n FROM log_attivita WHERE azione='fusione'")['n'] == 0
+
+
+# ---------------------------------------------------------------------------
+# I due punti d'ingresso (2.6.2)
+# ---------------------------------------------------------------------------
+
+def test_il_pulsante_dei_duplicati_non_e_piu_nella_scheda(client, dati):
+    """Riguarda tutti gli apparecchi della struttura, non quello aperto: stava
+    nel posto sbagliato per un errore del piano della 2.6.1."""
+    entra(client, 'admin@a.it')
+    pagina = client.get(f"/apparecchi/{dati['uno']}").get_data(as_text=True)
+    assert '/apparecchi/duplicati' not in pagina
+
+
+def test_il_pulsante_dei_duplicati_e_nell_elenco(client, dati):
+    entra(client, 'admin@a.it')
+    pagina = client.get('/apparecchi').get_data(as_text=True)
+    assert '/apparecchi/duplicati' in pagina
+
+
+def test_l_utente_semplice_non_vede_il_pulsante_dei_duplicati(client, dati):
+    """La condizione di ruolo c'era in dettaglio.html: spostando il pulsante non
+    va persa, o l'utente semplice clicca per ricevere un rifiuto."""
+    entra(client, 'utente@a.it')
+    pagina = client.get('/apparecchi').get_data(as_text=True)
+    assert '/apparecchi/duplicati' not in pagina
+
+
+def test_la_ricerca_trova_un_duplicato_che_l_algoritmo_non_propone(client, app, dati):
+    """L'intero motivo per cui questa via esiste. Le due matricole sono cosi'
+    diverse che nessuno dei tre criteri le accosta: usare una coppia
+    proponibile non proverebbe niente."""
+    from models import execute
+    with app.app_context():
+        altro = execute(
+            "INSERT INTO apparecchi (divisione_id,struttura_id,matricola,marca,modello,"
+            "stato,ubicazione) VALUES (?,?,'INV/2019/887','REXXAM','OZY','funzionante','Sala 1')",
+            (dati['div_a'], dati['a'])).lastrowid
+    entra(client, 'admin@a.it')
+
+    # L'elenco automatico non la propone...
+    automatico = client.get('/apparecchi/duplicati').get_data(as_text=True)
+    assert 'INV/2019/887' not in automatico
+
+    # ...ma la ricerca manuale la trova.
+    pagina = client.get(f"/apparecchi/{dati['uno']}/fondi?cerca=INV/2019").get_data(as_text=True)
+    assert 'INV/2019/887' in pagina
+    assert f"/apparecchi/{dati['uno']}/fondi/{altro}" in pagina
+
+
+def test_la_ricerca_non_esce_dalla_struttura(client, dati):
+    """Nemmeno cercando la matricola esatta di un apparecchio di un'altra
+    struttura.
+
+    Si cerca l'assenza del COLLEGAMENTO a quella scheda, non della stringa: il
+    modulo di ricerca rimanda il termine cercato dentro il campo 'value', per
+    non farlo riscrivere a chi affina la ricerca. Cercare 'SEGRETO-B' nella
+    pagina lo trova sempre — quella prima versione del test falliva su un
+    codice corretto, e con una matricola non riflessa sarebbe passata
+    qualunque cosa la rotta restituisse."""
+    entra(client, 'admin@a.it')
+    pagina = client.get(f"/apparecchi/{dati['uno']}/fondi?cerca=SEGRETO-B").get_data(as_text=True)
+    assert f"/fondi/{dati['estraneo']}" not in pagina
+    assert 'SIEMENS' not in pagina
+
+
+def test_la_ricerca_non_restituisce_la_scheda_di_partenza(client, dati):
+    """Fondere un apparecchio con se stesso e' un anello che la pagina di
+    confronto rifiuta gia': non va nemmeno offerto."""
+    entra(client, 'admin@a.it')
+    pagina = client.get(f"/apparecchi/{dati['uno']}/fondi?cerca=REXXAM").get_data(as_text=True)
+    assert f"/apparecchi/{dati['uno']}/fondi/{dati['uno']}" not in pagina
+    assert f"/apparecchi/{dati['uno']}/fondi/{dati['due']}" in pagina
+
+
+def test_senza_testo_cercato_non_elenca_niente(client, dati):
+    """Un invito a cercare, non l'intero parco: su una struttura con migliaia
+    di apparecchi un elenco completo non aiuta a trovare il duplicato e costa
+    una pagina lenta.
+
+    Il freno e' doppio e i due strati sono ridondanti: la rotta non interroga
+    il database senza testo, e il template non stampa la tabella senza testo.
+    Rompendone uno solo questo test resta verde (verificato per entrambi):
+    cade quando si rompono tutti e due. E' quindi una prova della coppia, non
+    di ciascun pezzo — chi ne toglie uno non se ne accorge da qui."""
+    entra(client, 'admin@a.it')
+    pagina = client.get(f"/apparecchi/{dati['uno']}/fondi").get_data(as_text=True)
+    assert f"/apparecchi/{dati['uno']}/fondi/{dati['due']}" not in pagina
+
+
+def test_la_ricerca_trova_un_dismesso_e_lo_segnala(client, app, dati):
+    """Divergenza voluta rispetto all'elenco automatico, ed e' quella che
+    qualcuno «uniformera'» per sbaglio: chi si accorge del doppione e invece di
+    fondere DISMETTE una delle due schede lascia una macchina con lo storico
+    spezzato, meta' del quale su una scheda che l'algoritmo non propone."""
+    from models import execute
+    with app.app_context():
+        execute("UPDATE apparecchi SET stato='dismesso' WHERE id=?", (dati['due'],))
+    entra(client, 'admin@a.it')
+
+    pagina = client.get(f"/apparecchi/{dati['uno']}/fondi?cerca=R00015").get_data(as_text=True)
+    assert 'R00015' in pagina
+    assert 'dismesso' in pagina.lower()
+
+    # E l'elenco automatico continua a non proporlo.
+    automatico = client.get('/apparecchi/duplicati').get_data(as_text=True)
+    assert 'R00015' not in automatico
+
+
+def test_la_ricerca_e_negata_a_un_utente_semplice(client, dati):
+    """Si guarda lo stato della rotta, non il contenuto della pagina di
+    atterraggio: un redirect verso l'elenco e' comunque un rifiuto."""
+    entra(client, 'utente@a.it')
+    risposta = client.get(f"/apparecchi/{dati['uno']}/fondi?cerca=REXXAM")
+    assert risposta.status_code == 302
+    assert '/apparecchi' in risposta.headers['Location']
+
+
+def test_dalla_ricerca_si_arriva_alla_fusione_e_si_conclude(client, app, dati):
+    """Il giro completo: due meta' che funzionano da sole non fanno una
+    funzione che funziona."""
+    from models import query_one
+    entra(client, 'admin@a.it')
+    pagina = client.get(f"/apparecchi/{dati['uno']}/fondi?cerca=R00015").get_data(as_text=True)
+    assert f"/apparecchi/{dati['uno']}/fondi/{dati['due']}" in pagina
+
+    confronto = client.get(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}")
+    assert confronto.status_code == 200
+
+    client.post(f"/apparecchi/{dati['uno']}/fondi/{dati['due']}",
+                data={'principale': str(dati['uno'])}, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['due'],)) is None
+        assert query_one("SELECT id FROM apparecchi WHERE id=?", (dati['uno'],)) is not None

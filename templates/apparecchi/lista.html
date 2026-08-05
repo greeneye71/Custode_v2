@@ -21,6 +21,11 @@
                     <i class="bi bi-file-earmark-pdf text-danger me-2"></i>PDF</a></li>
             </ul>
         </div>
+        {% if current_user.ruolo in ('admin', 'superadmin', 'tecnico') %}
+        <a href="{{ url_for('apparecchi.duplicati') }}" class="btn btn-outline-secondary">
+            <i class="bi bi-files me-1"></i> Possibili duplicati
+        </a>
+        {% endif %}
         <a href="{{ url_for('apparecchi.nuovo') }}" class="btn btn-primary">
             <i class="bi bi-plus-lg me-1"></i> Nuovo Apparecchio
         </a>
