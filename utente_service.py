@@ -79,33 +79,30 @@ def cancella_utente(conn, utente_id):
     return esito
 
 
-def motivo_rifiuto(conn, utente_id, per_disattivazione=False):
-    """Perche' questo utente non si puo' cancellare (o disattivare), o None se si puo'.
+def motivo_rifiuto(conn, utente_id):
+    """Perche' questo utente non si puo' cancellare, declassare o disattivare,
+    o None se si puo'.
 
     Guarda solo il database: i rifiuti che dipendono da CHI chiede (se stessi,
     l'ambito dell'admin) stanno nella rotta, che e' l'unica a sapere chi e'
     l'utente corrente.
 
-    Un utente gia' cancellato non conta come amministratore della struttura:
-    se contasse, l'ultimo admin rimasto risulterebbe cancellabile.
+    La domanda e' sempre e solo una: "dopo questa operazione resta qualcuno in
+    grado di amministrare la struttura ADESSO?". Si contano quindi solo gli
+    amministratori esistenti (``eliminato_il IS NULL``) e ATTIVI.
 
-    ``per_disattivazione`` distingue due domande che sembrano la stessa ma non
-    lo sono, e per questo contano cose diverse:
-
-    - CANCELLAZIONE (default, False): la domanda e' "esiste ancora un altro
-      amministratore, anche se disattivato?". Un admin disattivato ma non
-      cancellato esiste ancora e si puo' riattivare con un clic da chiunque
-      altro amministri la struttura: la sua sola presenza nella riga basta a
-      non lasciare la struttura orfana in modo permanente, ed e' il freno che
-      non obbliga l'operatore a ragionare sullo stato di attivazione mentre
-      sta cancellando. Si contano quindi tutti gli admin esistenti,
-      ``attivo`` o no.
-    - DISATTIVAZIONE (per_disattivazione=True): la domanda e' "resta qualcuno
-      che possa amministrare la struttura ADESSO?". Un admin gia' disattivato
-      non puo' entrare: contarlo come superstite invertirebbe il freno,
-      lasciando la struttura senza nessuno in grado di gestirla nell'immediato
-      pur segnalando (a torto) che qualcuno resta. Si contano quindi solo gli
-      admin/superadmin ``attivi``.
+    Perche' anche per la cancellazione, dove per un giro si erano contati tutti
+    gli admin esistenti, attivi o no: l'idea era che un admin disattivato
+    "esiste ancora e si riattiva con un clic da chiunque altro amministri la
+    struttura". Quella premessa e' falsa proprio nel caso in cui il conteggio
+    decide qualcosa — se l'altro admin e' disattivato, in quella struttura non
+    c'e' piu' nessuno che possa riattivarlo. Le tre operazioni portano allo
+    stesso identico stato finale (zero amministratori in grado di entrare), e
+    contando in due modi diversi si finiva per vietare la piu' lieve
+    (disattivazione, reversibile con un clic) e permettere le due peggiori
+    (declassamento e cancellazione). Ora il rimedio e' lo stesso in tutti i
+    casi: prima si riattiva o si nomina un altro amministratore, poi si
+    procede.
     """
     riga = conn.execute(
         "SELECT ruolo, struttura_id, eliminato_il FROM utenti WHERE id = ?",
@@ -116,19 +113,18 @@ def motivo_rifiuto(conn, utente_id, per_disattivazione=False):
     if eliminato_il is not None:
         return 'gia_cancellato'
 
-    filtro_attivo = " AND attivo = 1" if per_disattivazione else ""
-
     if ruolo == 'superadmin':
         rimasti = conn.execute(
             "SELECT COUNT(*) FROM utenti WHERE ruolo = 'superadmin' "
-            f"AND eliminato_il IS NULL{filtro_attivo} AND id != ?", (utente_id,)).fetchone()[0]
+            "AND eliminato_il IS NULL AND attivo = 1 AND id != ?", (utente_id,)).fetchone()[0]
         if rimasti == 0:
             return 'ultimo_superadmin'
 
     if ruolo == 'admin' and struttura_id is not None:
         rimasti = conn.execute(
             "SELECT COUNT(*) FROM utenti WHERE ruolo = 'admin' AND struttura_id = ? "
-            f"AND eliminato_il IS NULL{filtro_attivo} AND id != ?", (struttura_id, utente_id)).fetchone()[0]
+            "AND eliminato_il IS NULL AND attivo = 1 AND id != ?",
+            (struttura_id, utente_id)).fetchone()[0]
         if rimasti == 0:
             return 'ultimo_admin'
 

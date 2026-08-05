@@ -573,6 +573,51 @@ def test_non_si_disattiva_l_ultimo_admin_di_una_struttura(client, app, dati):
                          (dati['admin_a'],))['attivo'] == 1
 
 
+def test_non_si_declassa_l_ultimo_admin_attivo_se_l_altro_e_disattivato(client, app, dati):
+    """Le tre operazioni portano allo stesso stato finale — la struttura senza
+    nessun amministratore in grado di entrare — quindi devono contare allo
+    stesso modo. Con il conteggio precedente (tutti gli admin esistenti, anche
+    disattivati) questo POST passava: 'secondo' e' solo disattivato, contava
+    come superstite, e la struttura restava con zero admin attivi. Solo il
+    superadmin puo' arrivarci — un admin della struttura e' per forza attivo,
+    quindi resterebbe lui — ma e' proprio l'operatore a cui la disattivazione
+    dello stesso admin viene gia' vietata.
+
+    Il payload manda attivo='1' cosi' non e' il freno sulla disattivazione a
+    scattare al posto di quello sul ruolo."""
+    from models import query_one, execute
+    entra(client, 'super@x.it')
+    with app.app_context():
+        execute("UPDATE utenti SET attivo = 0 WHERE id = ?", (dati['secondo'],))
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/modifica",
+                    data={'nome': 'A', 'cognome': 'A', 'email': 'admin@a.it',
+                          'ruolo': 'utente', 'attivo': '1'},
+                    follow_redirects=True)
+    assert 'riattiva quello disattivato' in r.get_data(as_text=True)
+    with app.app_context():
+        assert query_one("SELECT ruolo FROM utenti WHERE id=?",
+                         (dati['admin_a'],))['ruolo'] == 'admin'
+
+
+def test_non_si_cancella_l_ultimo_admin_attivo_se_l_altro_e_disattivato(client, app, dati):
+    """Stesso stato finale del declassamento qui sopra, e per la cancellazione
+    e' pure irreversibile: la riga di admin_a diventa una lapide. Con il
+    conteggio precedente 'secondo' (disattivato) bastava a far passare la
+    cancellazione, e in quella struttura non restava nessuno capace nemmeno di
+    riattivarlo."""
+    from models import query_one, execute
+    entra(client, 'super@x.it')
+    with app.app_context():
+        execute("UPDATE utenti SET attivo = 0 WHERE id = ?", (dati['secondo'],))
+    r = client.post(f"/admin/utenti/{dati['admin_a']}/elimina", follow_redirects=True)
+    assert 'riattiva quello disattivato' in r.get_data(as_text=True)
+    with app.app_context():
+        riga = query_one("SELECT eliminato_il, email FROM utenti WHERE id=?",
+                         (dati['admin_a'],))
+        assert riga['eliminato_il'] is None
+        assert riga['email'] == 'admin@a.it'
+
+
 def test_cancellare_un_tecnico_non_restituisce_piu_500(client, app, dati):
     """Prima della correzione: HTTP 500 e tecnico ancora presente, perche' la
     rotta azzerava manutenzioni.updated_by e verifiche.updated_by, colonne che

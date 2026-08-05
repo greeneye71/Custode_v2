@@ -281,23 +281,20 @@ def utente_modifica(id):
     # struttura: disattivarlo la lascerebbe senza nessuno che possa
     # gestirla. Si applica solo quando l'account si sta davvero spegnendo
     # (1 -> 0): riattivare, o lasciare 'attivo' invariato, non deve mai
-    # essere ostacolato da qui. Conta solo gli admin ATTIVI: uno gia'
-    # disattivato non puo' amministrare nulla, quindi non basta a salvare
-    # la struttura dalla disattivazione di questo (vedi motivo_rifiuto).
+    # essere ostacolato da qui.
     elif utente['attivo'] and not attivo:
         from utente_service import motivo_rifiuto
-        motivo = motivo_rifiuto(get_db(), id, per_disattivazione=True)
+        motivo = motivo_rifiuto(get_db(), id)
         if motivo:
             flash(MESSAGGI_RIFIUTO[motivo], 'danger')
             return redirect(url_for('admin.utenti'))
 
-    # Stesso rifiuto della cancellazione, per la stessa ragione: declassare
-    # l'ultimo admin di una struttura la lascerebbe senza nessuno che possa
-    # gestirla. Si applica solo alla transizione vera admin -> utente:
-    # promuovere un utente ad admin, o lasciare il ruolo invariato, non deve
-    # mai essere bloccato da qui. Qui la domanda e' "esiste ancora un altro
-    # admin" (non "e' attivo"), quindi si usa motivo_rifiuto senza
-    # per_disattivazione, come per la cancellazione.
+    # Stesso rifiuto, per la stessa ragione: declassare l'ultimo admin di una
+    # struttura la lascerebbe senza nessuno che possa gestirla — e' lo stesso
+    # stato finale della disattivazione qui sopra, per di piu' senza la
+    # riattivazione con un clic come rimedio. Si applica solo alla transizione
+    # vera admin -> utente: promuovere un utente ad admin, o lasciare il ruolo
+    # invariato, non deve mai essere bloccato da qui.
     if utente['ruolo'] == 'admin' and ruolo == 'utente':
         from utente_service import motivo_rifiuto
         motivo = motivo_rifiuto(get_db(), id)
@@ -394,12 +391,13 @@ def utente_reset_password(id):
 MESSAGGI_RIFIUTO = {
     'inesistente': 'Utente non trovato.',
     'gia_cancellato': 'Questo utente e\' gia\' stato cancellato.',
-    'ultimo_admin': "E' l'ultimo amministratore della struttura: senza di lui "
-                    "nessuno potrebbe piu' gestirla. Nomina prima un altro "
-                    "amministratore, poi cancella questo.",
-    'ultimo_superadmin': "E' l'ultimo superamministratore: cancellandolo nessuno "
-                         "potrebbe piu' creare strutture, fare backup o riparare "
-                         "una struttura rimasta senza amministratore.",
+    'ultimo_admin': "E' l'ultimo amministratore attivo della struttura: senza "
+                    "di lui nessuno potrebbe piu' gestirla. Nomina prima un "
+                    "altro amministratore (o riattiva quello disattivato), "
+                    "poi procedi.",
+    'ultimo_superadmin': "E' l'ultimo superamministratore attivo: senza di lui "
+                         "nessuno potrebbe piu' creare strutture, fare backup o "
+                         "riparare una struttura rimasta senza amministratore.",
 }
 
 

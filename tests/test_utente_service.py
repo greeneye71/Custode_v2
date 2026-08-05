@@ -164,14 +164,22 @@ def test_l_ultimo_admin_di_una_struttura_non_si_cancella(conn):
     assert motivo_rifiuto(con, ids['admin2']) == 'ultimo_admin'
 
 
-def test_si_contano_tutti_gli_admin_esistenti_non_solo_gli_attivi(conn):
-    """Il freno non deve obbligare l'operatore a ragionare sullo stato di
-    attivazione mentre sta cancellando."""
+def test_un_admin_disattivato_non_conta_come_superstite(conn):
+    """Rovescia una scelta precedente, che contava tutti gli admin esistenti
+    (attivi o no) per non obbligare l'operatore a ragionare sullo stato di
+    attivazione mentre cancellava. La giustificazione era che un admin
+    disattivato "si riattiva con un clic da chiunque altro amministri la
+    struttura" — falsa proprio qui, dove il conteggio decide: admin2 e'
+    disattivato e admin1 e' l'unico rimasto in grado di entrare, quindi dopo
+    la sua cancellazione in questa struttura non c'e' nessuno che possa
+    riattivare admin2. Il rimedio (riattivare admin2, o nominare un altro
+    admin) e' un passo in piu' per l'operatore, ma e' l'unico che non lascia
+    la struttura senza amministratori."""
     from utente_service import motivo_rifiuto
     con, ids, _s, _ap = conn
     con.execute("UPDATE utenti SET attivo = 0 WHERE id = ?", (ids['admin2'],))
     con.commit()
-    assert motivo_rifiuto(con, ids['admin1']) is None
+    assert motivo_rifiuto(con, ids['admin1']) == 'ultimo_admin'
 
 
 def test_l_ultimo_superadmin_non_si_cancella(conn):
@@ -193,6 +201,21 @@ def test_con_due_superadmin_si_puo_cancellare(conn):
                 "VALUES ('s2@x.it','h','S','2','superadmin')")
     con.commit()
     assert motivo_rifiuto(con, uno) is None
+
+
+def test_un_superadmin_disattivato_non_conta_come_superstite(conn):
+    """Come per gli admin di struttura, e con meno rimedi: se l'unico altro
+    superadmin e' disattivato, cancellare questo lascia il deployment senza
+    nessuno che possa riattivarlo — non c'e' un ruolo piu' alto a cui
+    chiedere, si esce solo da riga di comando."""
+    from utente_service import motivo_rifiuto
+    con, _ids, _s, _ap = conn
+    uno = con.execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo) "
+                      "VALUES ('s1@x.it','h','S','1','superadmin')").lastrowid
+    con.execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,attivo) "
+                "VALUES ('s2@x.it','h','S','2','superadmin',0)")
+    con.commit()
+    assert motivo_rifiuto(con, uno) == 'ultimo_superadmin'
 
 
 def test_un_utente_gia_cancellato_non_si_ricancella(conn):
