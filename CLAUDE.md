@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v2.6.1** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.6.2** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -31,7 +31,13 @@ python toggle_modalita.py --status
 python importa_installazione.py <source-install-dir> --dry-run
 ```
 
-No build step needed. No test suite exists.
+No build step needed.
+
+```bash
+# Test suite (pytest). Circa quattro minuti: il round-trip di
+# importa_installazione.py lancia lo script come sottoprocesso.
+python -m pytest tests/ -q
+```
 
 ## Importing another installation
 
@@ -112,6 +118,11 @@ Key fields (all in `config.local.json`):
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
 | `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
 | `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
+| `posta.py` | The only place mail leaves from: system-wide SMTP resolution and sending |
+| `reset_password.py` | Forgotten-password flow: temporary password valid *alongside* the current one |
+| `utente_service.py` | User deletion (tombstone rows), last-admin refusals |
+| `fusione_service.py` | Duplicate-device detection and merge |
+| `struttura_service.py` | Facility export/deletion, attachment perimeter |
 
 ### Database
 SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
