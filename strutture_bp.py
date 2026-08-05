@@ -2,14 +2,11 @@
 MedInventory - Gestione Strutture (superadmin)
 """
 
-import base64
-import hashlib
 import httpx
 import os
 import re
 from datetime import datetime
 
-from cryptography.fernet import Fernet
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
     flash, g, current_app, jsonify
@@ -741,38 +738,33 @@ def config(struttura_id):
             # Admin uses the AJAX test-ai endpoint for AI config, not this form
             return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
-        # Superadmin only: save SMTP + report fields
-        chiavi_smtp_report = [
-            'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'smtp_use_tls',
-            'report_frequenza', 'report_schedulato_attivo',
-        ]
-        CHECKBOX_KEYS = {'smtp_use_tls', 'report_schedulato_attivo'}
-        for chiave in chiavi_smtp_report:
-            if chiave in CHECKBOX_KEYS:
+        # Solo le preferenze: dalla 2.6.2 il server di posta e' unico e vive
+        # nella configurazione di sistema. Le chiavi smtp_* qui non si scrivono
+        # piu' — nessuno le leggerebbe — e la migrazione in
+        # models.apply_schema_updates() ha gia' cancellato quelle esistenti,
+        # password cifrata compresa.
+        CHIAVI_PREFERENZE = ['avvisi_scadenza_attivi', 'avvisi_scadenza_formato',
+                             'report_frequenza']
+        CASELLE = {'avvisi_scadenza_attivi'}
+        for chiave in CHIAVI_PREFERENZE:
+            if chiave in CASELLE:
                 valore = '1' if request.form.get(chiave) else ''
             else:
                 valore = request.form.get(chiave, '').strip()
             if valore:
                 set_struttura_config(struttura_id, chiave, valore)
             else:
+                # Una casella non spuntata non compare affatto nel POST: senza
+                # questa cancellazione l'interruttore si accenderebbe e non si
+                # potrebbe piu' spegnere dall'interfaccia.
                 execute(
                     "DELETE FROM strutture_config WHERE struttura_id=? AND chiave=?",
                     (struttura_id, chiave)
                 )
-        smtp_password = request.form.get('smtp_password', '').strip()
-        if smtp_password:
-            key = current_app.config['APP_CONFIG'].get('encryption_key', '')
-            if key:
-                fernet_key = base64.urlsafe_b64encode(
-                    hashlib.sha256(key.encode()).digest()
-                )
-                f = Fernet(fernet_key)
-                encrypted = f.encrypt(smtp_password.encode()).decode()
-                set_struttura_config(struttura_id, 'smtp_password_encrypted', encrypted)
 
         flash('Configurazione salvata.', 'success')
         log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
-                     'Configurazione SMTP/report salvata', request.remote_addr)
+                     'Preferenze avvisi di scadenza salvate', request.remote_addr)
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
     cfg = get_struttura_config_all(struttura_id)

@@ -139,94 +139,65 @@
   <div class="row g-4">
 
     {# ------------------------------------------------------------------ #}
-    {# Sezione: SMTP / Notifiche                                           #}
+    {# Sezione: Avvisi di scadenza                                         #}
     {# ------------------------------------------------------------------ #}
     <div class="col-12">
       <div class="card">
         <div class="card-header">
-          <i class="bi bi-envelope me-1"></i> SMTP / Notifiche
+          <i class="bi bi-bell me-1"></i> Avvisi di scadenza
         </div>
         <div class="card-body">
+          <p class="text-muted small">
+            Gli avvisi partono dal server di posta di sistema, uguale per tutte le
+            strutture. Il destinatario e&#39; l&#39;indirizzo per le notifiche indicato
+            nella scheda della struttura.
+          </p>
           <div class="row g-3">
-
-            <div class="col-md-6">
-              <label class="form-label">Host SMTP</label>
-              <input type="text" class="form-control" name="smtp_host"
-                     value="{{ cfg.get('smtp_host', '') }}"
-                     placeholder="smtp.esempio.it">
-            </div>
-
-            <div class="col-md-2">
-              <label class="form-label">Porta SMTP</label>
-              <input type="number" class="form-control" name="smtp_port"
-                     value="{{ cfg.get('smtp_port', '') }}"
-                     placeholder="587">
-            </div>
-
-            <div class="col-md-4">
-              <label class="form-label">Utente SMTP</label>
-              <input type="text" class="form-control" name="smtp_user"
-                     value="{{ cfg.get('smtp_user', '') }}"
-                     placeholder="utente@esempio.it">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Indirizzo mittente (From)</label>
-              <input type="email" class="form-control" name="smtp_from"
-                     value="{{ cfg.get('smtp_from', '') }}"
-                     placeholder="noreply@struttura.it">
-            </div>
-
-            <div class="col-md-6">
-              <label class="form-label">Password SMTP</label>
-              <input type="password" class="form-control" name="smtp_password"
-                     placeholder="Lascia vuoto per non modificare">
-              <div class="form-text">La password viene salvata cifrata.</div>
-            </div>
 
             <div class="col-12">
               <div class="form-check">
-                <input class="form-check-input" type="checkbox" name="smtp_use_tls"
-                       id="smtp_use_tls" value="1"
-                       {% if cfg.get('smtp_use_tls') in ('1', 'true', 'True', 1, True) %}checked{% endif %}>
-                <label class="form-check-label" for="smtp_use_tls">Usa TLS</label>
+                <input class="form-check-input" type="checkbox" name="avvisi_scadenza_attivi"
+                       id="avvisi_scadenza_attivi" value="1"
+                       {% if cfg.get('avvisi_scadenza_attivi') == '1' %}checked{% endif %}>
+                <label class="form-check-label" for="avvisi_scadenza_attivi">
+                  Invia gli avvisi di scadenza
+                </label>
               </div>
             </div>
 
-          </div>
-        </div>
-      </div>
-    </div>
-
-    {# ------------------------------------------------------------------ #}
-    {# Sezione: Report schedulati                                          #}
-    {# ------------------------------------------------------------------ #}
-    <div class="col-12">
-      <div class="card">
-        <div class="card-header">
-          <i class="bi bi-calendar-check me-1"></i> Report schedulati
-        </div>
-        <div class="card-body">
-          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Formato</label>
+              <select class="form-select" name="avvisi_scadenza_formato">
+                <option value="testo" {% if cfg.get('avvisi_scadenza_formato', 'testo') != 'pdf' %}selected{% endif %}>Elenco nel corpo dell&#39;email</option>
+                <option value="pdf"   {% if cfg.get('avvisi_scadenza_formato') == 'pdf' %}selected{% endif %}>Report PDF allegato</option>
+              </select>
+            </div>
 
             <div class="col-md-4">
-              <label class="form-label">Frequenza report</label>
+              <label class="form-label">Frequenza</label>
               <select class="form-select" name="report_frequenza">
-                <option value="" {% if not cfg.get('report_frequenza') %}selected{% endif %}>— usa default globale —</option>
+                <option value="" {% if not cfg.get('report_frequenza') %}selected{% endif %}>&mdash; usa default globale &mdash;</option>
                 <option value="giornaliero" {% if cfg.get('report_frequenza') == 'giornaliero' %}selected{% endif %}>Giornaliero</option>
                 <option value="settimanale" {% if cfg.get('report_frequenza') == 'settimanale' %}selected{% endif %}>Settimanale</option>
                 <option value="mensile"     {% if cfg.get('report_frequenza') == 'mensile' %}selected{% endif %}>Mensile</option>
               </select>
             </div>
 
-            <div class="col-md-8 d-flex align-items-end">
+            {# La casella non ha name: senza, non finisce nel POST nemmeno se
+               qualcuno toglie 'disabled' dagli strumenti del browser, e non
+               esiste nessuna chiave di configurazione che la rappresenti. #}
+            <div class="col-12">
               <div class="form-check">
-                <input class="form-check-input" type="checkbox" name="report_schedulato_attivo"
-                       id="report_schedulato_attivo" value="1"
-                       {% if cfg.get('report_schedulato_attivo') in ('1', 'true', 'True', 1, True) %}checked{% endif %}>
-                <label class="form-check-label" for="report_schedulato_attivo">
-                  Report schedulato attivo
+                <input class="form-check-input" type="checkbox"
+                       id="monitoraggio_casella" disabled>
+                <label class="form-check-label text-muted" for="monitoraggio_casella">
+                  Monitora una casella di posta per i verbali di manutenzione
                 </label>
+                <div class="form-text">
+                  Disponibile in una versione successiva: oggi il monitoraggio della
+                  posta in arrivo e&#39; unico per l&#39;installazione e si configura nella
+                  configurazione di sistema.
+                </div>
               </div>
             </div>
 
