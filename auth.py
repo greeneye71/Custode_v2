@@ -673,10 +673,18 @@ def cambio_password():
     if errors:
         return render_template('cambio_password.html', errors=errors)
 
-    # Update password
+    # Update password. L'azzeramento del reset qui e' una rete, non un freno
+    # portante: per arrivare a questa pagina bisogna essere passati da login(),
+    # che azzera gia' il reset sia entrando con la password normale sia
+    # consumando la temporanea. Nessun test puo' quindi distinguerlo —
+    # togliendolo la suite resta verde (verificato) — e resta scritto perche'
+    # questa e' l'ultima riga che tocca password_hash: il giorno in cui si
+    # arrivasse qui per un'altra strada, la temporanea non deve sopravvivere
+    # alla password che sostituisce.
     new_hash = generate_password_hash(nuova_password)
     execute(
         """UPDATE utenti SET password_hash = ?, primo_accesso = 0,
+                  reset_hash = NULL, reset_scadenza = NULL,
                   updated_at = datetime('now')
            WHERE id = ?""",
         (new_hash, g.user['id'])

@@ -70,8 +70,14 @@ def cancella_utente(conn, utente_id):
     conn.execute("DELETE FROM sessioni WHERE utente_id = ?", (utente_id,))
     conn.execute("DELETE FROM utenti_divisioni WHERE utente_id = ?", (utente_id,))
     conn.execute("DELETE FROM tecnici_strutture WHERE tecnico_id = ?", (utente_id,))
+    # reset_hash e reset_scadenza vanno azzerate insieme alla password: sono
+    # una password anche loro. Oggi non basterebbero a entrare — il login
+    # cerca l'utente con attivo = 1 — ma lasciare una credenziale viva su una
+    # riga che rappresenta un account distrutto e' esattamente il genere di
+    # dettaglio che una modifica futura al login trasforma in un buco.
     conn.execute(
         "UPDATE utenti SET email = ?, password_hash = ?, attivo = 0, "
+        "reset_hash = NULL, reset_scadenza = NULL, "
         "eliminato_il = ?, updated_at = ? WHERE id = ?",
         (email_liberata(email, utente_id), PASSWORD_INUTILIZZABILE,
          datetime.now().strftime('%Y-%m-%d %H:%M:%S'),

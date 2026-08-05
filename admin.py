@@ -374,8 +374,13 @@ def utente_reset_password(id):
 
     import secrets
     temp_password = secrets.token_urlsafe(10)
+    # reset_hash/reset_scadenza si azzerano: se l'utente aveva chiesto una
+    # temporanea dalla schermata di accesso, quella dell'amministratore la
+    # sostituisce. Lasciarle valide entrambe significherebbe due credenziali in
+    # giro per lo stesso account, una delle quali in una casella di posta.
     execute(
-        """UPDATE utenti SET password_hash=?, primo_accesso=1, updated_at=datetime('now')
+        """UPDATE utenti SET password_hash=?, primo_accesso=1,
+                  reset_hash=NULL, reset_scadenza=NULL, updated_at=datetime('now')
            WHERE id=?""",
         (generate_password_hash(temp_password), id)
     )

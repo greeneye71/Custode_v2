@@ -327,3 +327,55 @@ def test_se_l_email_non_parte_il_reset_non_resta_aperto(client, app, posta, dati
     with app.app_context():
         riga = query_one("SELECT reset_hash FROM utenti WHERE id=?", (dati['mario'],))
         assert riga['reset_hash'] is None
+
+
+# ---------------------------------------------------------------------------
+# Una temporanea non deve sopravvivere a chi la rende inutile
+# ---------------------------------------------------------------------------
+
+# Non c'e' un test sull'azzeramento dentro cambio_password: per arrivare a
+# quella pagina si passa da login(), che il reset lo ha gia' azzerato: entrando
+# con la password normale lo cancella, entrando con la temporanea la consuma.
+# Un test scritto lo stesso passava con e senza la correzione — vedi il
+# commento in auth.cambio_password.
+
+def test_il_reset_dell_amministratore_annulla_quello_in_sospeso(client, app, posta, dati):
+    """Due credenziali valide insieme per lo stesso account, una delle quali in
+    una casella di posta, non sono quello che l'amministratore intende quando
+    reimposta una password."""
+    from models import execute, query_one
+    from werkzeug.security import generate_password_hash
+    with app.app_context():
+        execute("INSERT INTO utenti (email,password_hash,nome,cognome,ruolo,struttura_id,"
+                "primo_accesso) VALUES ('capo@a.it',?,'C','C','admin',?,0)",
+                (generate_password_hash('Passw0rd!'), dati['s']))
+    chiedi(client)
+    temporanea = temporanea_spedita()
+
+    client.post('/login', data={'email': 'capo@a.it', 'password': 'Passw0rd!'})
+    client.post(f"/admin/utenti/{dati['mario']}/reset-password", follow_redirects=True)
+
+    with app.app_context():
+        assert query_one("SELECT reset_hash FROM utenti WHERE id=?",
+                         (dati['mario'],))['reset_hash'] is None
+    client.get('/logout')
+    risposta = client.post('/login', data={'email': 'mario@a.it', 'password': temporanea})
+    assert risposta.status_code == 200
+    with client.session_transaction() as sessione:
+        assert 'token' not in sessione
+
+
+def test_cancellare_l_utente_azzera_la_sua_temporanea(client, app, posta, dati):
+    """La riga sopravvive come voce storica, ma non deve conservare una
+    credenziale viva."""
+    from models import get_db, query_one
+    chiedi(client)
+    with app.app_context():
+        from utente_service import cancella_utente
+        conn = get_db()
+        cancella_utente(conn, dati['mario'])
+        conn.commit()
+        riga = query_one("SELECT reset_hash, reset_scadenza FROM utenti WHERE id=?",
+                         (dati['mario'],))
+        assert riga['reset_hash'] is None
+        assert riga['reset_scadenza'] is None
