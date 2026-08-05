@@ -285,6 +285,30 @@ def _load_user_from_session():
     else:
         g.divisione_attiva = None
 
+    # Con una sola divisione accessibile la barra non mostra piu' il menu
+    # (base.html), e con il menu sparisce anche il comando «Tutte le divisioni».
+    # Per admin e tecnico l'ambito diventa allora quello di struttura, cioe'
+    # esattamente quello che quel comando dava: togliere il comando e lasciare
+    # la vista ristretta farebbe sparire in silenzio gli apparecchi delle
+    # divisioni DISATTIVATE, che esistono e appartengono alla struttura ma non
+    # compaiono in g.divisioni (filtrata su attiva = 1). Fra i due
+    # comportamenti si tiene il piu' ampio, che e' anche quello che l'utente
+    # aveva prima.
+    #
+    # L'utente semplice resta fuori: «Tutte le divisioni» non ce l'ha mai
+    # avuto, e il suo ambito e' l'insieme delle divisioni che gli sono
+    # assegnate. E' pero' una seconda difesa, non la garanzia: quella vera sta
+    # in models.filtro_divisione(), che per il ruolo 'utente' ignora 'tutte' e
+    # filtra comunque sulle divisioni assegnate. Per questo nessun test copre
+    # l'esclusione — aggiungendo 'utente' a questa riga la suite resta verde
+    # (verificato). Resta scritta perche' dice a chi legge quale ambito e'
+    # inteso, senza costringerlo ad andarlo a cercare in models.py.
+    if (g.user['ruolo'] in ('admin', 'tecnico')
+            and g.struttura_id and len(g.divisioni) <= 1):
+        g.divisione_attiva = {'id': 'tutte', 'nome': 'Tutte le divisioni',
+                              'colore': '#6b7280'}
+        session['divisione_attiva_id'] = 'tutte'
+
     # Count deadline alerts (for badge in navbar)
     if g.divisione_attiva and g.divisione_attiva.get('id') != 'tutte':
         result = query_one(
