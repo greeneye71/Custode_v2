@@ -314,3 +314,88 @@ def test_la_migrazione_non_riaccende_avvisi_spenti_dall_operatore(app):
         formati = query_all("SELECT valore FROM strutture_config "
                             "WHERE struttura_id=? AND chiave='avvisi_scadenza_formato'", (s,))
         assert len(formati) == 1
+
+
+def test_le_colonne_del_reset_arrivano_su_un_database_esistente(app):
+    """Come per eliminato_il: schema.sql non rifa' le tabelle che esistono
+    gia', quindi senza la migrazione incrementale un'installazione in servizio
+    resterebbe senza le due colonne e il reset esploderebbe al primo uso."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("ALTER TABLE utenti DROP COLUMN reset_hash")
+        db.execute("ALTER TABLE utenti DROP COLUMN reset_scadenza")
+        db.commit()
+
+        apply_schema_updates()
+
+        colonne = [r[1] for r in db.execute("PRAGMA table_info(utenti)")]
+        assert 'reset_hash' in colonne
+        assert 'reset_scadenza' in colonne
+
+
+def test_login_attempts_impara_l_esito_reset_senza_perdere_le_righe(app):
+    """Il CHECK di login_attempts non conosceva 'reset' e SQLite non permette
+    di allargarlo se non ricostruendo la tabella. La ricostruzione deve
+    conservare le righe: sono i contatori del blocco anti-forza-bruta, e
+    perderli significherebbe azzerare i blocchi in corso a ogni aggiornamento."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("PRAGMA foreign_keys = OFF")
+        db.execute("DROP TABLE login_attempts")
+        db.execute("""
+            CREATE TABLE login_attempts (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              ip_address TEXT NOT NULL,
+              email      TEXT,
+              esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito')),
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                   "VALUES ('10.0.0.9', 'tizio@x.it', 'fallito')")
+        db.commit()
+
+        apply_schema_updates()
+
+        # La riga di prima e' ancora li', con il suo indirizzo.
+        riga = db.execute("SELECT ip_address, email, esito FROM login_attempts").fetchone()
+        assert riga is not None
+        assert (riga[0], riga[1], riga[2]) == ('10.0.0.9', 'tizio@x.it', 'fallito')
+        # E adesso 'reset' e' un esito ammesso.
+        db.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                   "VALUES ('10.0.0.9', 'tizio@x.it', 'reset')")
+        db.commit()
+        assert db.execute("SELECT COUNT(*) FROM login_attempts "
+                          "WHERE esito='reset'").fetchone()[0] == 1
+        # Nessuna tabella di appoggio dimenticata per strada.
+        assert db.execute("SELECT name FROM sqlite_master "
+                          "WHERE name LIKE '%login_attempts_old%'").fetchall() == []
+
+
+def test_la_ricostruzione_di_login_attempts_e_idempotente(app):
+    """apply_schema_updates() gira a ogni avvio: due esecuzioni non devono
+    duplicare le righe, lasciare tabelle di appoggio o rompere le chiavi.
+
+    Quello che questo test NON prova e' la guardia che salta la ricostruzione
+    quando e' gia' stata fatta: togliendola, la tabella verrebbe rifatta tutte
+    le volte conservando comunque le righe, e la suite resterebbe verde
+    (verificato). La guardia e' un risparmio, non una correttezza — vedi il
+    commento in models.apply_schema_updates()."""
+    from models import get_db, apply_schema_updates
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                   "VALUES ('10.0.0.9', 'tizio@x.it', 'reset')")
+        db.commit()
+
+        apply_schema_updates()
+        apply_schema_updates()
+
+        assert db.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] == 1
+        assert db.execute("SELECT name FROM sqlite_master "
+                          "WHERE name LIKE '%login_attempts_old%'").fetchall() == []
+        db.execute("PRAGMA foreign_keys = ON")
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []

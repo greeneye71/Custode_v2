@@ -84,7 +84,13 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   ip_address TEXT NOT NULL,
   email      TEXT,
-  esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito')),
+  -- 'reset' e' la richiesta di password dimenticata (2.6.2). Ha un valore
+  -- proprio e non riusa 'fallito' apposta: contarla fra i tentativi falliti
+  -- significherebbe che cinque richieste di reset bloccano il LOGIN da
+  -- quell'IP per un quarto d'ora, e dietro un tunnel dove i client si
+  -- presentano tutti con lo stesso indirizzo sarebbe la serratura
+  -- dell'installazione in mano a chiunque passi.
+  esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito', 'reset')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -137,6 +143,12 @@ CREATE TABLE IF NOT EXISTS utenti (
   -- perche' otto colonne *_by referenziano utenti(id) e su un registro di
   -- elettromedicali "chi ha inserito questo apparecchio" non deve sparire.
   eliminato_il DATETIME,
+  -- Password temporanea del reset dalla schermata di accesso (2.6.2). Vale
+  -- ACCANTO a password_hash, non al suo posto: sulla pagina di accesso
+  -- chiunque puo' digitare l'indirizzo di un collega, e una temporanea che
+  -- sostituisse la vecchia sarebbe il modo di buttarlo fuori dal suo account.
+  reset_hash TEXT,
+  reset_scadenza DATETIME,
   FOREIGN KEY (struttura_id) REFERENCES strutture(id) ON DELETE RESTRICT,
   FOREIGN KEY (divisione_default_id) REFERENCES divisioni(id) ON DELETE SET NULL
 );

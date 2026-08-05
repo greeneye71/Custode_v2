@@ -505,6 +505,10 @@ ORDER BY prossima_scadenza ASC""",
         """DELETE FROM strutture_config WHERE chiave IN (
                'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'smtp_use_tls',
                'smtp_password_encrypted', 'report_schedulato_attivo', 'report_pdf_attivo')""",
+        # Reset della password dalla schermata di accesso (2.6.2). La
+        # temporanea vale accanto a password_hash, non al suo posto.
+        "ALTER TABLE utenti ADD COLUMN reset_hash TEXT",
+        "ALTER TABLE utenti ADD COLUMN reset_scadenza DATETIME",
     ]
     for sql in migrations:
         try:
@@ -512,6 +516,50 @@ ORDER BY prossima_scadenza ASC""",
         except Exception as e:
             logger.warning(f"Migration step skipped (may already be applied): {e}")
     db.commit()
+
+    # login_attempts.esito accetta anche 'reset' (2.6.2): il CHECK si cambia
+    # solo ricostruendo la tabella. Nessuna chiave esterna la referenzia, e le
+    # righe si conservano nominando le colonne di destinazione — senza elenco,
+    # una tabella con una colonna in piu' o in meno farebbe fallire l'INSERT
+    # dopo che RENAME e CREATE, che sono DDL gia' in autocommit, hanno gia'
+    # avuto effetto (la lezione della migrazione v2.2 di utenti, poco sotto).
+    #
+    # La guardia su "'reset' non c'e' ancora" e' un risparmio, non una
+    # correttezza: nessun test la copre, e non per dimenticanza — togliendola,
+    # la ricostruzione girerebbe a ogni avvio conservando comunque le righe e
+    # senza lasciare residui, quindi non c'e' niente di osservabile che possa
+    # cadere. Resta perche' rifare la tabella a ogni riavvio e' lavoro inutile
+    # e una finestra, per quanto breve, in cui i contatori del blocco
+    # anti-forza-bruta non ci sono.
+    try:
+        riga = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='login_attempts'"
+        ).fetchone()
+        if riga and "'reset'" not in riga[0]:
+            logger.info("Migrazione 2.6.2: login_attempts accetta esito 'reset'...")
+            db.execute("ALTER TABLE login_attempts RENAME TO login_attempts_old_262")
+            db.execute("""
+                CREATE TABLE login_attempts (
+                  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ip_address TEXT NOT NULL,
+                  email      TEXT,
+                  esito      TEXT NOT NULL CHECK(esito IN ('fallito', 'bloccato', 'riuscito', 'reset')),
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.execute(
+                "INSERT INTO login_attempts (id, ip_address, email, esito, created_at) "
+                "SELECT id, ip_address, email, esito, created_at FROM login_attempts_old_262"
+            )
+            db.execute("DROP TABLE login_attempts_old_262")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip    "
+                       "ON login_attempts(ip_address, created_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_email "
+                       "ON login_attempts(email, created_at)")
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Migrazione login_attempts non applicata: {e}")
 
     # Aggiunge 'tecnico' al CHECK ruolo di utenti se non già presente (v2.2)
     try:
