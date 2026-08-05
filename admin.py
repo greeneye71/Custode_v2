@@ -1336,15 +1336,17 @@ def superadmin_dashboard():
 @admin_required
 def sicurezza():
     """Visualizza e sblocca IP/utenti bloccati dal rate limiting."""
-    limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+    # Finestra calcolata da SQLite: created_at e' scritta con
+    # CURRENT_TIMESTAMP, che e' UTC, e confrontarla con l'ora locale teneva
+    # questo elenco sempre vuoto (vedi la nota in auth.login).
     ip_bloccati = query_all("""
         SELECT ip_address, email, COUNT(*) as tentativi, MAX(created_at) as ultimo
         FROM login_attempts
-        WHERE esito = 'fallito' AND created_at > ?
+        WHERE esito = 'fallito' AND created_at > datetime('now', '-15 minutes')
         GROUP BY ip_address
         HAVING COUNT(*) > 5
         ORDER BY ultimo DESC
-    """, (limite,))
+    """)
     return render_template('admin/sicurezza.html', ip_bloccati=ip_bloccati)
 
 

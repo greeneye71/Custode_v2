@@ -343,13 +343,19 @@ def login():
     import time as _time
     ip = request.remote_addr
 
-    # Blocco per IP: 5 falliti negli ultimi 15 minuti
-    blocco_ip_limite = (datetime.now() - timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+    # Blocco per IP: 5 falliti negli ultimi 15 minuti.
+    #
+    # La finestra si calcola con l'orologio di SQLite, non con datetime.now():
+    # created_at ha DEFAULT CURRENT_TIMESTAMP, che in SQLite e' UTC, mentre
+    # datetime.now() e' l'ora locale. In Italia le due differiscono di un'ora
+    # o due, e il confronto faceva risultare piu' vecchia della finestra anche
+    # una riga appena scritta: il blocco non e' mai scattato, in nessuna delle
+    # due forme, su nessuna installazione a est di Greenwich.
     tentativi_ip = query_one(
         """SELECT COUNT(*) as cnt FROM login_attempts
            WHERE ip_address = ? AND esito = 'fallito'
-             AND created_at > ?""",
-        (ip, blocco_ip_limite)
+             AND created_at > datetime('now', '-15 minutes')""",
+        (ip,)
     )
     if tentativi_ip and tentativi_ip['cnt'] >= 5:
         execute(
@@ -359,13 +365,13 @@ def login():
         flash('Troppi tentativi falliti. Riprova tra 15 minuti.', 'danger')
         return render_template('login.html', email=email), 429
 
-    # Blocco per email: 10 falliti da qualsiasi IP negli ultimi 30 minuti
-    blocco_email_limite = (datetime.now() - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
+    # Blocco per email: 10 falliti da qualsiasi IP negli ultimi 30 minuti.
+    # Stessa nota sull'orologio del blocco per IP qui sopra.
     tentativi_email = query_one(
         """SELECT COUNT(*) as cnt FROM login_attempts
            WHERE email = ? AND esito = 'fallito'
-             AND created_at > ?""",
-        (email, blocco_email_limite)
+             AND created_at > datetime('now', '-30 minutes')""",
+        (email,)
     )
     if tentativi_email and tentativi_email['cnt'] >= 10:
         execute(
@@ -394,12 +400,15 @@ def login():
     config = current_app.config['APP_CONFIG']
     lifetime_hours = config.get('session_lifetime_hours', 8)
     token = str(uuid.uuid4())
-    expires_at = datetime.now() + timedelta(hours=lifetime_hours)
 
+    # Scadenza calcolata da SQLite, come il confronto che la legge:
+    # _load_user_from_session e la pulizia dello scheduler usano entrambi
+    # datetime('now'), cioe' UTC. Scritta con datetime.now(), la sessione
+    # durava le ore configurate PIU' lo scarto del fuso orario.
     execute(
         """INSERT INTO sessioni (utente_id, token, expires_at)
-           VALUES (?, ?, ?)""",
-        (user['id'], token, expires_at.strftime('%Y-%m-%d %H:%M:%S'))
+           VALUES (?, ?, datetime('now', ?))""",
+        (user['id'], token, '+{} hours'.format(int(lifetime_hours)))
     )
 
     # Update last access
