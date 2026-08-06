@@ -197,6 +197,11 @@ Avvia l'applicazione in background con icona nella tray di Windows. Richiede `py
 | `backup_service.py` | Ciclo di vita backup/restore SQLite |
 | `export_service.py` | Logica generazione report (openpyxl, fpdf2) |
 | `models.py` | Helper DB: `get_db()`, `query_one()`, `query_all()`, `execute()`, `log_attivita()` |
+| `posta.py` | **v2.6.2** — L'unico posto da cui parte la posta: risoluzione dei parametri SMTP di sistema e invio |
+| `reset_password.py` | **v2.6.2** — Password temporanea del reset: generazione, scadenza, consumo |
+| `utente_service.py` | **v2.6.2** — Cancellazione utenti e rifiuti a protezione dell'ultimo amministratore |
+| `fusione_service.py` | **v2.6.1** — Individuazione e fusione degli apparecchi duplicati |
+| `struttura_service.py` | **v2.6.0** — Esportazione e cancellazione di una struttura |
 
 ### Database
 
@@ -207,11 +212,11 @@ SQLite in modalità WAL con foreign key abilitate. Schema definito in `schema.sq
 | Tabella | Descrizione |
 |---|---|
 | `strutture` | **v2.0** — Anagrafica strutture sanitarie (nome, codice, modalità) |
-| `strutture_config` | **v2.0** — Configurazione per-struttura (AI, SMTP, ecc.) |
+| `strutture_config` | **v2.0** — Configurazione per-struttura: provider e chiavi AI, preferenze sugli avvisi di scadenza. **Dalla v2.6.2 non contiene piu' impostazioni SMTP**: il server di posta e' unico e di sistema |
 | `api_tokens` | **v2.0** — Token Bearer per REST API, scoped per struttura |
-| `login_attempts` | **v2.0** — Rate limiting tentativi di accesso |
+| `login_attempts` | **v2.0** — Rate limiting tentativi di accesso e richieste di reset password |
 | `divisioni` | Reparti/divisioni della struttura, con colore e codice |
-| `utenti` | Utenti con ruolo (`superadmin`, `admin`, `utente`) e struttura di appartenenza |
+| `utenti` | Utenti con ruolo (`superadmin`, `admin`, `tecnico`, `utente`) e struttura di appartenenza. `eliminato_il` valorizzata = account cancellato, riga conservata come voce storica |
 | `utenti_divisioni` | Associazione N:M utenti-divisioni con ruolo di divisione |
 | `sessioni` | Token di sessione UUID (non cookie Flask) con scadenza |
 | `apparecchi` | Anagrafica dispositivi elettromedicali, con UNIQUE per struttura |
@@ -429,7 +434,7 @@ python importa_installazione.py "C:\MedInventory_Ospedale" --struttura-nome "Osp
 | `--dry-run` | Analizza e mostra il piano, senza scrivere |
 | `--struttura-nome NOME` | Nome della struttura da creare |
 | `--in-struttura ID` | Importa dentro una struttura esistente |
-| `--con-config` | Copia provider e chiavi AI, impostazioni SMTP |
+| `--con-config` | Copia provider e chiavi AI. **Non** copia il server di posta della sorgente: dalla v2.6.2 e' unico e di sistema |
 | `--con-log` | Importa anche il registro attività |
 | `--con-import-history` | Importa lo storico degli import AI |
 | `--senza-file` | Non copiare gli allegati |
@@ -477,6 +482,94 @@ Il logo della struttura, se caricato da Strutture → Configurazione, compare ne
 
 Per admin, tecnico e superadmin l'inventario generale copre l'intera struttura, incluse le
 divisioni disattivate (l'elenco a video, invece, le nasconde).
+
+---
+
+## Cosa e' cambiato nella v2.6.2
+
+### Gli utenti si cancellano
+
+Fino alla v2.6.1 un utente si poteva solo disattivare. Ora si cancella da
+**Amministrazione → Utenti → Elimina**, con una pagina di conferma che dice chi si sta
+cancellando e **cosa resta a suo nome** (apparecchi inseriti, manutenzioni, verifiche…).
+
+L'account viene distrutto — password resa inutilizzabile, indirizzo liberato per un
+eventuale account nuovo della stessa persona, sessioni chiuse — ma **la riga resta**: otto
+colonne del database referenziano l'utente, e su un registro di elettromedicali «chi ha
+inserito questo apparecchio» non deve sparire.
+
+L'operazione **non e' reversibile** e non restituisce la password: per rimettere in
+servizio la stessa persona si crea un account nuovo con lo stesso indirizzo.
+
+L'ultimo amministratore di una struttura non si puo' cancellare, disattivare **ne'**
+declassare a utente semplice, e le tre operazioni contano solo gli amministratori
+**attivi**. Nessuno puo' inoltre disattivarsi o declassarsi da solo.
+
+### Password dimenticata
+
+Nella schermata di accesso compare **«Password dimenticata?»**, che manda per email una
+password temporanea valida **30 minuti**. Al primo accesso con quella temporanea viene
+chiesto di sceglierne una nuova.
+
+La temporanea vale **accanto** alla password attuale, non al suo posto: chi non ha chiesto
+niente continua a entrare come sempre, e l'email lo dice esplicitamente. E' una scelta
+deliberata — sulla pagina di accesso chiunque puo' digitare l'indirizzo di un collega, e
+sostituirgli la password sarebbe un modo per chiuderlo fuori dal proprio account.
+
+Il collegamento **compare solo se il server SMTP di sistema e' configurato**. Le richieste
+sono soggette allo stesso limite dei tentativi di accesso.
+
+### Un solo server di posta
+
+Ogni struttura poteva avere un proprio server SMTP. Ora il server e' **unico e di
+sistema** (`config.local.json`), e alla struttura restano solo le preferenze:
+
+| Impostazione | Dove | Valori |
+|---|---|---|
+| Destinatario | Scheda struttura, campo *Email notifiche* | un indirizzo |
+| Avvisi di scadenza | Struttura → Configurazione | attivi / non attivi |
+| Formato | Struttura → Configurazione | elenco nel corpo dell'email, oppure **report PDF allegato** |
+| Frequenza | Struttura → Configurazione | giornaliera, settimanale, mensile |
+
+Tutte le email partono dallo stesso mittente e **nominano la struttura** nell'oggetto e nel
+corpo. Il report PDF, completo dalla v2.5, non era mai stato raggiungibile: si attivava con
+una chiave che nessuna schermata scriveva.
+
+Le impostazioni SMTP presenti nelle strutture vengono **cancellate alla prima partenza**,
+password cifrata compresa. Chi riceveva gli avvisi continua a riceverli.
+
+Nella configurazione della struttura compare anche il monitoraggio di una casella di posta
+per i verbali, **disabilitato**: l'IMAP resta unico per l'installazione, in attesa di
+un'implementazione per struttura.
+
+### Fusione dei duplicati: due vie
+
+- **Possibili duplicati** si e' spostato nell'**elenco degli apparecchi**, accanto a «Nuovo
+  apparecchio»: riguarda tutto il parco, non la scheda aperta.
+- Nella scheda del singolo apparecchio compare **«Fondi con…»**, che apre una ricerca e
+  porta alla stessa pagina di confronto. Serve alle coppie che nessun criterio automatico
+  accosta — `R-00015` e `INV/2019/887` possono essere la stessa macchina — che prima non
+  erano fondibili affatto.
+
+La ricerca manuale trova anche gli apparecchi **dismessi**, contrassegnandoli: e' il caso di
+chi si e' accorto del doppione e, invece di fondere, ne ha dismessa una delle due schede.
+L'elenco automatico continua a escluderli.
+
+### La struttura nella barra di navigazione
+
+Quando l'utente ha **una sola divisione accessibile**, il menu delle divisioni sparisce e al
+suo posto compare il nome della **struttura**. Per amministratori e tecnici l'ambito diventa
+quello di struttura, cosi' restano visibili anche gli apparecchi delle divisioni
+disattivate.
+
+### Sicurezza: il blocco anti-forza-bruta ora funziona
+
+Il conteggio dei tentativi di accesso falliti confrontava una finestra calcolata sull'ora
+locale con una colonna scritta in UTC: su qualunque installazione a est di Greenwich il
+conteggio tornava sempre zero, e **ne' il blocco per IP (5 tentativi in 15 minuti) ne'
+quello per indirizzo (10 in 30 minuti) sono mai entrati in funzione**. Per lo stesso motivo
+la pagina Sicurezza mostrava sempre un elenco vuoto e le sessioni duravano piu' del
+previsto. Corretto: le finestre le calcola ora il database.
 
 ---
 

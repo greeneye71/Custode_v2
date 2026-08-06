@@ -541,9 +541,31 @@ Accessibile solo agli utenti con ruolo **admin**.
 | Operazione | Descrizione |
 |---|---|
 | Nuovo utente | Crea utente con email, nome, cognome, ruolo, divisioni assegnate |
-| Modifica utente | Aggiorna dati, ruolo, divisioni |
-| Attiva/Disattiva | Blocca temporaneamente l'accesso senza cancellare l'utente |
+| Modifica utente | Aggiorna dati, ruolo, divisioni e stato attivo/disattivo |
+| Elimina | **v2.6.2** — Cancella l'account con doppia conferma (vedi sotto) |
 | Reset password | Genera password temporanea e forza il cambio al prossimo accesso |
+
+#### Cancellazione di un utente (v2.6.2)
+
+Sostituisce la vecchia disattivazione come modo di togliere di mezzo un account; la
+disattivazione resta, ma dentro il modulo di modifica, per i blocchi temporanei.
+
+La pagina di conferma dice **chi** si sta cancellando — nome, email, ruolo, struttura — e
+**cosa resta a suo nome**: apparecchi inseriti, manutenzioni, verifiche, documenti, import.
+
+Cosa succede: password resa inutilizzabile, indirizzo liberato (si puo' ricreare un account
+con la stessa email), sessioni chiuse, assegnazioni a divisioni e strutture rimosse. **La
+riga resta**, con `eliminato_il` valorizzata: otto colonne di altre tabelle referenziano
+`utenti(id)`, e su un registro di elettromedicali «chi ha inserito questo apparecchio» non
+deve sparire. L'utente cancellato non compare in nessun elenco e non puo' piu' accedere.
+
+L'operazione **non e' reversibile** e non restituisce la password.
+
+**Rifiuti.** Non si puo' cancellare se stessi, ne' un utente di un'altra struttura, ne' un
+tecnico (si gestiscono dalla loro pagina). L'ultimo amministratore **attivo** di una
+struttura non si puo' cancellare, disattivare ne' declassare a utente semplice, e lo stesso
+vale per l'ultimo superamministratore attivo: senza, la struttura resterebbe senza nessuno
+in grado di amministrarla. Nessuno puo' inoltre disattivarsi o declassarsi da solo.
 
 **Ruoli:**
 - `admin` - Accesso completo: gestione utenti, divisioni, configurazione, backup, log
@@ -1091,9 +1113,13 @@ Account utente.
 | email | TEXT UNIQUE | Email (usata come username) |
 | password_hash | TEXT | Hash bcrypt della password |
 | nome, cognome | TEXT | Dati anagrafici |
-| ruolo | TEXT | 'admin' o 'utente' |
+| ruolo | TEXT | 'superadmin', 'admin', 'tecnico' o 'utente' |
 | primo_accesso | INTEGER | 1=deve cambiare password |
 | attivo | INTEGER | 1=attivo, 0=bloccato |
+| struttura_id | INTEGER | Struttura di appartenenza (NULL per superadmin e tecnici) |
+| eliminato_il | DATETIME | **v2.6.2** — Valorizzata = account cancellato. La riga resta come voce storica: otto colonne di altre tabelle referenziano `utenti(id)` |
+| reset_hash | TEXT | **v2.6.2** — Impronta della password temporanea del reset. Vale **accanto** a `password_hash`, non al suo posto |
+| reset_scadenza | DATETIME | **v2.6.2** — Scadenza della temporanea (30 minuti), scritta e confrontata con l'orologio del database |
 
 #### utenti_divisioni
 Associazione N:M utenti-divisioni.
@@ -1182,6 +1208,7 @@ Vista SQL precalcolata che mostra tutte le scadenze future con priorita automati
 | GET/POST | `/login` | Pagina di login |
 | GET | `/logout` | Disconnessione |
 | GET/POST | `/cambio-password` | Cambio password |
+| GET/POST | `/password-dimenticata` | **v2.6.2** — Richiesta di password temporanea via email |
 | GET | `/divisione/<id>` | Cambio divisione attiva |
 
 #### Dashboard
@@ -1198,6 +1225,9 @@ Vista SQL precalcolata che mostra tutte le scadenze future con priorita automati
 | GET | `/apparecchi/<id>` | Dettaglio apparecchio |
 | GET/POST | `/apparecchi/<id>/modifica` | Modifica apparecchio |
 | POST | `/apparecchi/<id>/dismetti` | Dismissione |
+| GET | `/apparecchi/duplicati` | **v2.6.1** — Elenco delle coppie sospette (admin, tecnico, superadmin) |
+| GET | `/apparecchi/<id>/fondi` | **v2.6.2** — Ricerca dell'altra scheda da fondere |
+| GET/POST | `/apparecchi/<id>/fondi/<altro_id>` | **v2.6.1** — Confronto ed esecuzione della fusione |
 | POST | `/apparecchi/<id>/foto` | Upload foto |
 | POST | `/apparecchi/<id>/documento` | Upload documento |
 | GET | `/apparecchi/<id>/documento/<doc_id>/scarica` | Download documento |
