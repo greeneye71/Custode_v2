@@ -747,3 +747,15 @@ def test_crea_superadmin_conserva_valida_password():
     import crea_superadmin
     assert crea_superadmin.valida_password('corta') != []
     assert crea_superadmin.valida_password('Password1') == []
+
+
+def test_la_versione_e_coerente_ovunque():
+    """config.json e APP_VERSION devono dire la stessa cosa.
+
+    Sono due file letti da percorsi diversi: quando divergono, l'interfaccia
+    mostra una versione e il controllo aggiornamenti un'altra.
+    """
+    import app as modulo_app
+    with open(os.path.join(RADICE, 'config.json'), encoding='utf-8') as f:
+        config = _json.load(f)
+    assert config['version'] == modulo_app.APP_VERSION == '2.6.3'
