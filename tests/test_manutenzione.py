@@ -506,6 +506,39 @@ def test_un_controllo_che_esplode_non_ferma_gli_altri(conn, tmp_path, monkeypatc
 # operazioni
 # ---------------------------------------------------------------------------
 
+def test_su_uno_schema_vecchio_i_controlli_degradano_invece_di_esplodere(conn,
+                                                                          tmp_path):
+    """Il database di un'installazione v1.x e' il caso da ispezionare, non un
+    caso limite. Un controllo che esplode li' non dice nulla, e il rimedio
+    non e' una segnalazione: e' la migrazione."""
+    conn.execute('ALTER TABLE utenti DROP COLUMN eliminato_il')
+    conn.commit()
+    _struttura(conn, 'Alfa')
+    _utente(conn, 'spento@alfa.it', 'admin', 1, attivo=0)
+
+    fotografia = stato.raccogli(conn, {}, str(tmp_path))
+    fotografia['schema']['pendenti'] = ['v2.3']
+    esiti = diagnosi.esegui(conn, {}, fotografia)
+
+    falliti = [e for e in esiti if e.titolo.startswith('Controllo fallito')]
+    assert falliti == [], [e.dettaglio for e in falliti]
+    # E il controllo che poteva ancora dire qualcosa lo dice.
+    assert 'Utenti disattivati' in _titoli(esiti)
+
+
+def test_un_controllo_che_esplode_su_schema_vecchio_rimanda_alla_migrazione(
+        conn, tmp_path, monkeypatch):
+    def esplode(conn, config, fotografia):
+        raise sqlite3.OperationalError('no such column: fantasma')
+
+    monkeypatch.setattr(diagnosi, 'CONTROLLI', (esplode,))
+    fotografia = stato.raccogli(conn, {}, str(tmp_path))
+    fotografia['schema']['pendenti'] = ['v2.3']
+
+    esito = diagnosi.esegui(conn, {}, fotografia)[0]
+    assert esito.rimedio == 'python manutenzione.py migra'
+
+
 def test_il_backup_di_sicurezza_e_una_copia_apribile(conn, app):
     _struttura(conn, 'Alfa')
     conn.commit()
@@ -538,3 +571,179 @@ def test_gli_adattatori_riusano_gli_script_esistenti():
         (backup_service, 'restore_backup'),
     ):
         assert hasattr(modulo, nome), f"{modulo.__name__}.{nome} non esiste piu'"
+
+
+# ---------------------------------------------------------------------------
+# entry point e subcomandi
+# ---------------------------------------------------------------------------
+
+import manutenzione as cli  # noqa: E402
+
+
+@pytest.fixture
+def cli_config(tmp_path, monkeypatch):
+    """Isola i comandi dalla configurazione reale dello sviluppatore."""
+    (tmp_path / 'uploads').mkdir(exist_ok=True)
+    config = {'uploads_path': str(tmp_path / 'uploads'),
+              'backups_path': str(tmp_path / 'backups')}
+    monkeypatch.setattr(cli.operazioni, 'carica_config', lambda: config)
+    return config
+
+
+def test_stato_json_e_leggibile_da_una_macchina(conn, app, capsys, cli_config):
+    _struttura(conn, 'Alfa')
+
+    codice = cli.main(['--db', app.config['DATABASE_PATH'], 'stato', '--json'])
+
+    assert codice == 0
+    reso = _json.loads(capsys.readouterr().out)
+    assert reso['modalita']['strutture'] == 1
+
+
+def test_diagnosi_esce_con_uno_se_c_e_un_errore(conn, app, capsys, cli_config):
+    _struttura(conn, 'Alfa')  # nessun utente: errore
+
+    codice = cli.main(['--db', app.config['DATABASE_PATH'], 'diagnosi'])
+
+    assert codice == 1
+    assert 'Nessun utente attivo' in capsys.readouterr().out
+
+
+def test_diagnosi_esce_con_zero_quando_ci_sono_solo_avvisi(conn, app, capsys,
+                                                           cli_config):
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    _utente(conn, 'spento@alfa.it', 'utente', sid, attivo=0)
+
+    assert cli.main(['--db', app.config['DATABASE_PATH'], 'diagnosi']) == 0
+
+
+def test_un_database_inesistente_non_produce_traceback(capsys, tmp_path, cli_config):
+    codice = cli.main(['--db', str(tmp_path / 'non-esiste.sqlite'), 'stato'])
+    assert codice == 1
+    assert 'seed.py' in capsys.readouterr().out
+
+
+def test_utenti_elenca_mostra_lo_stato_delle_impronte(conn, app, capsys, cli_config):
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    _utente(conn, 'vecchio@alfa.it', 'utente', sid,
+            password_hash='sha256$sale$impronta')
+
+    assert cli.main(['--db', app.config['DATABASE_PATH'], 'utenti', 'elenca']) == 0
+    uscita = capsys.readouterr().out
+    assert 'vecchio@alfa.it' in uscita
+    assert 'metodo_sconosciuto' in uscita
+
+
+def test_utenti_azzera_senza_rimpiazzo_rifiuta_e_non_scrive(conn, app, cli_config):
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+
+    codice = cli.main(['--db', app.config['DATABASE_PATH'],
+                       'utenti', 'azzera', '-y'])
+
+    assert codice == 1
+    assert conn.execute('SELECT email FROM utenti').fetchone()['email'] == 'admin@alfa.it'
+
+
+def test_utenti_azzera_con_rimpiazzo_funziona_senza_domande(conn, app, cli_config,
+                                                            monkeypatch):
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    monkeypatch.setattr(cli, 'chiedi_password', lambda _e: 'Password1')
+
+    codice = cli.main(['--db', app.config['DATABASE_PATH'], 'utenti', 'azzera',
+                       '-y', '--nuovo-admin', 'nuovo@alfa.it'])
+
+    assert codice == 0
+    righe = {r['email'] for r in conn.execute('SELECT email FROM utenti')}
+    assert 'nuovo@alfa.it' in righe
+    assert 'admin@alfa.it' not in righe
+
+
+def test_utenti_password_reimposta_e_riattiva(conn, app, cli_config, monkeypatch):
+    from werkzeug.security import check_password_hash
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'spento@alfa.it', 'admin', sid, attivo=0)
+    monkeypatch.setattr(cli, 'chiedi_password', lambda _e: 'NuovaPassword1')
+
+    codice = cli.main(['--db', app.config['DATABASE_PATH'],
+                       'utenti', 'password', 'spento@alfa.it'])
+
+    assert codice == 0
+    riga = conn.execute('SELECT password_hash, attivo FROM utenti '
+                        'WHERE email = ?', ('spento@alfa.it',)).fetchone()
+    assert riga['attivo'] == 1
+    assert check_password_hash(riga['password_hash'], 'NuovaPassword1')
+
+
+def test_utenti_password_senza_indirizzo_e_un_errore_d_uso(capsys, cli_config):
+    assert cli.main(['utenti', 'password']) == 2
+    assert 'indirizzo' in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# menu
+# ---------------------------------------------------------------------------
+
+def test_il_menu_mostra_stato_diagnosi_e_voci_ed_esce_con_q(conn, app, capsys,
+                                                            cli_config, monkeypatch):
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    monkeypatch.setattr('builtins.input', lambda *_a: 'q')
+
+    codice = cli.main(['--db', app.config['DATABASE_PATH']])
+
+    uscita = capsys.readouterr().out
+    assert codice == 0
+    assert 'Stato installazione' in uscita
+    assert 'Diagnosi' in uscita
+    assert 'Utenti e accessi' in uscita
+
+
+def test_il_menu_esce_pulito_su_interruzione(conn, app, capsys, cli_config,
+                                             monkeypatch):
+    _struttura(conn, 'Alfa')
+
+    def interrompi(*_a):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr('builtins.input', interrompi)
+    assert cli.main(['--db', app.config['DATABASE_PATH']]) == 0
+    assert 'Traceback' not in capsys.readouterr().out
+
+
+def test_una_scelta_ignota_non_chiude_il_menu(conn, app, capsys, cli_config,
+                                              monkeypatch):
+    _struttura(conn, 'Alfa')
+    risposte = iter(['zzz', 'q'])
+    monkeypatch.setattr('builtins.input', lambda *_a: next(risposte))
+
+    assert cli.main(['--db', app.config['DATABASE_PATH']]) == 0
+    assert 'Scelta non riconosciuta' in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# crea_superadmin
+# ---------------------------------------------------------------------------
+
+def test_crea_superadmin_delega_allo_strumento_unificato(monkeypatch):
+    """Lo script storico resta, ma smette di avere una logica sua.
+
+    Due implementazioni della stessa cosa divergono: era gia' successo con la
+    validazione della password, che qui c'era e altrove no.
+    """
+    import crea_superadmin
+    chiamate = []
+    monkeypatch.setattr(crea_superadmin, '_esegui',
+                        lambda argv: chiamate.append(argv) or 0)
+
+    assert crea_superadmin.main() == 0
+    assert chiamate == [['utenti', 'superadmin']]
+
+
+def test_crea_superadmin_conserva_valida_password():
+    import crea_superadmin
+    assert crea_superadmin.valida_password('corta') != []
+    assert crea_superadmin.valida_password('Password1') == []

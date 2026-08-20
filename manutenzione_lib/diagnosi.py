@@ -77,6 +77,12 @@ def controllo_nessun_utente_attivo(conn, config, fotografia):
 def controllo_strutture_senza_admin(conn, config, fotografia):
     if not mstato.tabella_esiste(conn, 'strutture'):
         return None
+    # Su uno schema v1.x utenti non ha ne' struttura_id ne' eliminato_il:
+    # la domanda "quale struttura non ha un admin" non ha senso li'.
+    if not mstato.colonna_esiste(conn, 'utenti', 'struttura_id'):
+        return None
+    if not mstato.colonna_esiste(conn, 'utenti', 'eliminato_il'):
+        return None
     orfane = [r[0] for r in conn.execute(
         """SELECT s.nome FROM strutture s
            WHERE NOT EXISTS (
@@ -109,8 +115,10 @@ def controllo_impronte(conn, config, fotografia):
 def controllo_utenti_disattivati(conn, config, fotografia):
     if not mstato.tabella_esiste(conn, 'utenti'):
         return None
-    spenti = [r[0] for r in conn.execute(
-        "SELECT email FROM utenti WHERE attivo = 0 AND eliminato_il IS NULL")]
+    dove = 'attivo = 0'
+    if mstato.colonna_esiste(conn, 'utenti', 'eliminato_il'):
+        dove += ' AND eliminato_il IS NULL'
+    spenti = [r[0] for r in conn.execute(f'SELECT email FROM utenti WHERE {dove}')]
     if spenti:
         return Esito(
             'avviso', 'Utenti disattivati',
@@ -248,12 +256,18 @@ def esegui(conn, config, fotografia):
     tredici diagnosi rimaste.
     """
     esiti = []
+    pendenti = bool((fotografia.get('schema') or {}).get('pendenti'))
     for controllo in CONTROLLI:
         try:
             risultato = controllo(conn, config, fotografia)
         except Exception as e:
+            # Su uno schema indietro il rimedio non e' una segnalazione: e' la
+            # migrazione. Dire "segnalalo" a chi ha semplicemente un database
+            # vecchio lo manda a sbattere.
+            rimedio = ('python manutenzione.py migra' if pendenti
+                       else 'Segnalalo a Studio Bergamaschi')
             risultato = Esito('errore', f'Controllo fallito: {controllo.__name__}',
-                              str(e), 'Segnalalo a Studio Bergamaschi')
+                              str(e), rimedio)
         if risultato is not None:
             esiti.append(risultato)
     esiti.sort(key=lambda e: 0 if e.gravita == 'errore' else 1)

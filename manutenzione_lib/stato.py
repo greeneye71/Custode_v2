@@ -25,6 +25,18 @@ def tabella_esiste(conn, nome):
         (nome,)).fetchone() is not None
 
 
+def colonna_esiste(conn, tabella, colonna):
+    """Le installazioni vecchie hanno tabelle giuste e colonne mancanti.
+
+    Chi interroga una colonna aggiunta da una migrazione deve chiederlo prima:
+    su un database a schema v1.x la query esplode, e un controllo che esplode
+    e' un controllo che non dice nulla.
+    """
+    if not tabella_esiste(conn, tabella):
+        return False
+    return colonna in {r[1] for r in conn.execute(f'PRAGMA table_info({tabella})')}
+
+
 def _non_disponibile(motivo):
     return {'disponibile': False, 'motivo': motivo}
 
