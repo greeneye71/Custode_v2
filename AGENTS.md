@@ -4,7 +4,7 @@ This file provides guidance to coding agents working in this repository.
 
 ## Project Overview
 
-**MedInventory v2.6.2** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.6.3** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -26,6 +26,13 @@ python crea_superadmin.py
 
 # Switch between single- and multi-struttura mode
 python toggle_modalita.py --status
+
+# Unified maintenance tool: status report, diagnostics, repairs
+python manutenzione.py                  # status + diagnostics + interactive menu
+python manutenzione.py diagnosi         # checks only; exit 1 on errors
+python manutenzione.py utenti elenca    # users, with the state of each password hash
+python manutenzione.py utenti azzera --nuovo-admin admin@example.it
+python manutenzione.py --db OTHER/data/database.sqlite stato
 
 # Import another installation's data as a new struttura (see below)
 python importa_installazione.py <source-install-dir> --dry-run
@@ -112,6 +119,9 @@ Key fields (all in `config.local.json`):
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
 | `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
 | `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
+| `manutenzione_lib/stato.py` | Installation snapshot: paths, schema version, counts. Never includes secrets |
+| `manutenzione_lib/diagnosi.py` | Checks, each a function returning an `Esito` whose remedy is the command to run |
+| `manutenzione_lib/utenti.py` | Account operations outside Flask: hash inspection, password reset, wipe |
 
 ### Database
 SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
@@ -138,6 +148,34 @@ Decorators in `auth.py`: `login_required`, `admin_required`, `superadmin_require
 
 ### HTMX Pattern
 Routes check `request.args.get('partial')` to return only a table fragment (from `templates/partials/`) for in-place updates, or the full page otherwise.
+
+## Maintenance tool
+
+`manutenzione.py` is the entry point; the logic lives in `manutenzione_lib/`
+(`tui.py` presents and knows no domain, `stato.py` collects and never judges,
+`diagnosi.py` judges and never prints, `utenti.py` operates on a raw
+`sqlite3.Connection`, `menu.py` is the only caller of `input()`). It never
+imports Flask, which is what lets `--db` point at a *different* installation —
+including one on an older schema. `migrate.py`, `toggle_modalita.py` and
+`pulisci_uploads.py` are unchanged and still work standalone; the tool calls
+into them through `manutenzione_lib/operazioni.py`.
+
+Diagnosing a login nobody can pass: `check_password_hash` **raises** on a hash
+whose method Werkzeug 3 dropped (the old `sha256$…`), and `auth.py:422` does
+not catch it — so such an installation answers 500, not "credenziali non
+valide". `manutenzione.py diagnosi` separates that case from the ones that
+really do produce the rejection message: no row with that email, `attivo = 0`,
+a genuinely wrong password, or a lockout in `login_attempts`.
+
+Checks read columns that migrations added, so each one asks
+`stato.colonna_esiste()` first: a check that raises on a v1.x database says
+nothing, and the remedy there is `manutenzione.py migra`, not a bug report.
+
+`manutenzione.py utenti azzera` wipes users while keeping every other row. It
+reuses `utente_service.cancella_utente()` by default (tombstone rows, `*_by`
+untouched) and `struttura_service._rimuovi_utenti()` under `--definitivo`. The
+replacement login is created inside the same transaction, and the command
+refuses to leave a database nobody can log into.
 
 ## Key Conventions
 

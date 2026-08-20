@@ -6,6 +6,30 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.6.3] - 2026-08-20
+
+### Aggiunto
+- `manutenzione.py`, strumento unificato a riga di comando. Senza argomenti
+  fotografa l'installazione, ne diagnostica i problemi e apre un menu; con un
+  subcomando lavora senza presidio. `--db PERCORSO` permette di ispezionare
+  un'installazione diversa da quella corrente.
+- Diagnosi degli accessi: distingue i casi che il login riassume tutti in
+  "credenziali non valide" -- indirizzo assente, utente disattivato, password
+  diversa, blocco per tentativi ripetuti -- e riconosce le impronte in formati
+  che Werkzeug 3 non sa piu' verificare, che fanno rispondere 500 invece di
+  rifiutare.
+- `manutenzione.py utenti azzera`: cancella gli utenti conservando apparecchi,
+  manutenzioni, verifiche e documenti. Di predefinito lascia le righe come
+  voci storiche e non tocca le colonne `*_by`; con `--definitivo` le rimuove.
+  L'accesso di rimpiazzo nasce nella stessa transazione: l'operazione non puo'
+  lasciare un'installazione senza nessuno che possa entrare.
+
+### Modificato
+- `crea_superadmin.py` non ha piu' una logica propria: richiama
+  `manutenzione.py utenti superadmin`. Il comando resta invariato.
+- `migrate.py`, `toggle_modalita.py` e `pulisci_uploads.py` sono invariati e
+  continuano a funzionare come prima; lo strumento unificato li richiama.
+
 ## [2.6.2] - 2026-08-05
 
 ### Aggiunto

@@ -1335,20 +1335,53 @@ venv\Scripts\pip install -r requirements.txt
 
 L'amministratore puo' resettare la password di qualsiasi utente da *Amministrazione > Utenti > Reset Password*. Viene generata una password temporanea e l'utente dovra' cambiarla al prossimo accesso.
 
-Se la password dell'unico amministratore e' persa, e' possibile resettarla manualmente:
+Se la password dell'unico amministratore e' persa:
+
 ```batch
 cd C:\MedInventory
-venv\Scripts\python -c "
-from werkzeug.security import generate_password_hash
-import sqlite3
-conn = sqlite3.connect('data/database.sqlite')
-conn.execute('UPDATE utenti SET password_hash=?, primo_accesso=1 WHERE email=?',
-             (generate_password_hash('admin123'), 'admin@medinventory.local'))
-conn.commit()
-conn.close()
-print('Password resettata a: admin123')
-"
+venv\Scripts\python manutenzione.py utenti password admin@medinventory.local
 ```
+
+Lo strumento chiede la nuova password, la valida e riattiva l'account.
+
+Per capire prima *perche'* l'accesso non funziona:
+
+```batch
+venv\Scripts\python manutenzione.py diagnosi
+```
+
+La diagnosi distingue i casi che la schermata di accesso riassume tutti in
+"credenziali non valide": indirizzo inesistente, utente disattivato, password
+diversa, blocco per tentativi ripetuti. Segnala anche le password salvate in un
+formato che le versioni recenti non sanno piu' verificare -- capita sulle
+installazioni migrate da molto lontano, e in quel caso l'accesso risponde con un
+errore del server invece che con il rifiuto.
+
+### Manutenzione da riga di comando
+
+```batch
+cd C:\MedInventory
+venv\Scripts\python manutenzione.py
+```
+
+Senza argomenti mostra lo stato dell'installazione, l'esito dei controlli e un
+menu. Ogni voce del menu ha il subcomando corrispondente, utilizzabile senza
+presidio: `stato`, `diagnosi`, `migra`, `utenti`, `uploads`, `modalita`,
+`backup`. `--db PERCORSO` fa lavorare lo strumento su un'altra installazione,
+anche se ferma su una versione vecchia dello schema.
+
+**Azzerare gli utenti conservando tutto il resto:**
+
+```batch
+venv\Scripts\python manutenzione.py utenti azzera --nuovo-admin nuovo@struttura.it
+```
+
+Apparecchi, manutenzioni, verifiche e documenti restano. Gli account vengono
+distrutti ma le righe sopravvivono come voci storiche, perche' le schede
+continuino a dire chi ha inserito cosa; con `--definitivo` spariscono anche
+quelle e i riferimenti si azzerano. Il nuovo accesso viene creato nella stessa
+transazione dell'azzeramento, cosi' l'operazione non puo' chiudere fuori dalla
+porta. Un backup del database viene fatto sempre, prima di scrivere.
 
 ### Il database e' corrotto
 
@@ -1370,5 +1403,5 @@ venv\Scripts\python seed.py
 
 ---
 
-*Documentazione MedInventory v1.1.6*
+*Documentazione MedInventory v2.6.3*
 *Studio Bergamaschi*
