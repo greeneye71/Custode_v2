@@ -385,3 +385,156 @@ def test_le_sessioni_aperte_non_sopravvivono_all_azzeramento(conn):
     conn.commit()
 
     assert conn.execute('SELECT COUNT(*) FROM sessioni').fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# diagnosi
+# ---------------------------------------------------------------------------
+
+from manutenzione_lib import diagnosi, operazioni  # noqa: E402
+
+
+def _diagnostica(conn, tmp_path, config=None):
+    config = config or {}
+    fotografia = stato.raccogli(conn, config, str(tmp_path))
+    return diagnosi.esegui(conn, config, fotografia)
+
+
+def _titoli(esiti):
+    return {e.titolo for e in esiti}
+
+
+def test_un_database_sano_con_un_admin_non_produce_errori(conn, tmp_path):
+    sid = _struttura(conn)
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    (tmp_path / 'uploads').mkdir(exist_ok=True)
+    esiti = _diagnostica(conn, tmp_path, {'uploads_path': str(tmp_path / 'uploads')})
+    assert not diagnosi.ci_sono_errori(esiti), [
+        (e.gravita, e.titolo, e.dettaglio) for e in esiti if e.gravita == 'errore']
+
+
+def test_nessun_utente_attivo_e_un_errore(conn, tmp_path):
+    _struttura(conn)
+    esiti = _diagnostica(conn, tmp_path)
+    assert 'Nessun utente attivo' in _titoli(esiti)
+    assert diagnosi.ci_sono_errori(esiti)
+
+
+def test_struttura_senza_amministratore_attivo(conn, tmp_path):
+    sid = _struttura(conn, 'Alfa')
+    _utente(conn, 'super@x.it', 'superadmin', None)
+    _utente(conn, 'utente@alfa.it', 'utente', sid)
+    esiti = _diagnostica(conn, tmp_path)
+    assert 'Struttura senza amministratore attivo' in _titoli(esiti)
+
+
+def test_impronta_non_verificabile_e_un_errore_con_il_rimedio_giusto(conn, tmp_path):
+    sid = _struttura(conn)
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    _utente(conn, 'vecchio@alfa.it', 'utente', sid,
+            password_hash='sha256$sale$impronta')
+
+    esiti = _diagnostica(conn, tmp_path)
+    guasto = [e for e in esiti if e.titolo == 'Password non verificabile']
+    assert len(guasto) == 1
+    assert guasto[0].gravita == 'errore'
+    assert 'vecchio@alfa.it' in guasto[0].dettaglio
+    assert 'utenti password' in guasto[0].rimedio
+
+
+def test_utente_disattivato_e_un_avviso_che_spiega_il_messaggio_di_login(conn, tmp_path):
+    sid = _struttura(conn)
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    _utente(conn, 'spento@alfa.it', 'utente', sid, attivo=0)
+    (tmp_path / 'uploads').mkdir(exist_ok=True)
+
+    esiti = _diagnostica(conn, tmp_path, {'uploads_path': str(tmp_path / 'uploads')})
+    avviso = [e for e in esiti if e.titolo == 'Utenti disattivati']
+    assert avviso and avviso[0].gravita == 'avviso'
+    assert 'spento@alfa.it' in avviso[0].dettaglio
+    # Un avviso non deve alterare il codice di uscita.
+    assert not diagnosi.ci_sono_errori(esiti)
+
+
+def test_blocco_per_tentativi_ripetuti_segnalato(conn, tmp_path):
+    sid = _struttura(conn)
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    for _ in range(5):
+        conn.execute("INSERT INTO login_attempts (ip_address, email, esito) "
+                     "VALUES ('10.0.0.1', 'admin@alfa.it', 'fallito')")
+    conn.commit()
+
+    esiti = _diagnostica(conn, tmp_path)
+    assert 'Accessi bloccati per tentativi ripetuti' in _titoli(esiti)
+
+
+def test_migrazioni_pendenti_sono_un_errore(conn, tmp_path):
+    sid = _struttura(conn)
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    fotografia = stato.raccogli(conn, {}, str(tmp_path))
+    fotografia['schema']['pendenti'] = ['v2.3']
+
+    esiti = diagnosi.esegui(conn, {}, fotografia)
+    pendenti = [e for e in esiti if e.titolo == 'Migrazioni non applicate']
+    assert pendenti and pendenti[0].gravita == 'errore'
+    assert 'migra' in pendenti[0].rimedio
+
+
+def test_modalita_incoerente_col_numero_di_strutture(conn, tmp_path):
+    sid = _struttura(conn, 'Alfa')
+    _struttura(conn, 'Beta')
+    _utente(conn, 'admin@alfa.it', 'admin', sid)
+    _utente(conn, 'admin@beta.it', 'admin', 2)
+
+    esiti = _diagnostica(conn, tmp_path, config={'single_struttura': True})
+    assert "Modalita' incoerente" in _titoli(esiti)
+
+
+def test_un_controllo_che_esplode_non_ferma_gli_altri(conn, tmp_path, monkeypatch):
+    def esplode(conn, config, fotografia):
+        raise sqlite3.OperationalError('no such table: fantasma')
+
+    monkeypatch.setattr(diagnosi, 'CONTROLLI',
+                        (esplode, diagnosi.controllo_nessun_utente_attivo))
+    esiti = _diagnostica(conn, tmp_path)
+    titoli = _titoli(esiti)
+    assert 'Controllo fallito: esplode' in titoli
+    assert 'Nessun utente attivo' in titoli
+
+
+# ---------------------------------------------------------------------------
+# operazioni
+# ---------------------------------------------------------------------------
+
+def test_il_backup_di_sicurezza_e_una_copia_apribile(conn, app):
+    _struttura(conn, 'Alfa')
+    conn.commit()
+
+    copia = operazioni.backup_di_sicurezza(app.config['DATABASE_PATH'])
+
+    assert os.path.exists(copia)
+    assert 'bak_manutenzione_' in os.path.basename(copia)
+    altra = sqlite3.connect(copia)
+    assert altra.execute('SELECT nome FROM strutture').fetchone()[0] == 'Alfa'
+    altra.close()
+
+
+def test_gli_adattatori_riusano_gli_script_esistenti():
+    """Se qualcuno rinomina una funzione negli script, deve rompersi qui e
+    non a runtime davanti all'operatore."""
+    import backup_service
+    import migrate
+    import pulisci_uploads
+    import toggle_modalita
+
+    for modulo, nome in (
+        (migrate, 'analyze'), (migrate, 'apply_all'), (migrate, 'describe_version'),
+        (migrate, 'load_db_path'), (migrate, 'load_config'), (migrate, 'MIGRATIONS'),
+        (pulisci_uploads, 'percorsi_referenziati'), (pulisci_uploads, 'trova_orfani'),
+        (pulisci_uploads, 'elimina_file'),
+        (toggle_modalita, 'stato_attuale'), (toggle_modalita, 'scrivi_config'),
+        (toggle_modalita, 'leggi_config'),
+        (backup_service, 'create_backup'), (backup_service, 'list_backups'),
+        (backup_service, 'restore_backup'),
+    ):
+        assert hasattr(modulo, nome), f"{modulo.__name__}.{nome} non esiste piu'"
