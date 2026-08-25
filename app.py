@@ -31,7 +31,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.6.3"
+APP_VERSION = "2.6.4"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -114,13 +114,36 @@ def _create_local_config(base_config):
         json.dump(local, f, indent=2, ensure_ascii=False)
 
 
+def _crea_config_base():
+    """Crea config.json partendo da config.example.json.
+
+    config.json non e' in git (.gitignore) e setup.bat/setup.sh dicono che
+    nasce al primo avvio: senza questo load_config() moriva con
+    FileNotFoundError su un'installazione appena clonata.
+    """
+    base = {}
+    if os.path.exists(EXAMPLE_CONFIG_PATH):
+        with open(EXAMPLE_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            base = json.load(f)
+    base.setdefault('database_path', 'data/database.sqlite')
+    base.setdefault('uploads_path', 'uploads')
+    base.setdefault('backups_path', 'backups')
+    base['version'] = APP_VERSION
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump(base, f, indent=2, ensure_ascii=False)
+    return base
+
+
 def load_config():
     """Carica config.json (base) e lo fonde con config.local.json (impostazioni utente).
-    Se config.local.json non esiste viene creato automaticamente.
+    Se config.json o config.local.json non esistono vengono creati automaticamente.
     """
     # Carica il config di base (default di sistema)
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        config = json.load(f)
+    if not os.path.exists(CONFIG_PATH):
+        config = _crea_config_base()
+    else:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            config = json.load(f)
 
     # Crea il config locale se non esiste (primo avvio o aggiornamento da versione precedente)
     if not os.path.exists(LOCAL_CONFIG_PATH):

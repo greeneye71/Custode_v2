@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v2.6.3** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.6.4** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -82,7 +82,7 @@ Behaviour worth knowing before changing it:
 
 Config is split in two files, merged at startup (`load_config()` in `app.py`, local wins):
 
-- `config.json` — system defaults only (`version`, `database_path`, `uploads_path`, `backups_path`). Tracked in git, overwritten by updates.
+- `config.json` — system defaults only (`version`, `database_path`, `uploads_path`, `backups_path`). Gitignored: `load_config()` creates it from `config.example.json` at first start, and rewrites `version` when the code is updated.
 - `config.local.json` — everything the operator customizes. Auto-created from `config.local.example.json`; never touched by updates. `save_config()` only writes keys listed in `LOCAL_CONFIG_KEYS`.
 
 Key fields (all in `config.local.json`):
@@ -172,11 +172,13 @@ including one on an older schema. `migrate.py`, `toggle_modalita.py` and
 into them through `manutenzione_lib/operazioni.py`.
 
 Diagnosing a login nobody can pass: `check_password_hash` **raises** on a hash
-whose method Werkzeug 3 dropped (the old `sha256$…`), and `auth.py:422` does
-not catch it — so such an installation answers 500, not "credenziali non
-valide". `manutenzione.py diagnosi` separates that case from the ones that
-really do produce the rejection message: no row with that email, `attivo = 0`,
-a genuinely wrong password, or a lockout in `login_attempts`.
+whose method Werkzeug 3 dropped (the old `sha256$…`). Since 2.6.4 every login
+goes through `auth.verifica_password()`, which catches it, logs the offending
+method and answers "credenziali non valide" — the account still cannot get in,
+it just no longer produces a 500. `manutenzione.py diagnosi` separates that
+case from the ones that really do produce the rejection message: no row with
+that email, `attivo = 0`, a genuinely wrong password, or a lockout in
+`login_attempts`.
 
 Checks read columns that migrations added, so each one asks
 `stato.colonna_esiste()` first: a check that raises on a v1.x database says

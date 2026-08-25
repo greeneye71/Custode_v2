@@ -8,7 +8,7 @@ import hashlib
 from functools import wraps
 
 from flask import Blueprint, request, jsonify, g
-from models import query_one, query_all, execute
+from models import query_one, query_all, execute, log_attivita
 
 api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
 
@@ -50,6 +50,7 @@ def _token_auth(scope='read'):
 
             g.api_struttura_id = token['sid']
             g.api_struttura_nome = token['struttura_nome']
+            g.api_token_nome = token['nome']
             return f(*args, **kwargs)
         return decorated
     return decorator
@@ -195,5 +196,13 @@ def crea_manutenzione():
         data.get('tecnico_ditta'), data.get('descrizione'),
         data.get('esito'), data.get('costo'),
     ))
+
+    # Anche le scritture via API finiscono nel registro attivita': senza
+    # questa voce una manutenzione creata da un token compariva dal nulla.
+    # utente_id resta NULL — l'autore e' il token, non una persona.
+    log_attivita(None, 'creazione', 'manutenzioni', cur.lastrowid,
+                 f"Creata via API (token: {getattr(g, 'api_token_nome', '?')}) "
+                 f"per apparecchio {data['apparecchio_id']}",
+                 request.remote_addr, struttura_id=g.api_struttura_id)
 
     return jsonify({'id': cur.lastrowid, 'messaggio': 'Manutenzione creata'}), 201
