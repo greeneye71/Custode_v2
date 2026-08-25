@@ -6,6 +6,44 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.6.4] - 2026-08-25
+
+### Corretto
+- **Il registro attivita' era vuoto per l'admin di struttura.** Le voci
+  venivano scritte con `struttura_id` NULL, e `/admin/log-attivita` filtra per
+  struttura per chiunque non sia superadmin: il registro c'era, pieno, e non
+  lo vedeva nessuno tranne il superadmin. Ora `log_attivita()` deduce la
+  struttura dalla richiesta in corso; le operazioni davvero globali (backup,
+  ripristino, configurazione di sistema, tecnici) passano `struttura_id=None`
+  in modo esplicito, cosi' non finiscono attribuite alla struttura che un
+  superadmin sta momentaneamente impersonando.
+- **Gli allegati delle email stavano fuori dal perimetro della struttura.**
+  Sostavano in `uploads/email/`, mentre `/uploads/<percorso>` sa isolare per
+  struttura soltanto i percorsi che iniziano per `strutture/`. Ora passano da
+  `upload_subdir()` come tutti gli altri file.
+- **Una manutenzione creata via API compariva dal nulla.**
+  `POST /api/v1/manutenzioni` scriveva senza lasciare traccia nel registro
+  attivita'. Ora la voce c'e', con il nome del token nei dettagli e
+  `utente_id` vuoto: l'autore e' un token, non una persona.
+- **Un'email si poteva perdere.** La lettura IMAP marcava il messaggio come
+  gia' letto nell'atto stesso di scaricarlo: se l'elaborazione falliva a
+  meta', il messaggio restava letto e non veniva piu' ripreso. Ora si scarica
+  senza marcare (`BODY.PEEK[]`) e il flag si mette solo dopo che
+  l'elaborazione e' andata a buon fine.
+- **Il login rispondeva 500 su un'installazione migrata da Werkzeug 2.**
+  `check_password_hash` solleva un'eccezione sulle impronte in formati che non
+  sa piu' verificare; ora viene intercettata e l'accesso viene rifiutato con
+  il messaggio normale, annotando nel log il metodo incriminato. L'impronta va
+  comunque rigenerata (`manutenzione.py utenti azzera`): quell'utente non puo'
+  entrare in nessun modo.
+- **`config.json` non veniva creato da nessuno.** Non e' in git e nessuna
+  procedura lo scriveva: la prima esecuzione su un'installazione pulita
+  falliva. Ora `load_config()` lo crea da `config.example.json`.
+
+### Aggiunto
+- `tests/test_log_attivita.py`: il registro di un'operazione ordinaria deve
+  tornare nella pagina dell'admin della sua struttura e in nessun'altra.
+
 ## [2.6.3] - 2026-08-20
 
 ### Aggiunto

@@ -329,8 +329,11 @@ def _run_inventario(import_id, filepath, ext, text, is_scanned,
         )
 
     execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
+    # Thread di background: fuori da una richiesta il default automatico non
+    # trova nessuna struttura, va passata quella dell'import.
     log_attivita(user_id, 'import_analisi', 'import_history', import_id,
-                 f"Inventario: {orig_name} ({len(items)} apparecchi trovati)", remote_addr)
+                 f"Inventario: {orig_name} ({len(items)} apparecchi trovati)", remote_addr,
+                 struttura_id=struttura_id)
 
 
 def _run_verbali(import_id, filepath, ext, text, is_scanned,
@@ -418,7 +421,8 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
 
     execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
     log_attivita(user_id, 'import_analisi', 'import_history', import_id,
-                 f"Verbali: {orig_name} ({len(all_items)} interventi trovati)", remote_addr)
+                 f"Verbali: {orig_name} ({len(all_items)} interventi trovati)", remote_addr,
+                 struttura_id=struttura_id)
 
 
 def _run_verifiche(import_id, filepath, ext, text, is_scanned,
@@ -506,7 +510,8 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
 
     execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
     log_attivita(user_id, 'import_analisi', 'import_history', import_id,
-                 f"Verifiche: {orig_name} ({len(all_items)} verifiche trovate)", remote_addr)
+                 f"Verifiche: {orig_name} ({len(all_items)} verifiche trovate)", remote_addr,
+                 struttura_id=struttura_id)
 
 
 def _match_apparecchi(items, struttura_id=None):
@@ -1258,7 +1263,8 @@ def email_conferma(id):
         )
 
         log_attivita(g.user['id'], 'import_email_conferma', 'import_history', id,
-                     f"Confermato verbale email: {record.get('filename', '')}", request.remote_addr)
+                     f"Confermato verbale email: {record.get('filename', '')}", request.remote_addr,
+                     struttura_id=record.get('struttura_id'))
 
         flash('Manutenzione importata con successo dal verbale email.', 'success')
         return redirect(url_for('import.email_queue'))
@@ -1283,7 +1289,8 @@ def email_scarta(id):
     )
 
     log_attivita(g.user['id'], 'import_email_scarta', 'import_history', id,
-                 f"Scartato verbale email: {record.get('filename', '')}", request.remote_addr)
+                 f"Scartato verbale email: {record.get('filename', '')}", request.remote_addr,
+                 struttura_id=record.get('struttura_id'))
 
     flash('Verbale email scartato.', 'info')
     return redirect(url_for('import.email_queue'))

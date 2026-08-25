@@ -865,9 +865,35 @@ def apparecchio_accessibile(apparecchio_id):
     return app_row
 
 
+#: Sentinella per distinguere "struttura non indicata" (da dedurre dalla
+#: richiesta in corso) da "operazione deliberatamente globale" (None esplicito).
+STRUTTURA_AUTO = object()
+
+
+def struttura_corrente():
+    """La struttura attiva della richiesta in corso, o None.
+
+    Fuori da un contesto applicativo (thread di background, script) l'accesso
+    a `g` solleva RuntimeError: getattr non la cattura, quindi va intercettata.
+    """
+    try:
+        return getattr(g, 'struttura_id', None)
+    except RuntimeError:
+        return None
+
+
 def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None,
-                 ip_address=None, struttura_id=None):
-    """Log an activity to the log_attivita table."""
+                 ip_address=None, struttura_id=STRUTTURA_AUTO):
+    """Registra un'attivita' in log_attivita.
+
+    Se `struttura_id` non viene passato si usa la struttura attiva della
+    richiesta: senza questo default le righe restano con struttura_id NULL e
+    l'admin di struttura non le vede piu' in /admin/log-attivita. Le operazioni
+    davvero globali (backup, restore, config di sistema, tecnici) passano
+    `struttura_id=None` in modo esplicito.
+    """
+    if struttura_id is STRUTTURA_AUTO:
+        struttura_id = struttura_corrente()
     execute(
         """INSERT INTO log_attivita
                (utente_id, azione, entita, entita_id, dettagli, ip_address, struttura_id)

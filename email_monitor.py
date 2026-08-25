@@ -116,18 +116,33 @@ def check_emails_for_division(email_cfg, app_config, db_path):
         msg_ids = messages[0].split()
         logger.info(f"Trovate {len(msg_ids)} nuove email per {account}")
 
-        uploads_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), '..', 'uploads', 'email')
-        os.makedirs(uploads_dir, exist_ok=True)
+        # Gli allegati sostano sotto uploads/strutture/<id>/email/ come tutto
+        # il resto: uploads/email/ era fuori dal perimetro del tenant, e
+        # /uploads/<path> isola soltanto i percorsi che iniziano per strutture/.
+        from models import upload_subdir as _upload_subdir
+        _uploads_base = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(db_path)), '..', 'uploads')
+        )
+        uploads_dir, uploads_rel = _upload_subdir(
+            'email', struttura_id,
+            uploads_base=_uploads_base,
+            single_struttura=(app_config or {}).get('single_struttura', False)
+        )
 
         for msg_id in msg_ids:
             try:
                 _process_email(
                     mail, msg_id, divisione_id, api_key, ai_model,
                     uploads_dir, db_path, account, app_config=app_config,
-                    struttura_id=struttura_id
+                    struttura_id=struttura_id, uploads_rel=uploads_rel
                 )
             except Exception as e:
+                # Il messaggio resta UNSEEN e viene ritentato al giro dopo:
+                # la ricerca e' su UNSEEN, e con il vecchio fetch RFC822 —
+                # che segna \Seen da solo — un errore qui perdeva il verbale.
                 logger.error(f"Errore processando email {msg_id} per {account}: {e}")
+                continue
+            _segna_letta(mail, msg_id, account)
 
         if email_cfg.get('id'):
             _update_ultima_verifica(db_path, email_cfg['id'])
@@ -145,12 +160,22 @@ def check_emails_for_division(email_cfg, app_config, db_path):
                 pass
 
 
-def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, db_path, account, app_config=None, struttura_id=None):
+def _segna_letta(mail, msg_id, account):
+    """Marca il messaggio come letto dopo che e' stato elaborato."""
+    try:
+        mail.store(msg_id, '+FLAGS', r'\Seen')
+    except Exception as e:
+        logger.warning(f"Impossibile segnare come letta l'email {msg_id} di {account}: {e}")
+
+
+def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, db_path, account, app_config=None, struttura_id=None, uploads_rel='email'):
     """Process a single email message: extract PDF attachments and analyze."""
     import sqlite3
     from ai_service import parse_verbale_with_ai, classify_email_document_type, analyze_verifiche_with_ai
 
-    status, data = mail.fetch(msg_id, '(RFC822)')
+    # BODY.PEEK[] non tocca il flag \Seen: e' chi chiama a segnare il
+    # messaggio come letto, e solo se l'elaborazione e' arrivata in fondo.
+    status, data = mail.fetch(msg_id, '(BODY.PEEK[])')
     if status != 'OK':
         return
 
@@ -363,7 +388,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 righe_imp = 1 if auto_imported else 0
             _save_email_import(
                 db_path, divisione_id, att['filename'],
-                f"email/{safe_name}", sender, subject,
+                f"{uploads_rel}/{safe_name}", sender, subject,
                 tipo_import_value=tipo_import_value,
                 stato='completed' if auto_imported else 'pending',
                 ai_prompt=f"[System prompt + PDF text ({len(pdf_text)} chars)]",
@@ -382,7 +407,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
             logger.error(f"Errore processando PDF {att['filename']}: {err_safe}\n{tb}")
             _save_email_import(
                 db_path, divisione_id, att['filename'],
-                f"email/{safe_name}" if safe_name else '',
+                f"{uploads_rel}/{safe_name}" if safe_name else '',
                 sender, subject,
                 stato='failed', errori=str(e),
                 struttura_id=struttura_id

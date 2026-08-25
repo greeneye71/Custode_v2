@@ -387,7 +387,8 @@ def utente_reset_password(id):
     execute("DELETE FROM sessioni WHERE utente_id = ?", (id,))
 
     log_attivita(g.user['id'], 'reset_password', 'utenti', id,
-                 f"Reset password per: {utente['nome']} {utente['cognome']}", request.remote_addr)
+                 f"Reset password per: {utente['nome']} {utente['cognome']}", request.remote_addr,
+                 struttura_id=utente['struttura_id'])
     flash(f"Password resettata per {utente['nome']} {utente['cognome']}. "
           f"Nuova password temporanea: {temp_password}", 'warning')
     return redirect(url_for('admin.utenti'))
@@ -765,8 +766,11 @@ def configurazione():
 
         save_config(config)
 
+        # Operazione globale (@operazione_globale_required): non appartiene
+        # a nessuna struttura, nemmeno a quella eventualmente impersonata.
         log_attivita(g.user['id'], 'modifica', 'configurazione', None,
-                     'Configurazione aggiornata', request.remote_addr)
+                     'Configurazione aggiornata', request.remote_addr,
+                     struttura_id=None)
 
         flash('Configurazione salvata. Alcune modifiche richiedono il riavvio.', 'success')
         return redirect(url_for('admin.configurazione'))
@@ -979,7 +983,8 @@ def backup_crea():
         result = create_backup(db_path, backups_path, retention)
 
         log_attivita(g.user['id'], 'backup_creazione', 'backup', None,
-                     f"Backup creato: {result['filename']}", request.remote_addr)
+                     f"Backup creato: {result['filename']}", request.remote_addr,
+                     struttura_id=None)
 
         flash(f"Backup creato: {result['filename']} ({result['size'] / 1024:.1f} KB)", 'success')
     except Exception as e:
@@ -1036,7 +1041,8 @@ def backup_ripristina(filename):
         restore_backup(backup_path, db_path)
 
         log_attivita(g.user['id'], 'backup_ripristino', 'backup', None,
-                     f"Ripristinato da: {filename}", request.remote_addr)
+                     f"Ripristinato da: {filename}", request.remote_addr,
+                     struttura_id=None)
 
         flash(f"Database ripristinato da {filename}. Riavvia l'applicazione per applicare le modifiche.", 'warning')
     except Exception as e:
@@ -1177,7 +1183,8 @@ def reset_parziale():
         db = get_db()
         # Log prima di cancellare — dopo il DELETE FROM log_attivita la voce sarebbe persa
         log_attivita(g.user['id'], 'reset_parziale', 'database', None,
-                     f"Reset parziale DB. Backup: {backup_result['filename']}", request.remote_addr)
+                     f"Reset parziale DB. Backup: {backup_result['filename']}", request.remote_addr,
+                     struttura_id=None)
         db.execute("DELETE FROM import_preview")
         db.execute("DELETE FROM import_history")
         db.execute("DELETE FROM documenti")
@@ -1462,8 +1469,10 @@ def tecnico_nuovo():
         except Exception:
             pass
 
+    # Un tecnico non appartiene a una singola struttura: voce globale.
     log_attivita(g.user['id'], 'creazione', 'utenti', tecnico_id,
-                 f"Tecnico creato: {nome} {cognome}", request.remote_addr)
+                 f"Tecnico creato: {nome} {cognome}", request.remote_addr,
+                 struttura_id=None)
     flash(f"Tecnico {nome} {cognome} creato con successo.", 'success')
     return redirect(url_for('admin.tecnici'))
 
@@ -1538,7 +1547,8 @@ def tecnico_modifica(id):
             pass
 
     log_attivita(g.user['id'], 'modifica', 'utenti', id,
-                 f"Tecnico modificato: {nome} {cognome}", request.remote_addr)
+                 f"Tecnico modificato: {nome} {cognome}", request.remote_addr,
+                 struttura_id=None)
     flash(f"Tecnico {nome} {cognome} aggiornato.", 'success')
     return redirect(url_for('admin.tecnici'))
 
@@ -1564,7 +1574,8 @@ def tecnico_elimina(id):
         esito = cancella_utente(db, id)
         log_attivita(g.user['id'], 'eliminazione', 'utenti', id,
                      f"Tecnico eliminato: {esito['nome']} {esito['cognome']} "
-                     f"<{esito['email']}>", request.remote_addr)
+                     f"<{esito['email']}>", request.remote_addr,
+                     struttura_id=None)
         db.commit()
     except Exception as e:
         db.rollback()

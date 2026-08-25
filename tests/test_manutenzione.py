@@ -165,9 +165,10 @@ def test_riconosce_l_impronta_che_fa_esplodere_il_login():
     """Il caso dell'installazione migrata da werkzeug 2.
 
     check_password_hash SOLLEVA ValueError su un metodo che non conosce piu',
-    non restituisce False: auth.py:422 non la cattura, quindi il login
-    risponde 500 invece di rifiutare le credenziali. E' la ragione per cui
-    questo controllo esiste.
+    non restituisce False. Dalla 2.6.4 il login passa da
+    auth.verifica_password(), che la cattura e rifiuta le credenziali invece
+    di rispondere 500: il controllo resta perche' l'impronta va comunque
+    rigenerata — quell'utente non puo' piu' entrare in nessun modo.
     """
     from werkzeug.security import check_password_hash
     vecchia = 'sha256$abcdef$0123456789'
@@ -758,4 +759,4 @@ def test_la_versione_e_coerente_ovunque():
     import app as modulo_app
     with open(os.path.join(RADICE, 'config.json'), encoding='utf-8') as f:
         config = _json.load(f)
-    assert config['version'] == modulo_app.APP_VERSION == '2.6.3'
+    assert config['version'] == modulo_app.APP_VERSION == '2.6.4'

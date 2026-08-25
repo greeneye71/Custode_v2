@@ -23,6 +23,32 @@ logger = logging.getLogger('medinventory.auth')
 
 
 # ---------------------------------------------------------------------------
+# Verifica password
+# ---------------------------------------------------------------------------
+
+def verifica_password(impronta, password):
+    """check_password_hash che rifiuta invece di esplodere.
+
+    Werkzeug 3 non conosce piu' i metodi vecchi (`sha256$...`): davanti a
+    un'impronta del genere check_password_hash SOLLEVA ValueError, non
+    restituisce False. Senza questa protezione il login rispondeva 500 invece
+    di rifiutare le credenziali, e il rifiuto arrivava comunque — l'utente
+    resta da sbloccare, `manutenzione.py diagnosi` riconosce il caso e indica
+    il rimedio, ma l'applicazione non deve rompersi per arrivarci.
+    """
+    if not impronta:
+        return False
+    try:
+        return check_password_hash(impronta, password)
+    except (ValueError, TypeError):
+        metodo = impronta.split('$', 1)[0] if isinstance(impronta, str) else type(impronta).__name__
+        logger.error(
+            "Impronta password non verificabile (metodo '%s'): "
+            "usare 'manutenzione.py utenti azzera' per rigenerarla.", metodo)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Version notice helper
 # ---------------------------------------------------------------------------
 
@@ -419,11 +445,11 @@ def login():
     # suo posto: si prova solo dopo che quella vera ha fallito. Chi non ha
     # chiesto nessun reset non passa mai di qui — reset_hash e' NULL.
     con_temporanea = False
-    if user and not check_password_hash(user['password_hash'], password):
+    if user and not verifica_password(user['password_hash'], password):
         con_temporanea = consuma_temporanea(get_db(), user['id'], password)
 
     if not user or not (con_temporanea
-                        or check_password_hash(user['password_hash'], password)):
+                        or verifica_password(user['password_hash'], password)):
         execute(
             "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'fallito')",
             (ip, email)
@@ -470,8 +496,12 @@ def login():
     session.permanent = True
 
     # Log activity
+    # A questo punto della richiesta g.struttura_id non e' ancora impostato
+    # (la sessione nasce ora): senza il valore esplicito la voce resterebbe
+    # globale e l'admin di struttura non vedrebbe i login dei suoi utenti.
     log_attivita(user['id'], 'login', 'utenti', user['id'],
-                 f"Login da {request.remote_addr}", request.remote_addr)
+                 f"Login da {request.remote_addr}", request.remote_addr,
+                 struttura_id=user['struttura_id'])
 
     # Notifica aggiornamento versione al primo admin che logga
     if user['ruolo'] in ('admin', 'superadmin'):
@@ -656,7 +686,7 @@ def cambio_password():
 
     # Validate current password
     user = query_one("SELECT * FROM utenti WHERE id = ?", (g.user['id'],))
-    if not check_password_hash(user['password_hash'], password_attuale):
+    if not verifica_password(user['password_hash'], password_attuale):
         errors['password_attuale'] = 'Password attuale non corretta.'
 
     # Validate new password
