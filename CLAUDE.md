@@ -200,141 +200,49 @@ refuses to leave a database nobody can log into.
 - **Division filter:** Always apply `_get_divisione_filter()` when querying `apparecchi`, `manutenzioni` or `verifiche` to respect the user's active division scope.
 - **File uploads:** Go through `models.upload_subdir()`, which places files under `uploads/strutture/<id>/<tipo>/` in multi-tenant mode — the only path prefix `/uploads/<path>` knows how to isolate. Always `secure_filename()`; extensions are whitelisted per type.
 
+## Context discipline
+
+Everything written into the transcript is re-read on every later turn, so a
+payload added at turn *k* is billed *(N−k)* times. Two rules follow:
+
+- **New files over ~200 lines: delegate the writing to a subagent**, don't author
+  them in the main thread. The file body then lives in the subagent's context and
+  only its report comes back. `Write` vs `Edit` makes no difference here — for new
+  content the payload crosses the context once either way; what matters is how
+  many turns it is re-read afterwards.
+- **Plans and specs: leave plan mode with "clear context"**, don't carry the plan
+  document through the implementation session. It is on disk; read the sections
+  you need when you need them.
+
 ## AI Features
 
 `ai_service.py` wraps the AI workflows with multi-provider support (Anthropic Claude / Gemini / OpenAI / Ollama / LM Studio / OpenAI-compatible), resolving provider, key and model per struttura with fallback to the global defaults:
 1. **Unified document import** (`import_bp.py`): Upload Excel/PDF/CSV → classify document type (inventario / verbale manutenzione / verifica elettrica) via keyword heuristics + AI fallback → for multi-page PDFs, split into individual pages (`pypdf`) → analyze each page with type-specific prompt → preview with apparecchio matching → batch insert into `apparecchi`, `manutenzioni`, or `verifiche`. Analysis runs in a background thread; `import_history.stato` tracks progress.
 2. **Email maintenance parsing** (`email_monitor.py`): IMAP polling → PDF attachment extraction → AI parses maintenance report → auto-creates `manutenzioni` record with PDF verbale attached (`verbale_path`) if device found, else queues for manual review in the email queue (`import_history` with `tipo_import='verbale_email'`).
 
-# RTK (Rust Token Killer) - Token-Optimized Commands
+## RTK
 
-## Golden Rule
+`rtk` (Rust Token Killer, `/c/SV/rtk/rtk`) shrinks command output by *discarding*
+content, not by compressing it. Measured on this repo, so use it deliberately.
 
-**Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it. If not, it passes through unchanged. This means RTK is always safe to use.
+Verified wins:
 
-**Important**: Even in command chains with `&&`, use `rtk`:
-```bash
-# ❌ Wrong
-git add . && git commit -m "msg" && git push
+| command | measured |
+|---|---|
+| `rtk ls -la` | 4.988 → 1.720 char (drops permissions, size, date) |
+| `rtk git status` | 316 → 132 char |
+| `rtk grep <pattern> <path>` | 45.797 → 16.220 char, grouped by file — rtk's own syntax only |
 
-# ✅ Correct
-rtk git add . && rtk git commit -m "msg" && rtk git push
-```
+Do **not** blind-prefix. Measured counter-examples:
 
-## RTK Commands by Workflow
+- `rtk git diff` returns a `--stat` summary: 112 hunks → 0. It is not a diff.
+- `rtk git log --stat` drops file-stat lines (20 → 16).
+- `rtk find` refuses `-not` / `-exec` and exits with an error.
+- `rtk grep -rn …` passes the flags straight through: zero saving. Translating
+  to rtk's own syntax would silently drop `-i`, `-A`, `--include`.
+- On small output rtk *adds* bytes: `git show HEAD` 312 → 1.316,
+  `pytest -q` (green) 102 → 110, `git log --oneline -30` 2.165 → 2.274.
 
-### Build & Compile (80-90% savings)
-```bash
-rtk cargo build         # Cargo build output
-rtk cargo check         # Cargo check output
-rtk cargo clippy        # Clippy warnings grouped by file (80%)
-rtk tsc                 # TypeScript errors grouped by file/code (83%)
-rtk lint                # ESLint/Biome violations grouped (84%)
-rtk prettier --check    # Files needing format only (70%)
-rtk next build          # Next.js build with route metrics (87%)
-```
-
-### Test (90-99% savings)
-```bash
-rtk cargo test          # Cargo test failures only (90%)
-rtk vitest run          # Vitest failures only (99.5%)
-rtk playwright test     # Playwright failures only (94%)
-rtk test <cmd>          # Generic test wrapper - failures only
-```
-
-### Git (59-80% savings)
-```bash
-rtk git status          # Compact status
-rtk git log             # Compact log (works with all git flags)
-rtk git diff            # Compact diff (80%)
-rtk git show            # Compact show (80%)
-rtk git add             # Ultra-compact confirmations (59%)
-rtk git commit          # Ultra-compact confirmations (59%)
-rtk git push            # Ultra-compact confirmations
-rtk git pull            # Ultra-compact confirmations
-rtk git branch          # Compact branch list
-rtk git fetch           # Compact fetch
-rtk git stash           # Compact stash
-rtk git worktree        # Compact worktree
-```
-
-Note: Git passthrough works for ALL subcommands, even those not explicitly listed.
-
-### GitHub (26-87% savings)
-```bash
-rtk gh pr view <num>    # Compact PR view (87%)
-rtk gh pr checks        # Compact PR checks (79%)
-rtk gh run list         # Compact workflow runs (82%)
-rtk gh issue list       # Compact issue list (80%)
-rtk gh api              # Compact API responses (26%)
-```
-
-### JavaScript/TypeScript Tooling (70-90% savings)
-```bash
-rtk pnpm list           # Compact dependency tree (70%)
-rtk pnpm outdated       # Compact outdated packages (80%)
-rtk pnpm install        # Compact install output (90%)
-rtk npm run <script>    # Compact npm script output
-rtk npx <cmd>           # Compact npx command output
-rtk prisma              # Prisma without ASCII art (88%)
-```
-
-### Files & Search (60-75% savings)
-```bash
-rtk ls <path>           # Tree format, compact (65%)
-rtk read <file>         # Code reading with filtering (60%)
-rtk grep <pattern>      # Search grouped by file (75%)
-rtk find <pattern>      # Find grouped by directory (70%)
-```
-
-### Analysis & Debug (70-90% savings)
-```bash
-rtk err <cmd>           # Filter errors only from any command
-rtk log <file>          # Deduplicated logs with counts
-rtk json <file>         # JSON structure without values
-rtk deps                # Dependency overview
-rtk env                 # Environment variables compact
-rtk summary <cmd>       # Smart summary of command output
-rtk diff                # Ultra-compact diffs
-```
-
-### Infrastructure (85% savings)
-```bash
-rtk docker ps           # Compact container list
-rtk docker images       # Compact image list
-rtk docker logs <c>     # Deduplicated logs
-rtk kubectl get         # Compact resource list
-rtk kubectl logs        # Deduplicated pod logs
-```
-
-### Network (65-70% savings)
-```bash
-rtk curl <url>          # Compact HTTP responses (70%)
-rtk wget <url>          # Compact download output (65%)
-```
-
-### Meta Commands
-```bash
-rtk gain                # View token savings statistics
-rtk gain --history      # View command history with savings
-rtk discover            # Analyze Claude Code sessions for missed RTK usage
-rtk proxy <cmd>         # Run command without filtering (for debugging)
-rtk init                # Add RTK instructions to CLAUDE.md
-rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
-```
-
-## Token Savings Overview
-
-| Category | Commands | Typical Savings |
-|----------|----------|-----------------|
-| Tests | vitest, playwright, cargo test | 90-99% |
-| Build | next, tsc, lint, prettier | 70-87% |
-| Git | status, log, diff, add, commit | 59-80% |
-| GitHub | gh pr, gh run, gh issue | 26-87% |
-| Package Managers | pnpm, npm, npx | 70-90% |
-| Files | ls, read, grep, find | 60-75% |
-| Infrastructure | docker, kubectl | 85% |
-| Network | curl, wget | 65-70% |
-
-Overall average: **60-90% token reduction** on common development operations.
-<!-- /rtk-instructions -->
+Rule of thumb: worth it above ~3k char of expected output, and only when a lossy
+view answers the question. When the exact content matters, run the plain command
+and bound it yourself (`| head`, `sed -n 'a,bp'`, `-q`).
