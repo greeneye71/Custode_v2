@@ -494,3 +494,22 @@ def test_catalogo_differito_offre_solo_le_voci_mancanti(client, app, ambiente):
             " ORDER BY nome", (impianto,))]
         assert nomi == ['Controllo estintori', 'Controllo idranti']
 
+
+def test_scadenza_con_componente_altrui_rifiutata(client, app, ambiente):
+    with app.app_context():
+        impianto_a = _crea_impianto(ambiente, nome='Cabina A')
+        impianto_b = _crea_impianto(ambiente, 'b', 'Cabina B')
+        componente_b = execute(
+            "INSERT INTO impianti_componenti (impianto_id, descrizione)"
+            " VALUES (?, 'Quadro B')", (impianto_b,)).lastrowid
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto_a}/piano/nuova', data={
+        'nome': 'Termografia quadri', 'periodicita_mesi': '12',
+        'prossima_scadenza': '2027-03-01', 'componente_id': str(componente_b),
+    }, follow_redirects=True)
+    with app.app_context():
+        assert query_all(
+            "SELECT 1 FROM impianti_scadenze"
+            " WHERE impianto_id = ? AND componente_id = ?",
+            (impianto_a, componente_b)) == []
+

@@ -478,8 +478,15 @@ def elimina_documento(documento_id):
 # Piano di manutenzione
 # ---------------------------------------------------------------------------
 
-def _valida_scadenza(form):
-    """Valida una riga di piano. Restituisce (dati, errori)."""
+def _valida_scadenza(form, impianto_id):
+    """Valida una riga di piano. Restituisce (dati, errori).
+
+    ``componente_id`` arriva dal form: senza verifica sarebbe possibile
+    agganciare la scadenza a un componente di un impianto altrui (e quindi
+    di un'altra struttura), che la vista prossime_scadenze_impianti
+    ricongiunge senza scoping. Va risolto sull'impianto di destinazione,
+    non accettato per fiducia.
+    """
     errori = []
     nome = (form.get('nome') or '').strip()
     if not nome:
@@ -497,6 +504,15 @@ def _valida_scadenza(form):
     if not (0 <= anticipo <= 365):
         errori.append('Giorni di anticipo non validi (0-365).')
 
+    componente_id = form.get('componente_id', type=int)
+    if componente_id is not None:
+        riga_componente = query_one(
+            "SELECT id FROM impianti_componenti WHERE id = ? AND impianto_id = ?",
+            (componente_id, impianto_id))
+        if not riga_componente:
+            errori.append('Componente non valido.')
+            componente_id = None
+
     return {
         'nome': nome,
         'riferimento_normativo':
@@ -507,7 +523,7 @@ def _valida_scadenza(form):
         'giorni_anticipo': anticipo,
         'email_extra': (form.get('email_extra') or '').strip() or None,
         'avvisa_manutentore': 1 if form.get('avvisa_manutentore') else 0,
-        'componente_id': form.get('componente_id', type=int) or None,
+        'componente_id': componente_id,
         'note': (form.get('note') or '').strip() or None,
     }, errori
 
@@ -520,7 +536,7 @@ def nuova_scadenza(impianto_id):
     if not impianto:
         flash('Impianto non trovato.', 'danger')
         return redirect(url_for('impianti.lista'))
-    dati, errori = _valida_scadenza(request.form)
+    dati, errori = _valida_scadenza(request.form, impianto_id)
     if errori:
         for e in errori:
             flash(e, 'danger')
@@ -550,7 +566,7 @@ def modifica_scadenza(scadenza_id):
                      (scadenza_id,))
     if not riga or not impianto_accessibile(riga['impianto_id']):
         abort(404)
-    dati, errori = _valida_scadenza(request.form)
+    dati, errori = _valida_scadenza(request.form, riga['impianto_id'])
     if errori:
         for e in errori:
             flash(e, 'danger')
