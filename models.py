@@ -1055,6 +1055,34 @@ def apparecchio_accessibile(apparecchio_id):
     return app_row
 
 
+def impianto_accessibile(impianto_id):
+    """Verifica che l'impianto sia nello scope dell'utente corrente.
+
+    Gemella di apparecchio_accessibile(): struttura per l'isolamento
+    multi-tenant, divisione per i ruoli non amministrativi. Le tabelle figlie
+    degli impianti non portano struttura_id, quindi ogni rotta che tocca
+    componenti, documenti, piano o interventi passa prima di qui.
+    Restituisce la riga dell'impianto, oppure None.
+    """
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        riga = query_one(
+            "SELECT * FROM impianti WHERE id = ? AND struttura_id = ?",
+            (impianto_id, struttura_id)
+        )
+    elif g.user['ruolo'] == 'superadmin':
+        riga = query_one("SELECT * FROM impianti WHERE id = ?", (impianto_id,))
+    else:
+        return None
+    if not riga:
+        return None
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        accessibili = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if riga['divisione_id'] not in accessibili:
+            return None
+    return riga
+
+
 #: Sentinella per distinguere "struttura non indicata" (da dedurre dalla
 #: richiesta in corso) da "operazione deliberatamente globale" (None esplicito).
 STRUTTURA_AUTO = object()

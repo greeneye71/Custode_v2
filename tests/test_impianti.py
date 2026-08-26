@@ -92,3 +92,51 @@ def test_vista_impianti_classifica_e_esclude_dismessi(app, ambiente):
         assert query_all(
             "SELECT 1 FROM prossime_scadenze_impianti WHERE impianto_id = ?",
             (dismesso,)) == []
+
+
+def test_impianto_accessibile_isola_le_strutture(app, ambiente):
+    """Un admin non raggiunge l'impianto dell'altra struttura, nemmeno per id."""
+    from flask import g
+    from models import impianto_accessibile
+
+    with app.app_context():
+        b = ambiente['b']
+        impianto_b = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Impianto segreto B', 'idraulico')",
+            (b['struttura'], b['divisione'])
+        ).lastrowid
+
+    with app.test_request_context():
+        g.user = {'id': ambiente['a']['utente'], 'ruolo': 'admin'}
+        g.struttura_id = ambiente['a']['struttura']
+        g.divisioni = []
+        assert impianto_accessibile(impianto_b) is None
+
+        g.struttura_id = ambiente['b']['struttura']
+        riga = impianto_accessibile(impianto_b)
+        assert riga is not None and riga['nome'] == 'Impianto segreto B'
+
+
+def test_impianto_accessibile_rispetta_le_divisioni(app, ambiente):
+    """Un utente semplice vede solo gli impianti delle sue divisioni."""
+    from flask import g
+    from models import impianto_accessibile
+
+    with app.app_context():
+        a = ambiente['a']
+        altra_div = execute(
+            "INSERT INTO divisioni (struttura_id, nome, codice) VALUES (?, 'Altra', 'ALT')",
+            (a['struttura'],)).lastrowid
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Quadro Altra', 'elettrico')",
+            (a['struttura'], altra_div)).lastrowid
+
+    with app.test_request_context():
+        g.user = {'id': 99, 'ruolo': 'utente'}
+        g.struttura_id = ambiente['a']['struttura']
+        g.divisioni = [{'id': ambiente['a']['divisione']}]
+        assert impianto_accessibile(impianto) is None
+        g.divisioni = [{'id': altra_div}]
+        assert impianto_accessibile(impianto) is not None
