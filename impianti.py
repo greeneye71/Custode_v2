@@ -260,3 +260,113 @@ def dettaglio(impianto_id):
         divisioni=divisioni, manutentori=manutentori,
         tipi=TIPI_IMPIANTO, stati=STATI_IMPIANTO,
         voci_catalogo=voci_mancanti(impianto['tipo'], [p['nome'] for p in piano]))
+
+
+@impianti_bp.route('/<int:impianto_id>/modifica', methods=['GET', 'POST'])
+@tecnico_o_admin_required
+def modifica(impianto_id):
+    """Modifica dell'anagrafica. Il piano non si tocca da qui."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+
+    if request.method == 'POST':
+        dati, errori = _valida_impianto(request.form, edit_id=impianto_id)
+        if errori:
+            for e in errori:
+                flash(e, 'danger')
+        else:
+            execute(
+                """UPDATE impianti SET divisione_id = ?, nome = ?, tipo = ?,
+                       tipo_custom = ?, descrizione = ?, ubicazione = ?,
+                       anno_installazione = ?, identificativo = ?, stato = ?,
+                       manutentore_id = ?, note = ?, updated_by = ?,
+                       updated_at = datetime('now')
+                   WHERE id = ?""",
+                (dati['divisione_id'], dati['nome'], dati['tipo'],
+                 dati['tipo_custom'], dati['descrizione'], dati['ubicazione'],
+                 dati['anno_installazione'], dati['identificativo'],
+                 dati['stato'], dati['manutentore_id'], dati['note'],
+                 g.user['id'], impianto_id)
+            )
+            log_attivita(g.user['id'], 'modifica', 'impianto', impianto_id,
+                         f"Impianto {dati['nome']}")
+            flash('Impianto aggiornato.', 'success')
+            return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+    divisioni = query_all(
+        "SELECT * FROM divisioni WHERE struttura_id = ? ORDER BY nome",
+        (impianto['struttura_id'],))
+    manutentori = query_all(
+        "SELECT * FROM manutentori WHERE struttura_id = ? AND attivo = 1"
+        " ORDER BY ragione_sociale", (impianto['struttura_id'],))
+    form_data = request.form if request.method == 'POST' else impianto
+    return render_template(
+        'impianti/form.html', impianto=impianto, form_data=form_data,
+        divisioni=divisioni, manutentori=manutentori, tipi=TIPI_IMPIANTO,
+        stati=STATI_IMPIANTO, catalogo={})
+
+
+@impianti_bp.route('/<int:impianto_id>/dismetti', methods=['POST'])
+@tecnico_o_admin_required
+def dismetti(impianto_id):
+    """Cancellazione logica: stato 'dismesso', righe intatte."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+    execute("UPDATE impianti SET stato = 'dismesso', updated_by = ?,"
+            " updated_at = datetime('now') WHERE id = ?",
+            (g.user['id'], impianto_id))
+    log_attivita(g.user['id'], 'dismissione', 'impianto', impianto_id,
+                 f"Impianto {impianto['nome']} dismesso")
+    flash('Impianto dismesso.', 'success')
+    return redirect(url_for('impianti.lista'))
+
+
+@impianti_bp.route('/<int:impianto_id>/componenti', methods=['POST'])
+@tecnico_o_admin_required
+def componenti(impianto_id):
+    """Aggiunge un componente all'impianto."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+    descrizione = (request.form.get('descrizione') or '').strip()
+    if not descrizione:
+        flash('La descrizione del componente è obbligatoria.', 'danger')
+        return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+    execute(
+        """INSERT INTO impianti_componenti
+           (impianto_id, descrizione, marca, modello, matricola, ubicazione, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (impianto_id, descrizione,
+         (request.form.get('marca') or '').strip() or None,
+         (request.form.get('modello') or '').strip() or None,
+         (request.form.get('matricola') or '').strip() or None,
+         (request.form.get('ubicazione') or '').strip() or None,
+         (request.form.get('note') or '').strip() or None)
+    )
+    log_attivita(g.user['id'], 'creazione', 'impianto_componente', impianto_id,
+                 f"Componente {descrizione} su {impianto['nome']}")
+    flash('Componente aggiunto.', 'success')
+    return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+
+@impianti_bp.route('/<int:impianto_id>/componenti/<int:componente_id>/elimina',
+                   methods=['POST'])
+@tecnico_o_admin_required
+def elimina_componente(impianto_id, componente_id):
+    """Elimina un componente. Le righe di piano che lo citano restano, con
+    componente_id a NULL (ON DELETE SET NULL)."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+    execute("DELETE FROM impianti_componenti WHERE id = ? AND impianto_id = ?",
+            (componente_id, impianto_id))
+    log_attivita(g.user['id'], 'eliminazione', 'impianto_componente', impianto_id,
+                 f"Componente {componente_id} di {impianto['nome']}")
+    flash('Componente eliminato.', 'success')
+    return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))

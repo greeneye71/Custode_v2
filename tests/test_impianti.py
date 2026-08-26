@@ -334,3 +334,50 @@ def test_dettaglio_impianto_altrui_non_raggiungibile(client, app, ambiente):
     corpo = client.get(f'/impianti/{impianto_b}',
                        follow_redirects=True).get_data(as_text=True)
     assert 'SEGRETO-B' not in corpo
+
+
+def _crea_impianto(ambiente, chiave='a', nome='Cabina'):
+    d = ambiente[chiave]
+    return execute("INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+                   " VALUES (?, ?, ?, 'elettrico')",
+                   (d['struttura'], d['divisione'], nome)).lastrowid
+
+
+def test_dismissione_non_cancella(client, app, ambiente):
+    with app.app_context():
+        impianto = _crea_impianto(ambiente)
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/dismetti', follow_redirects=True)
+    with app.app_context():
+        riga = query_one("SELECT * FROM impianti WHERE id = ?", (impianto,))
+        assert riga is not None and riga['stato'] == 'dismesso'
+
+
+def test_componente_su_impianto_altrui_rifiutato(client, app, ambiente):
+    with app.app_context():
+        impianto_b = _crea_impianto(ambiente, 'b', 'Impianto B')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto_b}/componenti',
+                data={'descrizione': 'Intruso'}, follow_redirects=True)
+    with app.app_context():
+        assert query_all("SELECT 1 FROM impianti_componenti"
+                         " WHERE impianto_id = ?", (impianto_b,)) == []
+
+
+def test_componente_aggiunto_e_rimosso(client, app, ambiente):
+    with app.app_context():
+        impianto = _crea_impianto(ambiente)
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/componenti', data={
+        'descrizione': 'Quadro generale', 'marca': 'ABB'},
+        follow_redirects=True)
+    with app.app_context():
+        comp = query_one("SELECT * FROM impianti_componenti WHERE impianto_id = ?",
+                         (impianto,))
+        assert comp['descrizione'] == 'Quadro generale'
+    client.post(f'/impianti/{impianto}/componenti/{comp["id"]}/elimina',
+                follow_redirects=True)
+    with app.app_context():
+        assert query_all("SELECT 1 FROM impianti_componenti WHERE id = ?",
+                         (comp['id'],)) == []
+
