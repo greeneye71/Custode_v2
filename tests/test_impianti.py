@@ -140,3 +140,24 @@ def test_impianto_accessibile_rispetta_le_divisioni(app, ambiente):
         assert impianto_accessibile(impianto) is None
         g.divisioni = [{'id': altra_div}]
         assert impianto_accessibile(impianto) is not None
+
+
+def test_catalogo_copre_ogni_tipo_e_filtra_le_voci_presenti():
+    """Ogni tipo ha una voce nel catalogo; voci_mancanti esclude i doppioni."""
+    from impianti_catalogo import CATALOGO, voci_per_tipo, voci_mancanti
+
+    tipi = {'elettrico', 'idraulico', 'riscaldamento', 'climatizzazione',
+            'antincendio', 'gas_medicali', 'ascensori', 'rete_dati', 'altro'}
+    assert set(CATALOGO) == tipi
+    for voci in CATALOGO.values():
+        for v in voci:
+            assert set(v) == {'nome', 'mesi', 'riferimento'}
+            assert isinstance(v['mesi'], int) and v['mesi'] > 0
+
+    elettrico = voci_per_tipo('elettrico')
+    assert any(v['nome'] == 'Verifica impianto di terra' and v['mesi'] == 24
+               for v in elettrico)
+    assert voci_per_tipo('inesistente') == []
+
+    mancanti = voci_mancanti('elettrico', ['Verifica impianto di terra'])
+    assert [v['nome'] for v in mancanti] == ['Prova interruttori differenziali']
