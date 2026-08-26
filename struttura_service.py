@@ -53,6 +53,10 @@ COLONNE_ALLEGATI = (
     ('verifiche', 'documento_path',
      'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
     ('import_history', 'filepath', 'struttura_id = ?'),
+    ('impianti_documenti', 'filepath',
+     'impianto_id IN (SELECT id FROM impianti WHERE struttura_id = ?)'),
+    ('impianti_interventi', 'verbale_path',
+     'impianto_id IN (SELECT id FROM impianti WHERE struttura_id = ?)'),
     # strutture non ha una colonna struttura_id: E' la struttura, la
     # condizione e' sulla sua stessa chiave primaria.
     ('strutture', 'logo_path', 'id = ?'),
