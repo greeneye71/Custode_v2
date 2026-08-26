@@ -631,3 +631,111 @@ def piano_catalogo(impianto_id):
                  f"Catalogo: {creati} voci su {impianto['nome']}")
     flash(f'Aggiunte {creati} voci di piano.', 'success')
     return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+
+# ---------------------------------------------------------------------------
+# Interventi
+# ---------------------------------------------------------------------------
+
+@impianti_bp.route('/<int:impianto_id>/interventi/nuovo', methods=['POST'])
+@login_required
+def nuovo_intervento(impianto_id):
+    """Registra un intervento; il servizio decide se il piano avanza."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+
+    data_intervento = (request.form.get('data_intervento') or '').strip()
+    if not data_intervento:
+        flash('La data dell\'intervento è obbligatoria.', 'danger')
+        return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+    tipo = request.form.get('tipo', 'ordinaria')
+    if tipo not in ('verifica', 'ordinaria', 'straordinaria', 'riparazione'):
+        tipo = 'ordinaria'
+    esito = request.form.get('esito') or None
+    if esito not in ('positivo', 'negativo', 'con_riserva', None):
+        esito = None
+
+    # La scadenza indicata deve appartenere a questo impianto: senza il
+    # controllo, un id qualunque farebbe avanzare il piano di un'altra
+    # struttura.
+    scadenza_id = request.form.get('scadenza_id', type=int) or None
+    if scadenza_id and not query_one(
+            "SELECT 1 FROM impianti_scadenze WHERE id = ? AND impianto_id = ?",
+            (scadenza_id, impianto_id)):
+        scadenza_id = None
+
+    # Stesso discorso per il componente: deve essere di questo impianto.
+    componente_id = request.form.get('componente_id', type=int) or None
+    if componente_id and not query_one(
+            "SELECT 1 FROM impianti_componenti WHERE id = ? AND impianto_id = ?",
+            (componente_id, impianto_id)):
+        componente_id = None
+
+    # E per il manutentore: deve essere della stessa struttura dell'impianto.
+    manutentore_id = request.form.get('manutentore_id', type=int) or None
+    if manutentore_id and not query_one(
+            "SELECT 1 FROM manutentori WHERE id = ? AND struttura_id = ?",
+            (manutentore_id, impianto['struttura_id'])):
+        manutentore_id = None
+
+    verbale_path = None
+    file = request.files.get('verbale')
+    if file and file.filename:
+        ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+        if ext not in ESTENSIONI_DOCUMENTO:
+            flash('Formato del verbale non supportato.', 'danger')
+            return redirect(url_for('impianti.dettaglio',
+                                    impianto_id=impianto_id))
+        uploads_dir, rel_prefix = upload_subdir('impianti',
+                                                impianto['struttura_id'])
+        filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+        file.save(os.path.join(uploads_dir, filename))
+        verbale_path = f"{rel_prefix}/{filename}"
+
+    _, nuova = impianti_service.registra_intervento(impianto_id, {
+        'scadenza_id': scadenza_id,
+        'componente_id': componente_id,
+        'tipo': tipo,
+        'data_intervento': data_intervento,
+        'esito': esito,
+        'manutentore_id': manutentore_id,
+        'tecnico_ditta': (request.form.get('tecnico_ditta') or '').strip() or None,
+        'descrizione': (request.form.get('descrizione') or '').strip() or None,
+        'costo': request.form.get('costo', type=float),
+        'verbale_path': verbale_path,
+        'note': (request.form.get('note') or '').strip() or None,
+    }, utente_id=g.user['id'])
+
+    log_attivita(g.user['id'], 'creazione', 'impianto_intervento', impianto_id,
+                 f"Intervento {tipo} del {data_intervento} su {impianto['nome']}")
+    if nuova:
+        flash(f'Intervento registrato. Prossima scadenza: {nuova}.', 'success')
+    elif esito == 'negativo':
+        flash('Intervento registrato con esito negativo: la scadenza resta '
+              'aperta.', 'warning')
+    else:
+        flash('Intervento registrato.', 'success')
+    return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+
+@impianti_bp.route('/interventi/<int:intervento_id>/verbale')
+@login_required
+def scarica_verbale(intervento_id):
+    """Scarica il verbale di un intervento."""
+    intervento = query_one("SELECT * FROM impianti_interventi WHERE id = ?",
+                           (intervento_id,))
+    if (not intervento or not intervento['verbale_path']
+            or not impianto_accessibile(intervento['impianto_id'])):
+        abort(404)
+    from flask import current_app
+    percorso = os.path.join(current_app.config['UPLOADS_PATH'],
+                            intervento['verbale_path'])
+    if not os.path.exists(percorso):
+        flash('Verbale non presente sul server.', 'danger')
+        return redirect(url_for('impianti.dettaglio',
+                                impianto_id=intervento['impianto_id']))
+    return send_file(percorso, as_attachment=True,
+                     download_name=os.path.basename(intervento['verbale_path']))

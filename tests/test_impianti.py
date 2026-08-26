@@ -513,3 +513,34 @@ def test_scadenza_con_componente_altrui_rifiutata(client, app, ambiente):
             " WHERE impianto_id = ? AND componente_id = ?",
             (impianto_a, componente_b)) == []
 
+
+def test_intervento_da_rotta_sposta_la_scadenza(client, app, ambiente):
+    with app.app_context():
+        impianto, scad = _impianto_con_piano(ambiente, periodicita=12,
+                                             scadenza='2026-02-01')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/interventi/nuovo', data={
+        'scadenza_id': scad, 'tipo': 'verifica',
+        'data_intervento': '2026-01-20', 'esito': 'positivo',
+        'descrizione': 'Verifica eseguita',
+        'verbale': (io.BytesIO(b'%PDF-1.4 verbale'), 'verbale.pdf'),
+    }, content_type='multipart/form-data', follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT prossima_scadenza FROM impianti_scadenze"
+                         " WHERE id = ?", (scad,))['prossima_scadenza'] == '2027-01-20'
+        intervento = query_one("SELECT * FROM impianti_interventi"
+                               " WHERE impianto_id = ?", (impianto,))
+        assert intervento['verbale_path'].startswith('strutture/')
+
+
+def test_intervento_su_impianto_altrui_rifiutato(client, app, ambiente):
+    with app.app_context():
+        impianto_b = _crea_impianto(ambiente, 'b', 'Cabina B int')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto_b}/interventi/nuovo', data={
+        'tipo': 'ordinaria', 'data_intervento': '2026-01-20'},
+        follow_redirects=True)
+    with app.app_context():
+        assert query_all("SELECT 1 FROM impianti_interventi"
+                         " WHERE impianto_id = ?", (impianto_b,)) == []
+
