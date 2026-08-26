@@ -24,6 +24,10 @@ impianti_bp = Blueprint('impianti', __name__, url_prefix='/impianti')
 TIPI_IMPIANTO = ('elettrico', 'idraulico', 'riscaldamento', 'climatizzazione',
                  'antincendio', 'gas_medicali', 'ascensori', 'rete_dati', 'altro')
 STATI_IMPIANTO = ('attivo', 'in_manutenzione', 'fuori_servizio', 'dismesso')
+TIPI_DOCUMENTO = ('progetto', 'dichiarazione_conformita', 'collaudo',
+                  'certificato', 'libretto', 'planimetria', 'verbale', 'altro')
+ESTENSIONI_DOCUMENTO = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls',
+                        'xlsx', 'dwg', 'dxf', 'zip'}
 
 PER_PAGINA = 25
 
@@ -370,3 +374,101 @@ def elimina_componente(impianto_id, componente_id):
                  f"Componente {componente_id} di {impianto['nome']}")
     flash('Componente eliminato.', 'success')
     return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+
+@impianti_bp.route('/<int:impianto_id>/documenti', methods=['POST'])
+@login_required
+def carica_documento(impianto_id):
+    """Carica un documento dell'impianto con i dati dell'emittente.
+
+    L'emittente e' testo libero, non una chiave esterna: le ditte che firmano
+    progetti e collaudi cambiano a ogni documento e non tornano piu'. I
+    manutentori, che invece tornano, hanno una tabella loro.
+    """
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+
+    file = request.files.get('documento')
+    if not file or not file.filename:
+        flash('Nessun file selezionato.', 'warning')
+        return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in ESTENSIONI_DOCUMENTO:
+        flash('Formato file non supportato.', 'danger')
+        return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+    tipo = request.form.get('tipo', 'altro')
+    if tipo not in TIPI_DOCUMENTO:
+        tipo = 'altro'
+
+    uploads_dir, rel_prefix = upload_subdir('impianti', impianto['struttura_id'])
+    filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+    filepath = os.path.join(uploads_dir, filename)
+    file.save(filepath)
+
+    execute(
+        """INSERT INTO impianti_documenti
+           (impianto_id, tipo, descrizione, data_documento,
+            emittente_ragione_sociale, emittente_indirizzo, emittente_telefono,
+            emittente_email, filename, filepath, filesize, uploaded_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (impianto_id, tipo,
+         (request.form.get('descrizione') or '').strip() or None,
+         (request.form.get('data_documento') or '').strip() or None,
+         (request.form.get('emittente_ragione_sociale') or '').strip() or None,
+         (request.form.get('emittente_indirizzo') or '').strip() or None,
+         (request.form.get('emittente_telefono') or '').strip() or None,
+         (request.form.get('emittente_email') or '').strip() or None,
+         secure_filename(file.filename), f"{rel_prefix}/{filename}",
+         os.path.getsize(filepath), g.user['id'])
+    )
+    log_attivita(g.user['id'], 'creazione', 'impianto_documento', impianto_id,
+                 f"Documento {tipo} su {impianto['nome']}")
+    flash('Documento caricato.', 'success')
+    return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+
+@impianti_bp.route('/documenti/<int:documento_id>')
+@login_required
+def scarica_documento(documento_id):
+    """Scarica un documento. Il permesso passa dall'impianto, non dal file."""
+    doc = query_one("SELECT * FROM impianti_documenti WHERE id = ?",
+                    (documento_id,))
+    if not doc or not impianto_accessibile(doc['impianto_id']):
+        abort(404)
+    from flask import current_app
+    percorso = os.path.join(current_app.config['UPLOADS_PATH'], doc['filepath'])
+    if not os.path.exists(percorso):
+        flash('File non presente sul server.', 'danger')
+        return redirect(url_for('impianti.dettaglio',
+                                impianto_id=doc['impianto_id']))
+    return send_file(percorso, as_attachment=True,
+                     download_name=doc['filename'])
+
+
+@impianti_bp.route('/documenti/<int:documento_id>/elimina', methods=['POST'])
+@tecnico_o_admin_required
+def elimina_documento(documento_id):
+    """Elimina un documento e il file su disco."""
+    doc = query_one("SELECT * FROM impianti_documenti WHERE id = ?",
+                    (documento_id,))
+    if not doc or not impianto_accessibile(doc['impianto_id']):
+        abort(404)
+    from flask import current_app
+    percorso = os.path.join(current_app.config['UPLOADS_PATH'], doc['filepath'])
+    if os.path.exists(percorso):
+        try:
+            os.remove(percorso)
+        except OSError:
+            # La riga sparisce comunque: un file rimasto sul disco e' meno
+            # dannoso di un elenco che mostra un documento gia' revocato.
+            pass
+    execute("DELETE FROM impianti_documenti WHERE id = ?", (documento_id,))
+    log_attivita(g.user['id'], 'eliminazione', 'impianto_documento',
+                 doc['impianto_id'], f"Documento {doc['filename']}")
+    flash('Documento eliminato.', 'success')
+    return redirect(url_for('impianti.dettaglio',
+                            impianto_id=doc['impianto_id']))

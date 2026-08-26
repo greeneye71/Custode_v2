@@ -1,4 +1,6 @@
 """Impianti: schema, isolamento, piano di manutenzione, avvisi."""
+import io
+
 import pytest
 from werkzeug.security import generate_password_hash
 
@@ -380,4 +382,51 @@ def test_componente_aggiunto_e_rimosso(client, app, ambiente):
     with app.app_context():
         assert query_all("SELECT 1 FROM impianti_componenti WHERE id = ?",
                          (comp['id'],)) == []
+
+
+def test_documento_caricato_con_emittente(client, app, ambiente):
+    with app.app_context():
+        impianto = _crea_impianto(ambiente, nome='Cabina doc')
+    entra(client, ambiente['a']['email'])
+    risposta = client.post(f'/impianti/{impianto}/documenti', data={
+        'tipo': 'dichiarazione_conformita',
+        'descrizione': 'DiCo quadro generale',
+        'data_documento': '2020-05-12',
+        'emittente_ragione_sociale': 'Elettro Srl',
+        'emittente_email': 'info@elettro.it',
+        'documento': (io.BytesIO(b'%PDF-1.4 finto'), 'dico.pdf'),
+    }, content_type='multipart/form-data', follow_redirects=True)
+    assert risposta.status_code == 200
+    with app.app_context():
+        doc = query_one("SELECT * FROM impianti_documenti WHERE impianto_id = ?",
+                        (impianto,))
+        assert doc['tipo'] == 'dichiarazione_conformita'
+        assert doc['emittente_ragione_sociale'] == 'Elettro Srl'
+        assert doc['filepath'].startswith('strutture/')
+        assert doc['filesize'] > 0
+
+
+def test_documento_estensione_non_ammessa_rifiutata(client, app, ambiente):
+    with app.app_context():
+        impianto = _crea_impianto(ambiente, nome='Cabina exe')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/documenti', data={
+        'tipo': 'altro',
+        'documento': (io.BytesIO(b'MZ'), 'virus.exe'),
+    }, content_type='multipart/form-data', follow_redirects=True)
+    with app.app_context():
+        assert query_all("SELECT 1 FROM impianti_documenti"
+                         " WHERE impianto_id = ?", (impianto,)) == []
+
+
+def test_documento_altrui_non_scaricabile(client, app, ambiente):
+    with app.app_context():
+        impianto_b = _crea_impianto(ambiente, 'b', 'Cabina B')
+        doc_b = execute(
+            "INSERT INTO impianti_documenti (impianto_id, tipo, filename,"
+            " filepath) VALUES (?, 'progetto', 'segreto.pdf', 'x/segreto.pdf')",
+            (impianto_b,)).lastrowid
+    entra(client, ambiente['a']['email'])
+    risposta = client.get(f'/impianti/documenti/{doc_b}')
+    assert risposta.status_code in (302, 403, 404)
 
