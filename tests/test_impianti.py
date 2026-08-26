@@ -544,3 +544,40 @@ def test_intervento_su_impianto_altrui_rifiutato(client, app, ambiente):
         assert query_all("SELECT 1 FROM impianti_interventi"
                          " WHERE impianto_id = ?", (impianto_b,)) == []
 
+
+def test_manutentore_creato_nella_struttura_giusta(client, app, ambiente):
+    entra(client, ambiente['a']['email'])
+    client.post('/impianti/manutentori/nuovo', data={
+        'ragione_sociale': 'Termo Service Srl', 'email': 'info@termo.it',
+        'telefono': '0300000'}, follow_redirects=True)
+    with app.app_context():
+        riga = query_one("SELECT * FROM manutentori"
+                         " WHERE ragione_sociale = 'Termo Service Srl'")
+        assert riga['struttura_id'] == ambiente['a']['struttura']
+
+
+def test_elenco_manutentori_isolato(client, app, ambiente):
+    with app.app_context():
+        execute("INSERT INTO manutentori (struttura_id, ragione_sociale)"
+                " VALUES (?, 'DITTA-SEGRETA-B')", (ambiente['b']['struttura'],))
+    entra(client, ambiente['a']['email'])
+    corpo = client.get('/impianti/manutentori').get_data(as_text=True)
+    assert 'DITTA-SEGRETA-B' not in corpo
+
+
+def test_manutentore_eliminato_non_cancella_gli_impianti(client, app, ambiente):
+    """ON DELETE SET NULL: l'impianto resta, senza manutentore."""
+    with app.app_context():
+        a = ambiente['a']
+        mid = execute("INSERT INTO manutentori (struttura_id, ragione_sociale)"
+                      " VALUES (?, 'Elimina Srl')", (a['struttura'],)).lastrowid
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo,"
+            " manutentore_id) VALUES (?, ?, 'Cabina M', 'elettrico', ?)",
+            (a['struttura'], a['divisione'], mid)).lastrowid
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/manutentori/{mid}/elimina', follow_redirects=True)
+    with app.app_context():
+        riga = query_one("SELECT * FROM impianti WHERE id = ?", (impianto,))
+        assert riga is not None and riga['manutentore_id'] is None
+

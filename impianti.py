@@ -739,3 +739,116 @@ def scarica_verbale(intervento_id):
                                 impianto_id=intervento['impianto_id']))
     return send_file(percorso, as_attachment=True,
                      download_name=os.path.basename(intervento['verbale_path']))
+
+
+# ---------------------------------------------------------------------------
+# Manutentori
+# ---------------------------------------------------------------------------
+
+def _manutentore_in_scope(manutentore_id):
+    """La riga del manutentore, solo se della struttura attiva."""
+    struttura_id = getattr(g, 'struttura_id', None)
+    if not struttura_id:
+        return None
+    return query_one(
+        "SELECT * FROM manutentori WHERE id = ? AND struttura_id = ?",
+        (manutentore_id, struttura_id))
+
+
+def _dati_manutentore(form):
+    """Campi del manutentore. Restituisce (dati, errori)."""
+    ragione = (form.get('ragione_sociale') or '').strip()
+    errori = [] if ragione else ['La ragione sociale è obbligatoria.']
+    return {
+        'ragione_sociale': ragione,
+        'indirizzo': (form.get('indirizzo') or '').strip() or None,
+        'telefono': (form.get('telefono') or '').strip() or None,
+        'email': (form.get('email') or '').strip() or None,
+        'partita_iva': (form.get('partita_iva') or '').strip() or None,
+        'note': (form.get('note') or '').strip() or None,
+    }, errori
+
+
+@impianti_bp.route('/manutentori')
+@tecnico_o_admin_required
+def manutentori():
+    """Anagrafica delle ditte manutentrici della struttura."""
+    elenco = query_all(
+        "SELECT * FROM manutentori WHERE struttura_id = ?"
+        " ORDER BY attivo DESC, ragione_sociale",
+        (getattr(g, 'struttura_id', None),))
+    return render_template('impianti/manutentori.html', manutentori=elenco)
+
+
+@impianti_bp.route('/manutentori/nuovo', methods=['POST'])
+@tecnico_o_admin_required
+def nuovo_manutentore():
+    """Crea un manutentore nella struttura attiva."""
+    struttura_id = getattr(g, 'struttura_id', None)
+    if not struttura_id:
+        flash('Nessuna struttura attiva.', 'danger')
+        return redirect(url_for('impianti.manutentori'))
+    dati, errori = _dati_manutentore(request.form)
+    if errori:
+        for e in errori:
+            flash(e, 'danger')
+        return redirect(url_for('impianti.manutentori'))
+    if query_one("SELECT 1 FROM manutentori WHERE struttura_id = ?"
+                 " AND ragione_sociale = ?",
+                 (struttura_id, dati['ragione_sociale'])):
+        flash('Manutentore già presente.', 'warning')
+        return redirect(url_for('impianti.manutentori'))
+    mid = execute(
+        """INSERT INTO manutentori (struttura_id, ragione_sociale, indirizzo,
+               telefono, email, partita_iva, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (struttura_id, dati['ragione_sociale'], dati['indirizzo'],
+         dati['telefono'], dati['email'], dati['partita_iva'], dati['note'])
+    ).lastrowid
+    log_attivita(g.user['id'], 'creazione', 'manutentore', mid,
+                 dati['ragione_sociale'])
+    flash('Manutentore aggiunto.', 'success')
+    return redirect(url_for('impianti.manutentori'))
+
+
+@impianti_bp.route('/manutentori/<int:manutentore_id>/modifica',
+                   methods=['POST'])
+@tecnico_o_admin_required
+def modifica_manutentore(manutentore_id):
+    """Modifica i dati di un manutentore."""
+    if not _manutentore_in_scope(manutentore_id):
+        abort(404)
+    dati, errori = _dati_manutentore(request.form)
+    if errori:
+        for e in errori:
+            flash(e, 'danger')
+        return redirect(url_for('impianti.manutentori'))
+    execute(
+        """UPDATE manutentori SET ragione_sociale = ?, indirizzo = ?,
+               telefono = ?, email = ?, partita_iva = ?, note = ?,
+               attivo = ?, updated_at = datetime('now')
+           WHERE id = ?""",
+        (dati['ragione_sociale'], dati['indirizzo'], dati['telefono'],
+         dati['email'], dati['partita_iva'], dati['note'],
+         1 if request.form.get('attivo') else 0, manutentore_id)
+    )
+    log_attivita(g.user['id'], 'modifica', 'manutentore', manutentore_id,
+                 dati['ragione_sociale'])
+    flash('Manutentore aggiornato.', 'success')
+    return redirect(url_for('impianti.manutentori'))
+
+
+@impianti_bp.route('/manutentori/<int:manutentore_id>/elimina',
+                   methods=['POST'])
+@tecnico_o_admin_required
+def elimina_manutentore(manutentore_id):
+    """Elimina un manutentore. Impianti e interventi restano, senza il
+    riferimento (ON DELETE SET NULL)."""
+    riga = _manutentore_in_scope(manutentore_id)
+    if not riga:
+        abort(404)
+    execute("DELETE FROM manutentori WHERE id = ?", (manutentore_id,))
+    log_attivita(g.user['id'], 'eliminazione', 'manutentore', manutentore_id,
+                 riga['ragione_sociale'])
+    flash('Manutentore eliminato.', 'success')
+    return redirect(url_for('impianti.manutentori'))
