@@ -70,6 +70,12 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'impianti' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('impianti.lista') }}">
+                            <i class="bi bi-diagram-3 me-1"></i> Impianti
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint and 'verifiche' in request.endpoint %}active{% endif %}"
                            href="{{ url_for('verifiche.lista') }}">
                             <i class="bi bi-shield-check me-1"></i> Verifiche sic. el.
@@ -238,6 +244,12 @@
                         <a class="nav-link {% if request.endpoint and 'apparecchi' in request.endpoint %}active{% endif %}"
                            href="{{ url_for('apparecchi.lista') }}">
                             <i class="bi bi-cpu"></i> Apparecchi
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint and 'impianti' in request.endpoint %}active{% endif %}"
+                           href="{{ url_for('impianti.lista') }}">
+                            <i class="bi bi-diagram-3"></i> Impianti
                         </a>
                     </li>
                     <li class="nav-item">

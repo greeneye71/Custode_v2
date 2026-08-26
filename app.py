@@ -411,6 +411,9 @@ def create_app():
     from verifiche import verifiche_bp
     app.register_blueprint(verifiche_bp)
 
+    from impianti import impianti_bp
+    app.register_blueprint(impianti_bp)
+
     from strutture_bp import strutture_bp
     app.register_blueprint(strutture_bp)
 

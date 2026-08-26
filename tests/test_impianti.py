@@ -272,3 +272,65 @@ def test_applica_catalogo_crea_il_piano(app, ambiente):
         # Un nome non in catalogo viene ignorato, non inventato.
         assert applica_catalogo(impianto, 'antincendio', ['Fantasia'],
                                 '2026-01-01') == 0
+
+
+def test_lista_impianti_isola_le_strutture(client, app, ambiente):
+    with app.app_context():
+        for chiave, nome in (('a', 'Cabina A'), ('b', 'SEGRETO-B')):
+            d = ambiente[chiave]
+            execute("INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+                    " VALUES (?, ?, ?, 'elettrico')",
+                    (d['struttura'], d['divisione'], nome))
+    entra(client, ambiente['a']['email'])
+    corpo = client.get('/impianti').get_data(as_text=True)
+    assert 'Cabina A' in corpo
+    assert 'SEGRETO-B' not in corpo
+
+
+def test_lista_impianti_partial_e_solo_il_frammento(client, app, ambiente):
+    entra(client, ambiente['a']['email'])
+    corpo = client.get('/impianti?partial=1').get_data(as_text=True)
+    assert '<html' not in corpo.lower()
+
+
+def test_creazione_impianto_con_catalogo(client, app, ambiente):
+    entra(client, ambiente['a']['email'])
+    with app.app_context():
+        divisione = ambiente['a']['divisione']
+    risposta = client.post('/impianti/nuovo', data={
+        'nome': 'Cabina MT', 'tipo': 'elettrico', 'divisione_id': divisione,
+        'ubicazione': 'Piano interrato',
+        'catalogo': ['Verifica impianto di terra'],
+    }, follow_redirects=True)
+    assert risposta.status_code == 200
+    with app.app_context():
+        riga = query_one("SELECT * FROM impianti WHERE nome = 'Cabina MT'")
+        assert riga['struttura_id'] == ambiente['a']['struttura']
+        piano = query_all("SELECT * FROM impianti_scadenze WHERE impianto_id = ?",
+                          (riga['id'],))
+        assert len(piano) == 1 and piano[0]['periodicita_mesi'] == 24
+
+
+def test_tipo_custom_solo_con_tipo_altro(client, app, ambiente):
+    entra(client, ambiente['a']['email'])
+    with app.app_context():
+        divisione = ambiente['a']['divisione']
+    client.post('/impianti/nuovo', data={
+        'nome': 'Fotovoltaico', 'tipo': 'elettrico', 'divisione_id': divisione,
+        'tipo_custom': 'Solare'}, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT tipo_custom FROM impianti"
+                         " WHERE nome = 'Fotovoltaico'")['tipo_custom'] is None
+
+
+def test_dettaglio_impianto_altrui_non_raggiungibile(client, app, ambiente):
+    with app.app_context():
+        b = ambiente['b']
+        impianto_b = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'SEGRETO-B', 'idraulico')",
+            (b['struttura'], b['divisione'])).lastrowid
+    entra(client, ambiente['a']['email'])
+    corpo = client.get(f'/impianti/{impianto_b}',
+                       follow_redirects=True).get_data(as_text=True)
+    assert 'SEGRETO-B' not in corpo

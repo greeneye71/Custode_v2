@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}{{ impianto.nome }} - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex justify-content-between align-items-start">
+    <div>
+        <h2><i class="bi bi-diagram-3 me-2"></i> {{ impianto.nome }}</h2>
+        <p class="text-muted mb-0">
+            {{ impianto.tipo_custom or impianto.tipo|replace('_', ' ')|capitalize }}
+            &middot; {{ impianto.stato|replace('_', ' ')|capitalize }}
+        </p>
+    </div>
+    {% if current_user.ruolo in ('admin', 'superadmin', 'tecnico') %}
+    <a href="{{ url_for('impianti.lista') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Torna alla lista
+    </a>
+    {% endif %}
+</div>
+
+<ul class="nav nav-tabs mb-3" id="impianto-tabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-anagrafica" type="button">
+            <i class="bi bi-info-circle me-1"></i> Anagrafica
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-componenti" type="button">
+            <i class="bi bi-gear me-1"></i> Componenti
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-documenti" type="button">
+            <i class="bi bi-file-earmark me-1"></i> Documenti
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-piano" type="button">
+            <i class="bi bi-calendar-check me-1"></i> Piano di manutenzione
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-interventi" type="button">
+            <i class="bi bi-tools me-1"></i> Interventi
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content">
+
+    <div class="tab-pane fade show active" id="tab-anagrafica" role="tabpanel">
+        <div class="card">
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-3">Ubicazione</dt>
+                    <dd class="col-sm-9">{{ impianto.ubicazione or '-' }}</dd>
+                    <dt class="col-sm-3">Identificativo</dt>
+                    <dd class="col-sm-9">{{ impianto.identificativo or '-' }}</dd>
+                    <dt class="col-sm-3">Anno installazione</dt>
+                    <dd class="col-sm-9">{{ impianto.anno_installazione or '-' }}</dd>
+                    <dt class="col-sm-3">Divisione</dt>
+                    <dd class="col-sm-9">
+                        {% for d in divisioni if d.id == impianto.divisione_id %}{{ d.nome }}{% endfor %}
+                    </dd>
+                    <dt class="col-sm-3">Manutentore</dt>
+                    <dd class="col-sm-9">
+                        {% for m in manutentori if m.id == impianto.manutentore_id %}{{ m.ragione_sociale }}{% else %}-{% endfor %}
+                    </dd>
+                    <dt class="col-sm-3">Descrizione</dt>
+                    <dd class="col-sm-9">{{ impianto.descrizione or '-' }}</dd>
+                    <dt class="col-sm-3">Note</dt>
+                    <dd class="col-sm-9">{{ impianto.note or '-' }}</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-componenti" role="tabpanel">
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr><th>Descrizione</th><th>Marca</th><th>Modello</th><th>Matricola</th><th>Ubicazione</th><th>Note</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for c in componenti %}
+                        <tr>
+                            <td>{{ c.descrizione }}</td>
+                            <td>{{ c.marca or '-' }}</td>
+                            <td>{{ c.modello or '-' }}</td>
+                            <td>{{ c.matricola or '-' }}</td>
+                            <td>{{ c.ubicazione or '-' }}</td>
+                            <td>{{ c.note or '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="text-muted text-center py-3">Nessun componente registrato.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-documenti" role="tabpanel">
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr><th>Tipo</th><th>File</th><th>Caricato il</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for doc in documenti %}
+                        <tr>
+                            <td>{{ doc.tipo|replace('_', ' ')|capitalize }}</td>
+                            <td>{{ doc.filename }}</td>
+                            <td>{{ doc.uploaded_at }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="text-muted text-center py-3">Nessun documento caricato.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="tab-pane fade" id="tab-piano" role="tabpanel">
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr><th>Voce</th><th>Periodicita'</th><th>Prossima scadenza</th><th>Giorni rimasti</th><th>Riferimento</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for s in piano %}
+                        <tr>
+                            <td>{{ s.nome }}</td>
+                            <td>{{ (s.periodicita_mesi ~ ' mesi') if s.periodicita_mesi else 'una tantum' }}</td>
+                            <td>{{ s.prossima_scadenza }}</td>
+                            <td>{{ s.giorni_rimasti }}</td>
+                            <td>{{ s.riferimento_normativo or '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-muted text-center py-3">Nessuna voce di piano.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% if voci_catalogo %}
+        <p class="text-muted small mt-2">
+            Voci di catalogo non ancora inserite: {{ voci_catalogo|map(attribute='nome')|join(', ') }}
+        </p>
+        {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="tab-interventi" role="tabpanel">
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr><th>Data</th><th>Tipo</th><th>Esito</th><th>Manutentore</th><th>Voce di piano</th><th>Descrizione</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for iv in interventi %}
+                        <tr>
+                            <td>{{ iv.data_intervento }}</td>
+                            <td>{{ iv.tipo|capitalize }}</td>
+                            <td>{{ iv.esito|capitalize if iv.esito else '-' }}</td>
+                            <td>{{ iv.manutentore_nome or iv.tecnico_ditta or '-' }}</td>
+                            <td>{{ iv.scadenza_nome or '-' }}</td>
+                            <td>{{ iv.descrizione or '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="text-muted text-center py-3">Nessun intervento registrato.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
