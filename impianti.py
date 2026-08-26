@@ -472,3 +472,146 @@ def elimina_documento(documento_id):
     flash('Documento eliminato.', 'success')
     return redirect(url_for('impianti.dettaglio',
                             impianto_id=doc['impianto_id']))
+
+
+# ---------------------------------------------------------------------------
+# Piano di manutenzione
+# ---------------------------------------------------------------------------
+
+def _valida_scadenza(form):
+    """Valida una riga di piano. Restituisce (dati, errori)."""
+    errori = []
+    nome = (form.get('nome') or '').strip()
+    if not nome:
+        errori.append('Il nome della verifica è obbligatorio.')
+    prossima = (form.get('prossima_scadenza') or '').strip()
+    if not prossima:
+        errori.append('La data della prossima scadenza è obbligatoria.')
+
+    periodicita = form.get('periodicita_mesi', type=int)
+    if periodicita is not None and not (1 <= periodicita <= 600):
+        errori.append('Periodicità non valida (1-600 mesi).')
+    anticipo = form.get('giorni_anticipo', type=int)
+    if anticipo is None:
+        anticipo = 30
+    if not (0 <= anticipo <= 365):
+        errori.append('Giorni di anticipo non validi (0-365).')
+
+    return {
+        'nome': nome,
+        'riferimento_normativo':
+            (form.get('riferimento_normativo') or '').strip() or None,
+        # Vuoto significa una tantum: eseguita una volta, la riga si chiude.
+        'periodicita_mesi': periodicita or None,
+        'prossima_scadenza': prossima,
+        'giorni_anticipo': anticipo,
+        'email_extra': (form.get('email_extra') or '').strip() or None,
+        'avvisa_manutentore': 1 if form.get('avvisa_manutentore') else 0,
+        'componente_id': form.get('componente_id', type=int) or None,
+        'note': (form.get('note') or '').strip() or None,
+    }, errori
+
+
+@impianti_bp.route('/<int:impianto_id>/piano/nuova', methods=['POST'])
+@tecnico_o_admin_required
+def nuova_scadenza(impianto_id):
+    """Aggiunge una riga al piano di manutenzione/verifica."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+    dati, errori = _valida_scadenza(request.form)
+    if errori:
+        for e in errori:
+            flash(e, 'danger')
+        return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+    execute(
+        """INSERT INTO impianti_scadenze
+           (impianto_id, componente_id, nome, riferimento_normativo,
+            periodicita_mesi, prossima_scadenza, giorni_anticipo, email_extra,
+            avvisa_manutentore, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (impianto_id, dati['componente_id'], dati['nome'],
+         dati['riferimento_normativo'], dati['periodicita_mesi'],
+         dati['prossima_scadenza'], dati['giorni_anticipo'],
+         dati['email_extra'], dati['avvisa_manutentore'], dati['note'])
+    )
+    log_attivita(g.user['id'], 'creazione', 'impianto_scadenza', impianto_id,
+                 f"Piano: {dati['nome']} su {impianto['nome']}")
+    flash('Voce di piano aggiunta.', 'success')
+    return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
+
+
+@impianti_bp.route('/piano/<int:scadenza_id>/modifica', methods=['POST'])
+@tecnico_o_admin_required
+def modifica_scadenza(scadenza_id):
+    """Modifica una riga di piano."""
+    riga = query_one("SELECT * FROM impianti_scadenze WHERE id = ?",
+                     (scadenza_id,))
+    if not riga or not impianto_accessibile(riga['impianto_id']):
+        abort(404)
+    dati, errori = _valida_scadenza(request.form)
+    if errori:
+        for e in errori:
+            flash(e, 'danger')
+    else:
+        execute(
+            """UPDATE impianti_scadenze SET componente_id = ?, nome = ?,
+                   riferimento_normativo = ?, periodicita_mesi = ?,
+                   prossima_scadenza = ?, giorni_anticipo = ?, email_extra = ?,
+                   avvisa_manutentore = ?, note = ?, updated_at = datetime('now')
+               WHERE id = ?""",
+            (dati['componente_id'], dati['nome'], dati['riferimento_normativo'],
+             dati['periodicita_mesi'], dati['prossima_scadenza'],
+             dati['giorni_anticipo'], dati['email_extra'],
+             dati['avvisa_manutentore'], dati['note'], scadenza_id)
+        )
+        log_attivita(g.user['id'], 'modifica', 'impianto_scadenza',
+                     riga['impianto_id'], f"Piano: {dati['nome']}")
+        flash('Voce di piano aggiornata.', 'success')
+    return redirect(url_for('impianti.dettaglio',
+                            impianto_id=riga['impianto_id']))
+
+
+@impianti_bp.route('/piano/<int:scadenza_id>/sospendi', methods=['POST'])
+@tecnico_o_admin_required
+def sospendi_scadenza(scadenza_id):
+    """Sospende o riattiva una riga di piano.
+
+    Sospendere, non cancellare: gli interventi gia' registrati continuano a
+    puntarla, e riattivarla ricostruisce il ciclo senza reinserire nulla.
+    """
+    riga = query_one("SELECT * FROM impianti_scadenze WHERE id = ?",
+                     (scadenza_id,))
+    if not riga or not impianto_accessibile(riga['impianto_id']):
+        abort(404)
+    nuovo = 0 if riga['attiva'] else 1
+    execute("UPDATE impianti_scadenze SET attiva = ?,"
+            " updated_at = datetime('now') WHERE id = ?", (nuovo, scadenza_id))
+    log_attivita(g.user['id'], 'modifica', 'impianto_scadenza',
+                 riga['impianto_id'],
+                 f"Piano: {riga['nome']} {'riattivata' if nuovo else 'sospesa'}")
+    flash('Voce riattivata.' if nuovo else 'Voce sospesa.', 'success')
+    return redirect(url_for('impianti.dettaglio',
+                            impianto_id=riga['impianto_id']))
+
+
+@impianti_bp.route('/<int:impianto_id>/piano/catalogo', methods=['POST'])
+@tecnico_o_admin_required
+def piano_catalogo(impianto_id):
+    """Aggiunge al piano voci di catalogo non ancora presenti."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+    presenti = [r['nome'] for r in query_all(
+        "SELECT nome FROM impianti_scadenze WHERE impianto_id = ?",
+        (impianto_id,))]
+    mancanti = {v['nome'] for v in voci_mancanti(impianto['tipo'], presenti)}
+    scelti = [n for n in request.form.getlist('catalogo') if n in mancanti]
+    creati = impianti_service.applica_catalogo(
+        impianto_id, impianto['tipo'], scelti, time.strftime('%Y-%m-%d'))
+    log_attivita(g.user['id'], 'creazione', 'impianto_scadenza', impianto_id,
+                 f"Catalogo: {creati} voci su {impianto['nome']}")
+    flash(f'Aggiunte {creati} voci di piano.', 'success')
+    return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))

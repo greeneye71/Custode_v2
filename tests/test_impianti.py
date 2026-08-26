@@ -430,3 +430,67 @@ def test_documento_altrui_non_scaricabile(client, app, ambiente):
     risposta = client.get(f'/impianti/documenti/{doc_b}')
     assert risposta.status_code in (302, 403, 404)
 
+
+def test_scadenza_creata_a_mano(client, app, ambiente):
+    with app.app_context():
+        impianto = _crea_impianto(ambiente, nome='Cabina piano')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/piano/nuova', data={
+        'nome': 'Termografia quadri', 'periodicita_mesi': '12',
+        'prossima_scadenza': '2027-03-01', 'giorni_anticipo': '45',
+        'email_extra': 'perito@test.it', 'avvisa_manutentore': '1',
+    }, follow_redirects=True)
+    with app.app_context():
+        riga = query_one("SELECT * FROM impianti_scadenze WHERE impianto_id = ?",
+                         (impianto,))
+        assert riga['nome'] == 'Termografia quadri'
+        assert riga['giorni_anticipo'] == 45
+        assert riga['email_extra'] == 'perito@test.it'
+        assert riga['avvisa_manutentore'] == 1
+
+
+def test_scadenza_una_tantum_senza_periodicita(client, app, ambiente):
+    with app.app_context():
+        impianto = _crea_impianto(ambiente, nome='Cabina una tantum')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/piano/nuova', data={
+        'nome': 'Collaudo iniziale', 'periodicita_mesi': '',
+        'prossima_scadenza': '2026-09-01'}, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT periodicita_mesi FROM impianti_scadenze"
+                         " WHERE impianto_id = ?",
+                         (impianto,))['periodicita_mesi'] is None
+
+
+def test_scadenza_sospesa_esce_dalla_vista(client, app, ambiente):
+    with app.app_context():
+        impianto, scad = _impianto_con_piano(ambiente, scadenza='2026-09-01')
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/piano/{scad}/sospendi', follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT attiva FROM impianti_scadenze WHERE id = ?",
+                         (scad,))['attiva'] == 0
+        assert query_all("SELECT 1 FROM prossime_scadenze_impianti"
+                         " WHERE scadenza_id = ?", (scad,)) == []
+
+
+def test_catalogo_differito_offre_solo_le_voci_mancanti(client, app, ambiente):
+    with app.app_context():
+        a = ambiente['a']
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Antincendio B1', 'antincendio')",
+            (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Controllo estintori', 6, '2026-09-01')", (impianto,))
+    entra(client, ambiente['a']['email'])
+    client.post(f'/impianti/{impianto}/piano/catalogo', data={
+        'catalogo': ['Controllo idranti', 'Controllo estintori']},
+        follow_redirects=True)
+    with app.app_context():
+        nomi = [r['nome'] for r in query_all(
+            "SELECT nome FROM impianti_scadenze WHERE impianto_id = ?"
+            " ORDER BY nome", (impianto,))]
+        assert nomi == ['Controllo estintori', 'Controllo idranti']
+
