@@ -685,6 +685,30 @@ def test_scadenzario_summary_sopravvive_al_filtro_priorita(client, app, ambiente
     assert int(match.group(1)) >= 1
 
 
+def test_catalogo_non_ripropone_una_voce_sospesa(client, app, ambiente):
+    """Il catalogo mostra solo cio' che piano_catalogo() accetterebbe.
+
+    piano_catalogo() scarta i nomi gia' presenti senza guardare 'attiva':
+    finche' il dettaglio calcolava le voci mancanti sul solo piano attivo,
+    una voce sospesa tornava fra i checkbox e il POST non creava nulla.
+    """
+    a = ambiente['a']
+    with app.app_context():
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Antincendio sospeso', 'antincendio')",
+            (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza, attiva)"
+                " VALUES (?, 'Controllo estintori', 6, '2026-09-01', 0)",
+                (impianto,))
+    entra(client, a['email'])
+    html = client.get(f'/impianti/{impianto}').data.decode('utf-8')
+    assert 'value="Controllo estintori"' not in html
+    # Controprova: le altre voci del catalogo restano offerte.
+    assert 'name="catalogo"' in html
+
+
 def test_libretto_pdf_generato(app, ambiente, tmp_path):
     from export_service import genera_libretto_impianto
     with app.app_context():

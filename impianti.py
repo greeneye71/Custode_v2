@@ -258,12 +258,20 @@ def dettaglio(impianto_id):
         "SELECT * FROM manutentori WHERE struttura_id = ? AND attivo = 1"
         " ORDER BY ragione_sociale", (impianto['struttura_id'],))
 
+    # I nomi gia' nel piano, sospesi compresi: piano_catalogo() scarta le voci
+    # gia' presenti senza guardare 'attiva', e proporre una voce sospesa qui
+    # avrebbe prodotto un checkbox che non crea nulla. Una voce sospesa si
+    # riattiva dalla riga del piano, non si riaggiunge dal catalogo.
+    nomi_piano = [r['nome'] for r in query_all(
+        "SELECT nome FROM impianti_scadenze WHERE impianto_id = ?",
+        (impianto_id,))]
+
     return render_template(
         'impianti/dettaglio.html', impianto=impianto, componenti=componenti,
         documenti=documenti, piano=piano, interventi=interventi,
         divisioni=divisioni, manutentori=manutentori,
         tipi=TIPI_IMPIANTO, stati=STATI_IMPIANTO,
-        voci_catalogo=voci_mancanti(impianto['tipo'], [p['nome'] for p in piano]))
+        voci_catalogo=voci_mancanti(impianto['tipo'], nomi_piano))
 
 
 @impianti_bp.route('/<int:impianto_id>/modifica', methods=['GET', 'POST'])
