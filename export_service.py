@@ -511,7 +511,6 @@ def _stampa_impianti(scadute, in_scadenza, contesto):
 
     pdf = ReportPDF(contesto)
     pdf.add_page()
-    pdf.intestazione_tabella(COLONNE_IMPIANTI)
 
     indice = 0
     for titolo, righe in (('Scadute', scadute),
