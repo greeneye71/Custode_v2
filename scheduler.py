@@ -249,14 +249,14 @@ class BackgroundScheduler:
                         # stesso MIMEMultipart fra piu' invii duplicherebbe
                         # gli header dal secondo invio in poi.
                         falliti = []
-                        inviati = 0
+                        raggiunti = []
                         for indirizzo in indirizzi:
                             msg = MIMEMultipart()
                             msg['Subject'] = oggetto
                             msg.attach(MIMEText(testo, 'plain', 'utf-8'))
                             if invia(self.app.config.get('APP_CONFIG'),
                                      indirizzo, msg):
-                                inviati += 1
+                                raggiunti.append(indirizzo)
                             else:
                                 falliti.append(indirizzo)
 
@@ -273,14 +273,17 @@ class BackgroundScheduler:
                         # quell'indirizzo perda la notifica in silenzio — per
                         # questo il fallimento e' loggato sopra a livello
                         # ERROR, cosi' l'operatore vede quale indirizzo e'
-                        # rotto.
-                        if inviati:
+                        # rotto. Si registra e si logga chi e' stato
+                        # raggiunto davvero, non la lista di partenza: con un
+                        # invio parzialmente fallito la colonna 'destinatari'
+                        # e' l'unica traccia di chi ha ricevuto l'avviso.
+                        if raggiunti:
                             for soglia in avviso['soglie_coperte']:
                                 impianti_service.registra_avviso(
                                     avviso['scadenza_id'], soglia,
-                                    avviso['prossima_scadenza'], indirizzi)
+                                    avviso['prossima_scadenza'], raggiunti)
                             logger.info(f"Avviso impianto inviato a "
-                                        f"{indirizzi} ({struttura['nome']})")
+                                        f"{raggiunti} ({struttura['nome']})")
                 except Exception as e:
                     logger.error(f"Errore avvisi impianti struttura "
                                  f"{struttura['nome']}: {e}")
