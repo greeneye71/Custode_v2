@@ -471,12 +471,89 @@ def stampa_scadenze_excel(scadute, in_scadenza, titolo):
     return _foglio_semplice(titolo, intestazioni, valori)
 
 
+# (etichetta, larghezza in mm, allineamento) — la somma deve fare 180, come le
+# tabelle di report_service. Colonne proprie perche' la riga impianto non ha
+# marca/modello/matricola: ha un nome e una verifica.
+COLONNE_IMPIANTI = [
+    ('Impianto', 46, 'L'),
+    ('Ubicazione', 34, 'L'),
+    ('Divisione', 26, 'L'),
+    ('Verifica', 38, 'L'),
+    ('Scadenza', 22, 'C'),
+    ('Giorni', 14, 'C'),
+]
+
+
+def _data_italiana_impianti(valore):
+    """Da 2026-08-15 a 15/08/2026. Lascia intatto cio' che non riconosce.
+
+    Duplicata da report_service._data_italiana invece di importarla: quella e'
+    un dettaglio privato del modulo (prefisso '_'), e questa funzione ha lo
+    stesso identico bisogno ma vive fuori da report_service, che non va
+    toccato per aggiungere gli impianti.
+    """
+    from report_service import testo_sicuro
+    testo = testo_sicuro(valore)
+    parti = testo.split('-')
+    if len(parti) == 3 and len(parti[0]) == 4:
+        return f'{parti[2]}/{parti[1]}/{parti[0]}'
+    return testo
+
+
+def _stampa_impianti(scadute, in_scadenza, contesto):
+    """Prospetto scadenze impianti, gemello di report_service.stampa_scadenze
+    ma per le proprie colonne. Documento a se': viene unito a quello degli
+    apparecchi con pypdf, perche' stampa_scadenze() restituisce gia' un PDF
+    completo e non e' un contenitore a cui aggiungere pagine dall'esterno.
+    """
+    from fpdf.enums import XPos, YPos
+    from report_service import ReportPDF, testo_sicuro
+
+    pdf = ReportPDF(contesto)
+    pdf.add_page()
+    pdf.intestazione_tabella(COLONNE_IMPIANTI)
+
+    indice = 0
+    for titolo, righe in (('Scadute', scadute),
+                          (f"In scadenza entro il {contesto.get('fine_periodo', '')}",
+                           in_scadenza)):
+        if not righe:
+            continue
+        pdf.ln(2)
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(0, 7, testo_sicuro(f'{titolo} ({len(righe)})'),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.intestazione_tabella(COLONNE_IMPIANTI)
+        for riga in righe:
+            indice += 1
+            valori = [
+                riga.get('impianto_nome'),
+                riga.get('ubicazione'),
+                riga.get('divisione_nome'),
+                riga.get('scadenza_nome'),
+                _data_italiana_impianti(riga.get('prossima_scadenza')),
+                riga.get('giorni_rimasti'),
+            ]
+            pdf.riga_tabella(valori, COLONNE_IMPIANTI, alternata=(indice % 2 == 0))
+
+    pdf.ln(2)
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(0, 7, f'Totale impianti: {len(scadute)} scadute, {len(in_scadenza)} in scadenza',
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.blocco_firma()
+    return bytes(pdf.output())
+
+
 def genera_report_scadenze_pdf(struttura_id, output_path):
     """Report scadenze per l'invio automatico via email.
 
     Usa lo stesso motore delle stampe manuali: il PDF che arriva in posta e'
     identico a quello che si stampa dalla pagina Stampe, e resta un solo posto
-    da mantenere quando la grafica cambia.
+    da mantenere quando la grafica cambia. La sezione impianti e' un documento
+    separato (report_service.stampa_scadenze non e' estendibile dall'esterno,
+    restituisce gia' i byte finali) unito in coda con pypdf, e solo se c'e'
+    davvero qualcosa da mostrare: un impianto assente non genera nemmeno la
+    pagina.
     """
     from models import query_all, query_one, percorso_logo_struttura
     from report_service import stampa_scadenze
@@ -511,6 +588,23 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
                " ORDER BY ps.prossima_scadenza",
         (struttura_id, oggi.isoformat(), fine.isoformat()))
 
+    # Stesso schema di query degli apparecchi, sulla vista degli impianti.
+    # divisione_nome non e' nella vista (che espone solo divisione_id): serve
+    # il JOIN, come nel digest dello scheduler.
+    base_impianti = """SELECT v.impianto_nome, v.ubicazione, v.scadenza_nome,
+                              v.prossima_scadenza, v.giorni_rimasti,
+                              d.nome AS divisione_nome
+                       FROM prossime_scadenze_impianti v
+                       LEFT JOIN divisioni d ON d.id = v.divisione_id
+                       WHERE v.struttura_id = ?"""
+    scadute_impianti = query_all(
+        base_impianti + " AND v.prossima_scadenza < ? ORDER BY v.prossima_scadenza",
+        (struttura_id, oggi.isoformat()))
+    in_scadenza_impianti = query_all(
+        base_impianti + " AND v.prossima_scadenza >= ? AND v.prossima_scadenza <= ?"
+                        " ORDER BY v.prossima_scadenza",
+        (struttura_id, oggi.isoformat(), fine.isoformat()))
+
     contesto = {
         'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
         'titolo': 'Scadenzario',
@@ -522,8 +616,23 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
         'fine_periodo': fine.strftime('%d/%m/%Y'),
     }
 
-    with open(output_path, 'wb') as f:
-        f.write(stampa_scadenze(scadute, in_scadenza, contesto))
+    documento = stampa_scadenze(scadute, in_scadenza, contesto)
+
+    if scadute_impianti or in_scadenza_impianti:
+        from pypdf import PdfWriter
+
+        contesto_impianti = dict(contesto, titolo='Scadenzario impianti')
+        sezione_impianti = _stampa_impianti(
+            scadute_impianti, in_scadenza_impianti, contesto_impianti)
+
+        writer = PdfWriter()
+        writer.append(io.BytesIO(documento))
+        writer.append(io.BytesIO(sezione_impianti))
+        with open(output_path, 'wb') as f:
+            writer.write(f)
+    else:
+        with open(output_path, 'wb') as f:
+            f.write(documento)
 
 
 def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_name='MedInventory'):
