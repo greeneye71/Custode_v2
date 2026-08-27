@@ -1,6 +1,7 @@
 """Impianti: schema, isolamento, piano di manutenzione, avvisi."""
 import io
 import re
+from datetime import datetime as _orig_datetime
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -853,7 +854,9 @@ def test_destinatari_in_cascata(app, ambiente):
         assert '' not in elenco
 
 
-def test_avviso_senza_destinatari_non_e_un_errore(app, ambiente):
+def test_destinatari_vuoto_senza_configurazione(app, ambiente):
+    """destinatari() torna [] (non solleva) se la struttura non ha indicato
+    ne' responsabile, ne' notifiche, ne' email di divisione."""
     from impianti_service import avvisi_da_inviare, destinatari
     with app.app_context():
         b = ambiente['b']
@@ -865,11 +868,129 @@ def test_avviso_senza_destinatari_non_e_un_errore(app, ambiente):
             "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
             " VALUES (?, ?, 'Cabina muta', 'elettrico')",
             (b['struttura'], b['divisione'])).lastrowid
-        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
-                " periodicita_mesi, prossima_scadenza)"
-                " VALUES (?, 'Verifica', 24, date('now', '+10 days'))",
-                (impianto,))
+        scad = execute(
+            "INSERT INTO impianti_scadenze (impianto_id, nome,"
+            " periodicita_mesi, prossima_scadenza)"
+            " VALUES (?, 'Verifica', 24, date('now', '+10 days'))",
+            (impianto,)).lastrowid
         struttura = query_one("SELECT * FROM strutture WHERE id = ?",
                               (b['struttura'],))
-        avviso = avvisi_da_inviare(b['struttura'])[0]
+        # Selezionata per id: [0] dipende dall'ordine, che cambia se la
+        # fixture cresce di altre scadenze per la struttura b.
+        avviso = [x for x in avvisi_da_inviare(b['struttura'])
+                  if x['scadenza_id'] == scad][0]
         assert destinatari(struttura, avviso) == []
+
+
+def test_corpo_avviso_nomina_la_struttura(app, ambiente):
+    """Vincolo di progetto: la posta e' unica per tutto il deployment dalla
+    2.6.2, quindi ogni messaggio deve identificare la propria struttura."""
+    from impianti_service import avvisi_da_inviare, corpo_avviso
+    with app.app_context():
+        a = ambiente['a']
+        scad = _scadenza_fra(ambiente, 10)
+        struttura = query_one("SELECT * FROM strutture WHERE id = ?",
+                              (a['struttura'],))
+        avviso = [x for x in avvisi_da_inviare(a['struttura'])
+                  if x['scadenza_id'] == scad][0]
+        oggetto, testo = corpo_avviso(struttura, avviso)
+        assert struttura['nome'] in oggetto
+        assert struttura['nome'] in testo
+
+
+class _OreDiUfficio(_orig_datetime):
+    """Ferma l'orologio dello scheduler dopo le 7: _send_impianti_alerts()
+    esce subito prima di quell'ora, e il test non deve dipendere da quando
+    viene lanciata la suite."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return _orig_datetime(2026, 1, 1, 9, 0, 0)
+
+
+def test_impianti_alerts_un_invio_per_indirizzo(app, ambiente, monkeypatch):
+    """Regressione del difetto bloccante: un invio per indirizzo, non un
+    unico invio con destinatari uniti da virgola. Fallisce contro la
+    versione con ', '.join(indirizzi) perche' li' invia() viene chiamata una
+    sola volta con un solo argomento contenente la virgola."""
+    import scheduler as scheduler_module
+    monkeypatch.setattr(scheduler_module, 'datetime', _OreDiUfficio)
+
+    chiamate = []
+
+    def finto_invia(cfg, destinatario, messaggio):
+        chiamate.append(destinatario)
+        return True
+
+    monkeypatch.setattr(scheduler_module, 'invia', finto_invia)
+
+    with app.app_context():
+        app.config['APP_CONFIG']['smtp_host'] = 'smtp.test.it'
+        scad = _scadenza_fra(ambiente, 10)  # 2 destinatari di default: a['struttura'] ha responsabile e la divisione ha email
+
+        s = scheduler_module.BackgroundScheduler(app)
+        s._send_impianti_alerts()
+
+        assert len(chiamate) == 2
+        for destinatario in chiamate:
+            assert ',' not in destinatario
+        assert set(chiamate) == {'responsabile.a@test.it', 'divisione.a@test.it'}
+
+        righe = query_all("SELECT * FROM impianti_avvisi_inviati"
+                          " WHERE scadenza_id = ?", (scad,))
+        assert len(righe) == 1
+        assert righe[0]['soglia'] == 'anticipo'
+
+
+def test_impianti_alerts_senza_destinatari_non_invia_e_non_registra(app, ambiente, monkeypatch):
+    import scheduler as scheduler_module
+    monkeypatch.setattr(scheduler_module, 'datetime', _OreDiUfficio)
+
+    chiamate = []
+    monkeypatch.setattr(scheduler_module, 'invia',
+                        lambda cfg, destinatario, messaggio: chiamate.append(destinatario) or True)
+
+    with app.app_context():
+        app.config['APP_CONFIG']['smtp_host'] = 'smtp.test.it'
+        b = ambiente['b']
+        execute("UPDATE strutture SET email_responsabile = NULL,"
+                " email_notifiche = NULL WHERE id = ?", (b['struttura'],))
+        execute("UPDATE divisioni SET email = NULL WHERE id = ?",
+                (b['divisione'],))
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Cabina muta', 'elettrico')",
+            (b['struttura'], b['divisione'])).lastrowid
+        scad = execute(
+            "INSERT INTO impianti_scadenze (impianto_id, nome,"
+            " periodicita_mesi, prossima_scadenza)"
+            " VALUES (?, 'Verifica', 24, date('now', '+10 days'))",
+            (impianto,)).lastrowid
+
+        s = scheduler_module.BackgroundScheduler(app)
+        s._send_impianti_alerts()
+
+        assert chiamate == []
+        righe = query_all("SELECT * FROM impianti_avvisi_inviati"
+                          " WHERE scadenza_id = ?", (scad,))
+        assert righe == []
+
+
+def test_impianti_alerts_invio_fallito_non_registra(app, ambiente, monkeypatch):
+    """Se invia() torna False non si scrive la riga: il giro successivo deve
+    ritentare, non considerare l'avviso gia' spedito."""
+    import scheduler as scheduler_module
+    monkeypatch.setattr(scheduler_module, 'datetime', _OreDiUfficio)
+    monkeypatch.setattr(scheduler_module, 'invia',
+                        lambda cfg, destinatario, messaggio: False)
+
+    with app.app_context():
+        app.config['APP_CONFIG']['smtp_host'] = 'smtp.test.it'
+        scad = _scadenza_fra(ambiente, 10)
+
+        s = scheduler_module.BackgroundScheduler(app)
+        s._send_impianti_alerts()
+
+        righe = query_all("SELECT * FROM impianti_avvisi_inviati"
+                          " WHERE scadenza_id = ?", (scad,))
+        assert righe == []
