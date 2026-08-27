@@ -63,6 +63,15 @@ class BackgroundScheduler:
                 'last_run': 0,
             },
             {
+                'name': 'impianti_alerts',
+                # Ogni ora, senza finestra oraria fissa: la tabella
+                # impianti_avvisi_inviati impedisce i doppioni, quindi ogni ora
+                # successiva e' un tentativo ripetuto gratis se l'SMTP era giu'.
+                'func': self._send_impianti_alerts,
+                'interval': 3600,
+                'last_run': 0,
+            },
+            {
                 'name': 'cleanup_login_attempts',
                 'func': self._cleanup_login_attempts,
                 'interval': 86400,  # una volta al giorno
@@ -186,6 +195,63 @@ class BackgroundScheduler:
                     # vedrebbe se non nel log.
                     logger.error(f"Errore avvisi struttura {struttura['nome']}: {e}")
 
+    def _send_impianti_alerts(self):
+        """Avvisi di scadenza degli impianti, una email per voce di piano.
+
+        Non c'e' digest: ogni verifica ha destinatari propri (il manutentore
+        della riga, l'indirizzo extra del perito) e un messaggio unico non
+        potrebbe rispettarli.
+        """
+        with self.app.app_context():
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from models import query_all, get_struttura_config
+            from posta import invia
+            import impianti_service
+
+            if datetime.now().hour < 7:
+                return
+            if not self._config_smtp()['host']:
+                logger.warning("SMTP di sistema non configurato: avvisi "
+                               "impianti non inviati.")
+                return
+
+            strutture = query_all("SELECT * FROM strutture WHERE attiva = 1")
+            for struttura in strutture:
+                sid = struttura['id']
+                if get_struttura_config(sid, 'avvisi_impianti_attivi', '1') != '1':
+                    continue
+                try:
+                    for avviso in impianti_service.avvisi_da_inviare(sid):
+                        indirizzi = impianti_service.destinatari(struttura, avviso)
+                        if not indirizzi:
+                            # Configurazione incompleta, non un guasto: la
+                            # struttura non ha indicato nessun destinatario.
+                            logger.info(
+                                f"Nessun destinatario per la scadenza "
+                                f"{avviso['scadenza_id']} ({struttura['nome']})")
+                            continue
+                        oggetto, testo = impianti_service.corpo_avviso(
+                            struttura, avviso)
+                        msg = MIMEMultipart()
+                        msg['Subject'] = oggetto
+                        msg.attach(MIMEText(testo, 'plain', 'utf-8'))
+                        if invia(self.app.config.get('APP_CONFIG'),
+                                 ', '.join(indirizzi), msg):
+                            for soglia in avviso['soglie_coperte']:
+                                impianti_service.registra_avviso(
+                                    avviso['scadenza_id'], soglia,
+                                    avviso['prossima_scadenza'], indirizzi)
+                            logger.info(f"Avviso impianto inviato a "
+                                        f"{indirizzi} ({struttura['nome']})")
+                        else:
+                            logger.error(
+                                f"Avviso impianto non partito per la scadenza "
+                                f"{avviso['scadenza_id']} ({struttura['nome']})")
+                except Exception as e:
+                    logger.error(f"Errore avvisi impianti struttura "
+                                 f"{struttura['nome']}: {e}")
+
     def _config_smtp(self):
         """I parametri del server di posta, solo di sistema (vedi posta.py)."""
         from posta import parametri
@@ -265,7 +331,7 @@ class BackgroundScheduler:
         """
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
-        from models import query_all
+        from models import query_all, get_struttura_config
 
         scadenze = query_all("""
             SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
@@ -277,7 +343,23 @@ class BackgroundScheduler:
             AND ps.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
             ORDER BY ps.priorita, ps.prossima_scadenza
         """, (struttura['id'],))
-        if not scadenze:
+
+        # Interrogato prima del return anticipato: una struttura puo' non
+        # avere apparecchi in scadenza ma avere impianti, e in quel caso il
+        # digest va comunque mandato.
+        impianti = []
+        if get_struttura_config(struttura['id'], 'avvisi_impianti_attivi',
+                                '1') == '1':
+            impianti = query_all("""
+                SELECT v.*, d.nome as divisione_nome
+                FROM prossime_scadenze_impianti v
+                LEFT JOIN divisioni d ON d.id = v.divisione_id
+                WHERE v.struttura_id = ?
+                  AND v.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
+                ORDER BY v.prossima_scadenza
+            """, (struttura['id'],))
+
+        if not scadenze and not impianti:
             return
 
         priorita_labels = {
@@ -298,6 +380,15 @@ class BackgroundScheduler:
                         f"  {nome_app} (mat. {s['matricola']}) — {s['divisione_nome']} — "
                         f"scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg)"
                     )
+
+        if impianti:
+            righe.append("\nIMPIANTI")
+            righe.append("-" * 30)
+            for i in impianti:
+                righe.append(
+                    f"  {i['impianto_nome']} — {i['scadenza_nome']} — "
+                    f"{i['divisione_nome'] or '-'} — scade: "
+                    f"{i['prossima_scadenza']} ({i['giorni_rimasti']} gg)")
 
         msg = MIMEMultipart()
         msg['Subject'] = (f"Scadenzario {struttura['nome']} — "
