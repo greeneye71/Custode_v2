@@ -83,8 +83,11 @@ def _valida_impianto(form, edit_id=None):
     dati['identificativo'] = (form.get('identificativo') or '').strip() or None
     dati['note'] = (form.get('note') or '').strip() or None
 
-    manutentore_id = form.get('manutentore_id')
-    dati['manutentore_id'] = int(manutentore_id) if manutentore_id else None
+    manutentore_id = form.get('manutentore_id', type=int) or None
+    if manutentore_id and not _manutentore_in_scope(manutentore_id):
+        manutentore_id = None
+        errori.append('Manutentore non valido.')
+    dati['manutentore_id'] = manutentore_id
 
     anno = form.get('anno_installazione')
     dati['anno_installazione'] = None

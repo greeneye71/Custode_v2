@@ -327,6 +327,38 @@ def test_tipo_custom_solo_con_tipo_altro(client, app, ambiente):
                          " WHERE nome = 'Fotovoltaico'")['tipo_custom'] is None
 
 
+def test_manutentore_altrui_rifiutato_su_impianto(client, app, ambiente):
+    """manutentore_id di un'altra struttura non deve mai finire su impianti.
+
+    Ne' in creazione ne' in modifica: la validazione lo scarta e segnala
+    l'errore, cosi' l'avviso al manutentore (avvisi_da_inviare) non puo' mai
+    partire verso l'indirizzo di un altro tenant.
+    """
+    with app.app_context():
+        manutentore_b = execute(
+            "INSERT INTO manutentori (struttura_id, ragione_sociale)"
+            " VALUES (?, 'Ditta B')", (ambiente['b']['struttura'],)).lastrowid
+        divisione_a = ambiente['a']['divisione']
+        impianto_a = _crea_impianto(ambiente, nome='Cabina A')
+    entra(client, ambiente['a']['email'])
+
+    client.post('/impianti/nuovo', data={
+        'nome': 'Cabina intrusa', 'tipo': 'elettrico',
+        'divisione_id': divisione_a, 'manutentore_id': str(manutentore_b),
+    }, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT 1 FROM impianti"
+                         " WHERE nome = 'Cabina intrusa'") is None
+
+    client.post(f'/impianti/{impianto_a}/modifica', data={
+        'nome': 'Cabina A', 'tipo': 'elettrico', 'divisione_id': divisione_a,
+        'manutentore_id': str(manutentore_b),
+    }, follow_redirects=True)
+    with app.app_context():
+        assert query_one("SELECT manutentore_id FROM impianti WHERE id = ?",
+                         (impianto_a,))['manutentore_id'] is None
+
+
 def test_dettaglio_impianto_altrui_non_raggiungibile(client, app, ambiente):
     with app.app_context():
         b = ambiente['b']
