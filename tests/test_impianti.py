@@ -726,8 +726,40 @@ def test_libretto_pdf_generato(app, ambiente, tmp_path):
         assert f.read(4) == b'%PDF'
 
 
+def test_libretto_con_piu_voci_per_sezione(app, ambiente, tmp_path):
+    """Due voci per sezione, non una.
+
+    Con una voce sola il libretto passava anche quando multi_cell() lasciava
+    il cursore a destra: e' la seconda riga che sfonda il margine e solleva
+    FPDFException. Il caso reale ha sempre piu' di una voce.
+    """
+    from export_service import genera_libretto_impianto
+    with app.app_context():
+        impianto, _ = _impianto_con_piano(ambiente, scadenza='2027-01-10')
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Termografia quadri', 12, '2027-06-01')",
+                (impianto,))
+        for descrizione in ('Quadro generale', 'Quadro di piano'):
+            execute("INSERT INTO impianti_componenti (impianto_id, descrizione)"
+                    " VALUES (?, ?)", (impianto, descrizione))
+        for data in ('2025-01-10', '2025-07-10'):
+            execute("INSERT INTO impianti_interventi (impianto_id, tipo,"
+                    " data_intervento, esito) VALUES (?, 'verifica', ?,"
+                    " 'positivo')", (impianto, data))
+        for nome in ('progetto.pdf', 'collaudo.pdf'):
+            execute("INSERT INTO impianti_documenti (impianto_id, tipo,"
+                    " descrizione, filename, filepath)"
+                    " VALUES (?, 'progetto', ?, ?, ?)",
+                    (impianto, nome, nome, f'impianti/{nome}'))
+        percorso = str(tmp_path / 'libretto-multi.pdf')
+        genera_libretto_impianto(impianto, percorso)
+    import os
+    assert os.path.exists(percorso) and os.path.getsize(percorso) > 500
+
+
 def test_libretto_di_altra_struttura_non_scaricabile(client, app, ambiente):
     with app.app_context():
         impianto_b = _crea_impianto(ambiente, 'b', 'Cabina B libretto')
     entra(client, ambiente['a']['email'])
-    assert client.get(f'/impianti/{impianto_b}/libretto.pdf').status_code in (302, 404)
+    assert client.get(f'/impianti/{impianto_b}/libretto.pdf').status_code == 302
