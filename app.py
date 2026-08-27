@@ -473,7 +473,6 @@ def create_app():
         totale_apparecchi = r['cnt'] if r else 0
 
         # Stat 2: Active alerts (deadlines <= 30 days), somma apparecchi + impianti
-        priorita_attive = ('scaduto', 'urgente', 'attenzione', 'avviso')
         if div and div.get('id') != 'tutte':
             r = query_one(
                 """SELECT (SELECT COUNT(*) FROM prossime_scadenze

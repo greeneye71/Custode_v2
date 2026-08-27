@@ -1,5 +1,6 @@
 """Impianti: schema, isolamento, piano di manutenzione, avvisi."""
 import io
+import re
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -648,3 +649,37 @@ def test_badge_conta_anche_gli_impianti(client, app, ambiente):
         client.get('/')
         from flask import g
         assert g.scadenze_alert_count >= 1
+
+
+def test_scadenzario_summary_sopravvive_al_filtro_priorita(client, app, ambiente):
+    """Le card di riepilogo devono contare TUTTE le priorità anche quando la
+    lista è filtrata su una sola: altrimenti l'utente perde la via d'uscita
+    dal filtro (bug: summary calcolato sulla lista già filtrata)."""
+    with app.app_context():
+        a = ambiente['a']
+        apparecchio = execute(
+            "INSERT INTO apparecchi (struttura_id, divisione_id, marca, modello,"
+            " matricola, descrizione) VALUES (?, ?, 'ACME', 'X2', 'MAT-SUM',"
+            " 'Elettrobisturi')", (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO manutenzioni (apparecchio_id, tipo,"
+                " data_intervento, prossima_scadenza)"
+                " VALUES (?, 'preventiva', date('now', '-30 days'),"
+                " date('now', '-1 days'))", (apparecchio,))
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Cabina summary', 'elettrico')",
+            (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Verifica di terra', 24, date('now', '+60 days'))",
+                (impianto,))
+
+    entra(client, ambiente['a']['email'])
+    filtrato = client.get('/scadenzario?priorita=scaduto').get_data(as_text=True)
+
+    # La riga scaduta (apparecchio) deve comparire nella tabella filtrata...
+    assert 'MAT-SUM' in filtrato
+    # ...ma la card "OK" deve comunque contare l'impianto a +60gg, non azzerarsi.
+    match = re.search(r'text-success">\s*(\d+)\s*</div>\s*<small class="text-muted">OK', filtrato)
+    assert match is not None
+    assert int(match.group(1)) >= 1

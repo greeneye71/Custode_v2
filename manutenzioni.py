@@ -390,7 +390,7 @@ _SCADENZE_IMPIANTI = """
 """
 
 
-def _scadenze_unificate(origine, priorita=''):
+def _scadenze_unificate(origine):
     """Le scadenze delle due origini, normalizzate sulle stesse colonne.
 
     Il filtro di divisione si applica separatamente ai due rami: le viste hanno
@@ -408,11 +408,7 @@ def _scadenze_unificate(origine, priorita=''):
     if not rami:
         return []
 
-    sql = " UNION ALL ".join(rami)
-    if priorita:
-        sql = (f"SELECT * FROM ({sql}) WHERE priorita = ?")
-        parametri.append(priorita)
-    sql += " ORDER BY prossima_scadenza ASC"
+    sql = " UNION ALL ".join(rami) + " ORDER BY prossima_scadenza ASC"
     return query_all(sql, parametri)
 
 
@@ -424,17 +420,17 @@ def scadenzario():
     if origine not in ('tutto', 'apparecchi', 'impianti'):
         origine = 'tutto'
     priorita = request.args.get('priorita', '')
-    scadenze = _scadenze_unificate(origine, priorita)
 
-    # Aggregazioni calcolate dalla lista già ottenuta, così coprono entrambe
-    # le origini senza una seconda query.
-    summary = Counter(s['priorita'] for s in scadenze)
-    tipo_summary = Counter(s['tipo'] for s in scadenze)
+    # Il summary deve riflettere TUTTE le priorità anche quando la vista è
+    # filtrata su una sola: altrimenti le card delle altre priorità
+    # mostrerebbero 0 e l'utente perderebbe la via d'uscita dal filtro.
+    tutte = _scadenze_unificate(origine)
+    summary = Counter(s['priorita'] for s in tutte)
+    scadenze = [s for s in tutte if not priorita or s['priorita'] == priorita]
 
     context = {
         'scadenze': scadenze,
         'summary': summary,
-        'tipo_summary': tipo_summary,
         'filtri': {'priorita': priorita, 'origine': origine},
     }
 
