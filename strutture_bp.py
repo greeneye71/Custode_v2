@@ -762,6 +762,13 @@ def config(struttura_id):
                     (struttura_id, chiave)
                 )
 
+        # Fuori dal loop apposta: qui il default e' '1' (avvisi accesi), quindi
+        # se passasse per CHIAVI_PREFERENZE/CASELLE un valore vuoto verrebbe
+        # cancellato invece che scritto a '0', e l'interruttore non si
+        # potrebbe mai spegnere davvero.
+        set_struttura_config(struttura_id, 'avvisi_impianti_attivi',
+                             '1' if request.form.get('avvisi_impianti_attivi') else '0')
+
         flash('Configurazione salvata.', 'success')
         log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
                      'Preferenze avvisi di scadenza salvate', request.remote_addr)

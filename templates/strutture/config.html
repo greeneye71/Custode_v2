@@ -183,6 +183,22 @@
               </select>
             </div>
 
+            <div class="col-12">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="avvisi_impianti_attivi"
+                       id="avvisi_impianti_attivi" value="1"
+                       {% if cfg.get('avvisi_impianti_attivi', '1') != '0' %}checked{% endif %}>
+                <label class="form-check-label" for="avvisi_impianti_attivi">
+                  Invia gli avvisi di scadenza degli impianti
+                </label>
+                <div class="form-text">
+                  Attivi per default: la casella spuntata non e&#39; una scelta, e&#39;
+                  l&#39;assenza di chiave. Il formato e la frequenza sono gli stessi
+                  degli avvisi sugli apparecchi, qui sopra.
+                </div>
+              </div>
+            </div>
+
             {# La casella non ha name: senza, non finisce nel POST nemmeno se
                qualcuno toglie 'disabled' dagli strumenti del browser, e non
                esiste nessuna chiave di configurazione che la rappresenti. #}
