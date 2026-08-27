@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v2.6.4** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.7.0** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -114,6 +114,7 @@ Key fields (all in `config.local.json`):
 | `import_bp.py` | `/import` | AI-powered unified document import + email queue review |
 | `export_bp.py` | `/export` | Excel/PDF report generation |
 | `api_bp.py` | `/api/v1` | REST API, Bearer-token auth, scoped to the token's struttura (CSRF-exempt) |
+| `impianti.py` | `/impianti` | Impianti delle divisioni: anagrafica, componenti, documentazione, piano di manutenzione, interventi |
 
 ### Services
 | File | Responsibility |
@@ -130,6 +131,8 @@ Key fields (all in `config.local.json`):
 | `utente_service.py` | User deletion (tombstone rows), last-admin refusals |
 | `fusione_service.py` | Duplicate-device detection and merge |
 | `struttura_service.py` | Facility export/deletion, attachment perimeter |
+| `impianti_service.py` | Impianti domain rules: deadline maths, intervention closing, catalogue application, alert recipients |
+| `impianti_catalogo.py` | `CATALOGO`: the standard periodicities proposed when an impianto is created (a constant, not a table) |
 | `manutenzione_lib/stato.py` | Installation snapshot: paths, schema version, counts. Never includes secrets |
 | `manutenzione_lib/diagnosi.py` | Checks, each a function returning an `Esito` whose remedy is the command to run |
 | `manutenzione_lib/utenti.py` | Account operations outside Flask: hash inspection, password reset, wipe |
@@ -137,7 +140,7 @@ Key fields (all in `config.local.json`):
 ### Database
 SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
 
-Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok).
+Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`, plus the impianti side: `manutentori`, `impianti`, `impianti_componenti`, `impianti_documenti`, `impianti_scadenze`, `impianti_interventi`, `impianti_avvisi_inviati`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok). The view `prossime_scadenze_impianti` does the same for impianti — one row per active `impianti_scadenze` of a non-dismissed impianto, with the same 5 priorities — and `/scadenzario` merges the two behind the `origine` filter (tutto / apparecchi / impianti).
 
 `import_history.struttura_id` is the authoritative tenant column for imports — `divisione_id` is NULL for email imports and must not be used for isolation.
 
@@ -193,13 +196,13 @@ refuses to leave a database nobody can log into.
 ## Key Conventions
 
 - **Language:** All UI text, comments, variable names, and database values are in Italian.
-- **Tenant isolation:** Every query touching `apparecchi`, `manutenzioni`, `verifiche`, `documenti` or `import_history` must be scoped to the caller's struttura. Use `models.apparecchio_accessibile()` before serving or writing anything tied to a device (it checks struttura *and* division), and `import_bp.get_import_in_scope()` for import records. Reaching a row by id alone is never sufficient.
+- **Tenant isolation:** Every query touching `apparecchi`, `manutenzioni`, `verifiche`, `documenti`, `import_history` or the `impianti*` tables must be scoped to the caller's struttura. Use `models.apparecchio_accessibile()` before serving or writing anything tied to a device (it checks struttura *and* division), `models.impianto_accessibile()` for an impianto, and `import_bp.get_import_in_scope()` for import records. The impianti child tables (`impianti_componenti`, `impianti_documenti`, `impianti_scadenze`, `impianti_interventi`) carry no `struttura_id`: reach them through a JOIN on `impianti`, never by id alone. Reaching a row by id alone is never sufficient.
 - **Global vs per-facility operations:** Anything acting on the whole database (backup, restore, reset, global config) goes behind `@operazione_globale_required`, not `@admin_required` — a facility admin must not be able to dump or wipe other tenants' data.
 - **Soft delete:** Devices are never physically deleted — `stato='dismesso'` marks them retired. Stati validi: `funzionante`, `in_manutenzione`, `da_sostituire`, `dismesso`.
 - **Parameterized SQL:** All queries use `?` placeholders; never f-string user input. When a query *is* built with an f-string (division filters), remember Python does not consume `%%` — write `strftime('%Y-%m', ...)`, not the doubled form.
 - **CSRF:** `CSRFProtect` is global. Every POST form needs a hidden `csrf_token` field rendered with `{{ csrf_token() }}` — including empty JS-driven forms. `fetch()` and HTMX get the header automatically from the wrapper in `base.html`.
 - **Activity logging:** Every significant action must call `log_attivita()` from `models.py`.
-- **Division filter:** Always apply `_get_divisione_filter()` when querying `apparecchi`, `manutenzioni` or `verifiche` to respect the user's active division scope.
+- **Division filter:** Always apply `models.filtro_divisione(table_alias)` when querying `apparecchi`, `manutenzioni`, `verifiche` or `impianti` to respect the user's active division scope.
 - **File uploads:** Go through `models.upload_subdir()`, which places files under `uploads/strutture/<id>/<tipo>/` in multi-tenant mode — the only path prefix `/uploads/<path>` knows how to isolate. Always `secure_filename()`; extensions are whitelisted per type.
 
 ## Context discipline

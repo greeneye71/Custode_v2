@@ -6,6 +6,71 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.7.0] - 2026-08-27
+
+### Aggiunto
+- **Gestione impianti.** Accanto agli apparecchi elettromedicali la struttura
+  puo' ora tenere il registro dei propri impianti (elettrico, antincendio,
+  gas medicali, elevatori, climatizzazione...). Ogni impianto appartiene a una
+  divisione, ha un'anagrafica, i componenti che lo compongono, la
+  documentazione (dichiarazioni di conformita', certificati, libretti,
+  planimetrie) con i dati dell'emittente, un piano di manutenzione e lo
+  storico degli interventi. Nuovo blueprint `impianti.py` sotto `/impianti`,
+  servizio `impianti_service.py`, sette tabelle nuove (`manutentori`,
+  `impianti`, `impianti_componenti`, `impianti_documenti`,
+  `impianti_scadenze`, `impianti_interventi`, `impianti_avvisi_inviati`) e la
+  vista `prossime_scadenze_impianti`.
+- **Catalogo delle periodicita' standard** (`impianti_catalogo.py`): creando un
+  impianto si propongono le scadenze di legge del suo tipo (con riferimento
+  normativo e periodicita'), da applicare in blocco o una alla volta. Il
+  catalogo e' un suggerimento iniziale: modificarlo non riscrive i piani gia'
+  in essere, e non ripropone le voci che sono state sospese.
+- **Registrazione degli interventi con verbale.** Chiudere un intervento con
+  esito positivo su una scadenza ne sposta in avanti la data secondo la
+  periodicita'; il PDF del verbale resta allegato all'intervento.
+- **Anagrafica manutentori** per struttura, agganciabile all'impianto e al
+  singolo intervento.
+- **Scadenzario unificato.** `/scadenzario` mostra insieme le scadenze degli
+  apparecchi e quelle degli impianti, con il filtro `origine`
+  (tutto / apparecchi / impianti); i contatori della dashboard e i badge
+  tengono conto di entrambe le origini.
+- **Libretto dell'impianto in PDF**: anagrafica, componenti, documentazione,
+  piano di manutenzione e storico degli interventi in un unico documento
+  scaricabile. Il report PDF periodico include la sezione degli impianti in
+  scadenza.
+- **Avvisi di scadenza degli impianti** via email, con soglie di preavviso e
+  cascata dei destinatari (manutentore, indirizzi aggiuntivi della scadenza,
+  referenti della struttura): un invio per indirizzo, senza doppioni grazie a
+  `impianti_avvisi_inviati`, e disattivabili per struttura
+  (`avvisi_impianti_attivi`). Le scadenze degli impianti compaiono anche nel
+  digest giornaliero.
+
+### Modificato
+- **Perimetro della struttura.** Esportazione e cancellazione di una struttura
+  comprendono impianti, componenti, documenti, scadenze, interventi e
+  manutentori; il riepilogo `ESPORTAZIONE.txt` li elenca.
+- **`importa_installazione.py`** importa anche le tabelle degli impianti, con
+  i relativi allegati (`uploads/strutture/<id>/impianti/`) e la rimappatura
+  delle chiavi esterne fra impianto, componente, scadenza, intervento e
+  manutentore. Come `sessioni` e `login_attempts`, `impianti_avvisi_inviati`
+  non viene importata: gli avvisi gia' partiti appartengono al deployment di
+  origine.
+- `PRAGMA user_version` 200 -> 270.
+
+### Corretto
+- **La cancellazione di una struttura falliva se i suoi impianti erano
+  firmati.** `impianti.created_by`, `impianti.updated_by`,
+  `impianti_documenti.uploaded_by` e `impianti_interventi.created_by` non
+  hanno `ON DELETE`, e la rimozione cancella gli utenti prima della struttura:
+  quando la cascata avrebbe portato via gli impianti, l'utente era gia'
+  sparito e il vincolo saltava. Ora quelle colonne vengono azzerate insieme
+  agli altri riferimenti utente. Di riflesso, il conteggio dei riferimenti
+  mostrato prima di cancellare un utente comprende anche gli impianti.
+- **L'esportazione dello scadenzario ignorava la struttura**: il file usciva
+  con le scadenze di tutte le strutture.
+
+---
+
 ## [2.6.4] - 2026-08-25
 
 ### Corretto
