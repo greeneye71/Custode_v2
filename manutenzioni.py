@@ -390,11 +390,13 @@ _SCADENZE_IMPIANTI = """
 """
 
 
-def _scadenze_unificate(origine):
+def scadenze_unificate(origine, limite=None):
     """Le scadenze delle due origini, normalizzate sulle stesse colonne.
 
     Il filtro di divisione si applica separatamente ai due rami: le viste hanno
     alias diversi (ps, psi) e filtro_divisione() nomina l'alias nella clausola.
+    Se `limite` e' valorizzato, tronca il risultato in SQL (LIMIT parametrico)
+    invece di materializzare l'intera UNION per poi scartarne la maggior parte.
     """
     rami, parametri = [], []
     if origine in ('tutto', 'apparecchi'):
@@ -409,6 +411,9 @@ def _scadenze_unificate(origine):
         return []
 
     sql = " UNION ALL ".join(rami) + " ORDER BY prossima_scadenza ASC"
+    if limite:
+        sql += " LIMIT ?"
+        parametri.append(limite)
     return query_all(sql, parametri)
 
 
@@ -424,7 +429,7 @@ def scadenzario():
     # Il summary deve riflettere TUTTE le priorità anche quando la vista è
     # filtrata su una sola: altrimenti le card delle altre priorità
     # mostrerebbero 0 e l'utente perderebbe la via d'uscita dal filtro.
-    tutte = _scadenze_unificate(origine)
+    tutte = scadenze_unificate(origine)
     summary = Counter(s['priorita'] for s in tutte)
     scadenze = [s for s in tutte if not priorita or s['priorita'] == priorita]
 

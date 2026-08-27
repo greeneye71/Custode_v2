@@ -544,8 +544,8 @@ def create_app():
         costi_mese = r['tot'] if r else 0
 
         # Upcoming deadlines (top 10), unificate fra apparecchi e impianti
-        from manutenzioni import _scadenze_unificate
-        scadenze_imminenti = _scadenze_unificate('tutto')[:10]
+        from manutenzioni import scadenze_unificate
+        scadenze_imminenti = scadenze_unificate('tutto', limite=10)
 
         # Recent interventions (last 10)
         ultimi_interventi = query_all(
