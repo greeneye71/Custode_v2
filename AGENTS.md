@@ -4,7 +4,7 @@ This file provides guidance to coding agents working in this repository.
 
 ## Project Overview
 
-**MedInventory v2.7.0** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.7.1** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -127,7 +127,7 @@ Key fields (all in `config.local.json`):
 | `manutenzione_lib/utenti.py` | Account operations outside Flask: hash inspection, password reset, wipe |
 
 ### Database
-SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
+SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts. The declared schema version (`PRAGMA user_version`, `major*100 + minor*10 + patch`) is raised there too — upward only, and only once the tables of that release actually exist. The impianti DDL lives in `schema_impianti.py`, imported by both `models.apply_schema_updates()` and `migrate.py`; that module must stay Flask-free, which is what keeps `migrate.py --db` able to point at another installation.
 
 Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`, plus the impianti side: `manutentori`, `impianti`, `impianti_componenti`, `impianti_documenti`, `impianti_scadenze`, `impianti_interventi`, `impianti_avvisi_inviati`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok). The view `prossime_scadenze_impianti` does the same for impianti — one row per active `impianti_scadenze` of a non-dismissed impianto, with the same 5 priorities — and `/scadenzario` merges the two behind the `origine` filter (tutto / apparecchi / impianti).
 
@@ -251,7 +251,7 @@ Key fields (all in `config.local.json`):
 | `impianti_catalogo.py` | `CATALOGO`: the standard periodicities proposed when an impianto is created (a constant, not a table) |
 
 ### Database
-SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
+SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts. The declared schema version (`PRAGMA user_version`, `major*100 + minor*10 + patch`) is raised there too — upward only, and only once the tables of that release actually exist. The impianti DDL lives in `schema_impianti.py`, imported by both `models.apply_schema_updates()` and `migrate.py`; that module must stay Flask-free, which is what keeps `migrate.py --db` able to point at another installation.
 
 Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`, plus the impianti side: `manutentori`, `impianti`, `impianti_componenti`, `impianti_documenti`, `impianti_scadenze`, `impianti_interventi`, `impianti_avvisi_inviati`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok). The view `prossime_scadenze_impianti` does the same for impianti — one row per active `impianti_scadenze` of a non-dismissed impianto, with the same 5 priorities — and `/scadenzario` merges the two behind the `origine` filter (tutto / apparecchi / impianti).
 

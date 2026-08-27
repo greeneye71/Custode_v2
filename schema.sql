@@ -704,4 +704,4 @@ ORDER BY s.prossima_scadenza ASC;
 -- ============================================
 -- VERSIONE SCHEMA
 -- ============================================
-PRAGMA user_version = 270;
+PRAGMA user_version = 271;

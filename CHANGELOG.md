@@ -6,6 +6,33 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.7.1] - 2026-08-28
+
+### Corretto
+- **Versione dichiarata dal database.** `apply_schema_updates()` scriveva
+  `PRAGMA user_version` solo sui database nati prima dell'introduzione del
+  versioning: un'installazione aggiornata riceveva le tabelle impianti ma
+  continuava a dichiararsi `200`, mentre un'installazione nuova partiva da
+  `schema.sql` con il numero corrente. Stesso schema, numero diverso — e quel
+  numero e' letto da `manutenzione.py`, `migrate.py` e
+  `importa_installazione.py`. Ora la versione viene allineata a `271` a ogni
+  avvio, ma solo se le tabelle impianti esistono davvero e solo verso l'alto:
+  un database piu' recente non viene retrocesso da un'installazione rimasta
+  indietro.
+- **`migrate.py` non conosceva la 2.7.** Il registro delle migrazioni si
+  fermava alla v2.3: su un database senza impianti lo strumento rispondeva
+  "nessuna migrazione necessaria". L'avvio di Flask creava comunque le
+  tabelle, quindi nessun dato mancava, ma il report era falso proprio dove lo
+  si consulta — prima di aggiornare. Aggiunta la voce `v2.7`.
+
+### Modificato
+- Il DDL delle tabelle impianti vive ora in `schema_impianti.py`, importato
+  sia da `models.apply_schema_updates()` sia da `migrate.py`. Il modulo non
+  importa Flask: e' cio' che continua a permettere a `migrate.py --db` di
+  puntare a un'altra installazione.
+
+---
+
 ## [2.7.0] - 2026-08-27
 
 ### Aggiunto

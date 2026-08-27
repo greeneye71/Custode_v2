@@ -67,6 +67,72 @@ def test_schema_impianti_creato(app, ambiente):
         assert {'indirizzo', 'email', 'telefono', 'responsabile'} <= colonne
 
 
+def test_user_version_dichiara_la_2_7_1(app, ambiente):
+    """La versione dichiarata dal database deve seguire lo schema reale.
+
+    Fino alla 2.7.0 apply_schema_updates() scriveva user_version solo sui
+    database nati prima del versioning: un'installazione aggiornata riceveva
+    le tabelle impianti continuando a dichiararsi 200. Il numero e' letto da
+    manutenzione.py, migrate.py e importa_installazione.py.
+    """
+    import models
+    from schema_impianti import SCHEMA_VERSION_IMPIANTI
+
+    with app.app_context():
+        db = models.get_db()
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION_IMPIANTI
+
+        # Installazione aggiornata dal codice ma con la versione ferma alla 2.0
+        db.execute("PRAGMA user_version = 200")
+        db.commit()
+        models.apply_schema_updates()
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION_IMPIANTI
+
+        # Mai all'indietro: un database piu' recente non va retrocesso da
+        # un'installazione rimasta ferma a questa versione.
+        db.execute("PRAGMA user_version = 999")
+        db.commit()
+        models.apply_schema_updates()
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 999
+
+
+def test_migrate_conosce_le_tabelle_impianti(tmp_path):
+    """migrate.py gira prima dell'applicazione e deve vedere l'aggiornamento.
+
+    Senza la voce v2.7 dichiarava "nessuna migrazione necessaria" su un
+    database privo di impianti: il report era falso anche se poi l'avvio di
+    Flask creava comunque le tabelle.
+    """
+    import os
+    import sqlite3
+
+    import migrate
+    from schema_impianti import TABELLE_IMPIANTI
+
+    radice = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    percorso = str(tmp_path / 'senza_impianti.sqlite')
+    conn = sqlite3.connect(percorso)
+    with open(os.path.join(radice, 'schema.sql'), encoding='utf-8') as f:
+        conn.executescript(f.read())
+    # Riporta il database allo stato di una 2.6.4
+    conn.execute("DROP VIEW IF EXISTS prossime_scadenze_impianti")
+    for tabella in reversed(TABELLE_IMPIANTI):
+        conn.execute(f"DROP TABLE IF EXISTS {tabella}")
+    conn.execute("PRAGMA user_version = 230")
+    conn.commit()
+
+    assert not migrate._applied_v2_7(conn)
+    _, _, pendenti = migrate.analyze(conn)
+    assert 'v2.7' in [m.id for m in pendenti]
+
+    migrate._apply_v2_7(conn, {})
+    assert migrate._applied_v2_7(conn)
+    versione, _, pendenti = migrate.analyze(conn)
+    assert versione == 'v2.7 (ultima)'
+    assert pendenti == []
+    conn.close()
+
+
 def test_vista_impianti_classifica_e_esclude_dismessi(app, ambiente):
     """La vista dà la priorità giusta e salta gli impianti dismessi."""
     with app.app_context():
@@ -1110,9 +1176,9 @@ def test_colonne_file_import_include_gli_impianti():
 def test_versione_allineata():
     import json
     with open('config.example.json', encoding='utf-8') as f:
-        assert json.load(f)['version'] == '2.7.0'
+        assert json.load(f)['version'] == '2.7.1'
     import app as modulo_app
-    assert modulo_app.APP_VERSION == '2.7.0'
+    assert modulo_app.APP_VERSION == '2.7.1'
 
 
 def test_rimozione_struttura_con_impianti_firmati(app, ambiente):
