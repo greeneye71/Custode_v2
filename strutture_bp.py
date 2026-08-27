@@ -601,6 +601,7 @@ def elimina(struttura_id):
         g.user['id'], 'eliminazione', 'strutture', struttura_id,
         f'Struttura "{esito["nome"]}" eliminata: {esito["apparecchi"]} apparecchi, '
         f'{esito["manutenzioni"]} manutenzioni, {esito["verifiche"]} verifiche, '
+        f'{esito["impianti"]} impianti, {esito["manutentori"]} manutentori, '
         f'{esito["utenti"]} utenti. Archivio: {esito["archivio"]}. '
         f'File non rimossi: {len(esito["file_non_rimossi"])}.',
         request.remote_addr)

@@ -36,7 +36,8 @@ RIFERIMENTI_UTENTE = (
 )
 
 CHIAVI_CONTEGGIO = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
-                    'accessori', 'import', 'divisioni', 'utenti', 'strutture')
+                    'accessori', 'import', 'divisioni', 'utenti', 'strutture',
+                    'manutentori', 'impianti')
 
 # Tabelle che importa_installazione.py dichiara esplicitamente di non
 # importare (vedi CLAUDE.md): appartengono al deployment sorgente (sessioni
@@ -204,6 +205,12 @@ def rimuovi_strutture(conn, ids):
     conteggi['divisioni'] = conta(f"SELECT COUNT(*) FROM divisioni WHERE struttura_id IN ({seg})")
     conteggi['utenti'] = conta(f"SELECT COUNT(*) FROM utenti WHERE struttura_id IN ({seg})")
     conteggi['strutture'] = conta(f"SELECT COUNT(*) FROM strutture WHERE id IN ({seg})")
+    # Impianti e manutentori vanno via in cascata al passo 7, quindi non hanno
+    # un DELETE proprio: il conteggio serve lo stesso, perche' chi conferma una
+    # cancellazione irreversibile deve leggere che porta via anche il registro
+    # impianti, e il log dell'operazione deve poterlo dire dopo.
+    conteggi['manutentori'] = conta(f"SELECT COUNT(*) FROM manutentori WHERE struttura_id IN ({seg})")
+    conteggi['impianti'] = conta(f"SELECT COUNT(*) FROM impianti WHERE struttura_id IN ({seg})")
 
     # 1. import_history: la FK verso strutture non ha ON DELETE e bloccherebbe.
     #    import_preview va in cascata (import_id -> import_history ON DELETE CASCADE).
@@ -716,8 +723,8 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                                'manutentori', 'impianti', 'impianti_componenti',
                                'impianti_documenti', 'impianti_scadenze',
                                'impianti_interventi', 'file'):
-                    f.write(f"  {chiave:14} {contenuto[chiave]}\n")
-                f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
+                    f.write(f"  {chiave:19} {contenuto[chiave]}\n")
+                f.write(f"  {'byte':19} {contenuto['byte']}\n\n")
                 f.write(
                     "Non incluso in questo archivio: il superadmin del deployment e i\n"
                     "tecnici (sono account condivisi con altre strutture, non di proprieta'\n"
