@@ -878,7 +878,6 @@ def libretto(impianto_id):
         flash('Impianto non trovato.', 'danger')
         return redirect(url_for('impianti.lista'))
 
-    import os
     import tempfile
     from export_service import genera_libretto_impianto
 
