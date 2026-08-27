@@ -4,6 +4,7 @@ CRUD for maintenance records + Scadenzario (deadline tracking).
 """
 
 import os
+from collections import Counter
 from datetime import datetime
 
 from flask import (
@@ -367,71 +368,74 @@ def scarica_verbale(id):
 # Scadenzario
 # ---------------------------------------------------------------------------
 
+#: Colonne comuni alle due origini. La UNION si fa su queste, non su SELECT *:
+#: le due viste hanno colonne diverse e l'ordine dei campi non coincide.
+_SCADENZE_APPARECCHI = """
+    SELECT 'apparecchio' AS origine, ps.apparecchio_id AS oggetto_id,
+           COALESCE(ps.descrizione, ps.marca || ' ' || ps.modello) AS oggetto,
+           ps.matricola AS dettaglio, ps.divisione_id, ps.tipo_manutenzione AS tipo,
+           ps.prossima_scadenza, ps.giorni_rimasti, ps.priorita
+    FROM prossime_scadenze ps
+    WHERE 1=1 {filtro_div}
+"""
+
+_SCADENZE_IMPIANTI = """
+    SELECT 'impianto' AS origine, psi.impianto_id AS oggetto_id,
+           psi.impianto_nome AS oggetto,
+           psi.scadenza_nome AS dettaglio, psi.divisione_id,
+           COALESCE(psi.tipo_custom, psi.tipo) AS tipo,
+           psi.prossima_scadenza, psi.giorni_rimasti, psi.priorita
+    FROM prossime_scadenze_impianti psi
+    WHERE 1=1 {filtro_div}
+"""
+
+
+def _scadenze_unificate(origine, priorita=''):
+    """Le scadenze delle due origini, normalizzate sulle stesse colonne.
+
+    Il filtro di divisione si applica separatamente ai due rami: le viste hanno
+    alias diversi (ps, psi) e filtro_divisione() nomina l'alias nella clausola.
+    """
+    rami, parametri = [], []
+    if origine in ('tutto', 'apparecchi'):
+        clausola, valori = filtro_divisione('ps')
+        rami.append(_SCADENZE_APPARECCHI.format(filtro_div=clausola))
+        parametri.extend(valori)
+    if origine in ('tutto', 'impianti'):
+        clausola, valori = filtro_divisione('psi')
+        rami.append(_SCADENZE_IMPIANTI.format(filtro_div=clausola))
+        parametri.extend(valori)
+    if not rami:
+        return []
+
+    sql = " UNION ALL ".join(rami)
+    if priorita:
+        sql = (f"SELECT * FROM ({sql}) WHERE priorita = ?")
+        parametri.append(priorita)
+    sql += " ORDER BY prossima_scadenza ASC"
+    return query_all(sql, parametri)
+
+
 @manutenzioni_bp.route('/scadenzario')
 @login_required
 def scadenzario():
-    """Deadline tracking view with priority badges."""
-    div_clause, div_params = filtro_divisione('ps')
-
-    tipo = request.args.get('tipo', '')
+    """Deadline tracking view with priority badges, unified across origins."""
+    origine = request.args.get('origine', 'tutto')
+    if origine not in ('tutto', 'apparecchi', 'impianti'):
+        origine = 'tutto'
     priorita = request.args.get('priorita', '')
-    tipo_record = request.args.get('tipo_record', '')  # 'manutenzione' | 'verifica' | ''
+    scadenze = _scadenze_unificate(origine, priorita)
 
-    where_clauses = ["1=1"]
-    params = []
-
-    if tipo:
-        where_clauses.append("ps.tipo_manutenzione = ?")
-        params.append(tipo)
-
-    if priorita:
-        where_clauses.append("ps.priorita = ?")
-        params.append(priorita)
-
-    if tipo_record == 'manutenzione':
-        where_clauses.append("ps.tipo_record = 'manutenzione'")
-    elif tipo_record == 'verifica':
-        where_clauses.append("ps.tipo_record = 'verifica'")
-
-    where_sql = " AND ".join(where_clauses)
-    # Fix div_clause to use 'ps' alias
-    div_clause_ps = div_clause.replace('a.divisione_id', 'ps.divisione_id')
-
-    # Summary counts by priority
-    summary_sql = f"""
-        SELECT priorita, COUNT(*) as cnt
-        FROM prossime_scadenze ps
-        WHERE 1=1 {div_clause_ps}
-        GROUP BY priorita
-    """
-    summary_rows = query_all(summary_sql, div_params)
-    summary = {r['priorita']: r['cnt'] for r in summary_rows}
-
-    # Summary counts by tipo_record
-    tipo_summary_rows = query_all(
-        f"""SELECT tipo_record, COUNT(*) as cnt
-            FROM prossime_scadenze ps
-            WHERE 1=1 {div_clause_ps}
-            GROUP BY tipo_record""",
-        div_params
-    )
-    tipo_summary = {r['tipo_record']: r['cnt'] for r in tipo_summary_rows}
-
-    # Main query
-    data_sql = f"""
-        SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-        FROM prossime_scadenze ps
-        LEFT JOIN divisioni d ON ps.divisione_id = d.id
-        WHERE {where_sql} {div_clause_ps}
-        ORDER BY ps.prossima_scadenza ASC
-    """
-    scadenze = query_all(data_sql, params + div_params)
+    # Aggregazioni calcolate dalla lista già ottenuta, così coprono entrambe
+    # le origini senza una seconda query.
+    summary = Counter(s['priorita'] for s in scadenze)
+    tipo_summary = Counter(s['tipo'] for s in scadenze)
 
     context = {
         'scadenze': scadenze,
         'summary': summary,
         'tipo_summary': tipo_summary,
-        'filtri': {'tipo': tipo, 'priorita': priorita, 'tipo_record': tipo_record},
+        'filtri': {'priorita': priorita, 'origine': origine},
     }
 
     if request.args.get('partial'):

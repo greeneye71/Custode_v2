@@ -1,20 +1,31 @@
 {% for s in scadenze %}
 <tr>
     <td>
-        <a href="{{ url_for('apparecchi.dettaglio', id=s.apparecchio_id) }}" class="text-decoration-none fw-medium">
-            {{ s.marca }} {{ s.modello }}
-        </a>
-        {% if s.descrizione %}
-        <br><small class="text-muted">{{ s.descrizione }}</small>
+        {% if s.origine == 'impianto' %}
+        <span class="badge bg-secondary"><i class="bi bi-building-gear me-1"></i>Impianto</span>
+        {% else %}
+        <span class="badge bg-primary"><i class="bi bi-heart-pulse me-1"></i>Apparecchio</span>
         {% endif %}
     </td>
-    <td><code>{{ s.matricola }}</code></td>
-    <td>{{ s.ubicazione or '-' }}</td>
     <td>
-        {% if s.tipo_manutenzione == 'verifica_elettrica' %}
+        {% if s.origine == 'impianto' %}
+        <a href="{{ url_for('impianti.dettaglio', impianto_id=s.oggetto_id) }}" class="text-decoration-none fw-medium">
+            {{ s.oggetto }}
+        </a>
+        {% else %}
+        <a href="{{ url_for('apparecchi.dettaglio', id=s.oggetto_id) }}" class="text-decoration-none fw-medium">
+            {{ s.oggetto }}
+        </a>
+        {% endif %}
+        {% if s.dettaglio %}
+        <br><small class="text-muted">{{ s.dettaglio }}</small>
+        {% endif %}
+    </td>
+    <td>
+        {% if s.tipo == 'verifica_elettrica' %}
         <span class="badge bg-info text-dark"><i class="bi bi-shield-check me-1"></i>Verifica Elettrica</span>
         {% else %}
-        <span class="badge badge-{{ s.tipo_manutenzione }}">{{ s.tipo_manutenzione|capitalize }}</span>
+        <span class="badge badge-{{ s.tipo }}">{{ s.tipo|capitalize }}</span>
         {% endif %}
     </td>
     <td class="fw-medium">{{ s.prossima_scadenza }}</td>
@@ -39,16 +50,10 @@
             {% endif %}
         </span>
     </td>
-    <td>
-        <span class="d-inline-flex align-items-center">
-            <span class="divisione-dot me-1" style="background-color: {{ s.divisione_colore or '#6b7280' }}"></span>
-            <small>{{ s.divisione_nome or '-' }}</small>
-        </span>
-    </td>
 </tr>
 {% else %}
 <tr>
-    <td colspan="8" class="text-center text-muted py-4">
+    <td colspan="6" class="text-center text-muted py-4">
         <i class="bi bi-check-circle text-success" style="font-size: 1.5rem;"></i>
         <p class="mb-0 mt-2">Nessuna scadenza trovata</p>
     </td>

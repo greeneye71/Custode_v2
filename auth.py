@@ -335,32 +335,49 @@ def _load_user_from_session():
                               'colore': '#6b7280'}
         session['divisione_attiva_id'] = 'tutte'
 
-    # Count deadline alerts (for badge in navbar)
+    # Count deadline alerts (for badge in navbar), somma apparecchi + impianti
     if g.divisione_attiva and g.divisione_attiva.get('id') != 'tutte':
         result = query_one(
-            """SELECT COUNT(*) as cnt FROM prossime_scadenze
-               WHERE divisione_id = ? AND priorita IN ('scaduto', 'urgente', 'attenzione')""",
-            (g.divisione_attiva['id'],)
+            """SELECT (SELECT COUNT(*) FROM prossime_scadenze
+                        WHERE divisione_id = ?
+                          AND priorita IN ('scaduto', 'urgente', 'attenzione'))
+                    + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                        WHERE divisione_id = ?
+                          AND priorita IN ('scaduto', 'urgente', 'attenzione'))
+                    AS cnt""",
+            (g.divisione_attiva['id'], g.divisione_attiva['id'])
         )
     elif g.user['ruolo'] in ('admin', 'superadmin', 'tecnico') and g.struttura_id:
         result = query_one(
-            """SELECT COUNT(*) as cnt FROM prossime_scadenze ps
-               JOIN apparecchi a ON a.id = ps.apparecchio_id
-               WHERE a.struttura_id = ? AND ps.priorita IN ('scaduto', 'urgente', 'attenzione')""",
-            (g.struttura_id,)
+            """SELECT (SELECT COUNT(*) FROM prossime_scadenze ps
+                        JOIN apparecchi a ON a.id = ps.apparecchio_id
+                        WHERE a.struttura_id = ?
+                          AND ps.priorita IN ('scaduto', 'urgente', 'attenzione'))
+                    + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                        WHERE struttura_id = ?
+                          AND priorita IN ('scaduto', 'urgente', 'attenzione'))
+                    AS cnt""",
+            (g.struttura_id, g.struttura_id)
         )
     elif g.user['ruolo'] in ('admin', 'superadmin', 'tecnico'):
         result = query_one(
-            """SELECT COUNT(*) as cnt FROM prossime_scadenze
-               WHERE priorita IN ('scaduto', 'urgente', 'attenzione')"""
+            """SELECT (SELECT COUNT(*) FROM prossime_scadenze
+                        WHERE priorita IN ('scaduto', 'urgente', 'attenzione'))
+                    + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                        WHERE priorita IN ('scaduto', 'urgente', 'attenzione'))
+                    AS cnt"""
         )
     else:
         ids = [d['id'] for d in g.divisioni]
         if ids:
             ph = ','.join('?' * len(ids))
-            sql = ("SELECT COUNT(*) as cnt FROM prossime_scadenze"
-                   " WHERE divisione_id IN (" + ph + ") AND priorita IN ('scaduto','urgente','attenzione')")
-            result = query_one(sql, tuple(ids))
+            sql = ("SELECT (SELECT COUNT(*) FROM prossime_scadenze"
+                   " WHERE divisione_id IN (" + ph + ")"
+                   " AND priorita IN ('scaduto','urgente','attenzione'))"
+                   " + (SELECT COUNT(*) FROM prossime_scadenze_impianti"
+                   " WHERE divisione_id IN (" + ph + ")"
+                   " AND priorita IN ('scaduto','urgente','attenzione')) AS cnt")
+            result = query_one(sql, tuple(ids) + tuple(ids))
         else:
             result = None
     g.scadenze_alert_count = result['cnt'] if result else 0

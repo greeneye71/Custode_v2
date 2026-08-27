@@ -441,6 +441,7 @@ CREATE INDEX IF NOT EXISTS idx_apparecchi_struttura ON apparecchi(struttura_id);
 CREATE VIEW IF NOT EXISTS prossime_scadenze AS
 SELECT
   a.id AS apparecchio_id,
+  a.struttura_id,
   a.divisione_id,
   a.descrizione,
   a.marca,
@@ -476,6 +477,7 @@ UNION ALL
 
 SELECT
   a.id AS apparecchio_id,
+  a.struttura_id,
   a.divisione_id,
   a.descrizione,
   a.marca,

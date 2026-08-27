@@ -581,3 +581,70 @@ def test_manutentore_eliminato_non_cancella_gli_impianti(client, app, ambiente):
         riga = query_one("SELECT * FROM impianti WHERE id = ?", (impianto,))
         assert riga is not None and riga['manutentore_id'] is None
 
+
+
+def test_scadenzario_mostra_entrambe_le_origini(client, app, ambiente):
+    """URL reale: /scadenzario, non /manutenzioni/scadenzario."""
+    with app.app_context():
+        a = ambiente['a']
+        apparecchio = execute(
+            "INSERT INTO apparecchi (struttura_id, divisione_id, marca, modello,"
+            " matricola, descrizione) VALUES (?, ?, 'ACME', 'X1', 'MAT-APP',"
+            " 'Elettrobisturi')", (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO manutenzioni (apparecchio_id, tipo,"
+                " data_intervento, prossima_scadenza)"
+                " VALUES (?, 'preventiva', date('now', '-30 days'),"
+                " date('now', '+5 days'))", (apparecchio,))
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Cabina scadenzario', 'elettrico')",
+            (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Verifica di terra', 24, date('now', '+3 days'))",
+                (impianto,))
+
+    entra(client, ambiente['a']['email'])
+    tutto = client.get('/scadenzario').get_data(as_text=True)
+    assert 'MAT-APP' in tutto or 'Elettrobisturi' in tutto
+    assert 'Cabina scadenzario' in tutto
+
+    solo_impianti = client.get('/scadenzario?origine=impianti').get_data(as_text=True)
+    assert 'Cabina scadenzario' in solo_impianti
+    assert 'MAT-APP' not in solo_impianti
+
+    solo_apparecchi = client.get('/scadenzario?origine=apparecchi').get_data(as_text=True)
+    assert 'Cabina scadenzario' not in solo_apparecchi
+
+
+def test_scadenzario_non_mostra_impianti_di_altra_struttura(client, app, ambiente):
+    with app.app_context():
+        b = ambiente['b']
+        impianto_b = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'SEGRETO-B-SCAD', 'elettrico')",
+            (b['struttura'], b['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Verifica', 24, date('now', '+2 days'))",
+                (impianto_b,))
+    entra(client, ambiente['a']['email'])
+    assert 'SEGRETO-B-SCAD' not in client.get('/scadenzario').get_data(as_text=True)
+
+
+def test_badge_conta_anche_gli_impianti(client, app, ambiente):
+    with app.app_context():
+        a = ambiente['a']
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Cabina badge', 'elettrico')",
+            (a['struttura'], a['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Verifica', 24, date('now', '-1 days'))",
+                (impianto,))
+    entra(client, ambiente['a']['email'])
+    with client:
+        client.get('/')
+        from flask import g
+        assert g.scadenze_alert_count >= 1

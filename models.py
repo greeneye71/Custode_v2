@@ -415,6 +415,7 @@ def apply_schema_updates():
         """CREATE VIEW prossime_scadenze AS
 SELECT
   a.id AS apparecchio_id,
+  a.struttura_id,
   a.divisione_id,
   a.descrizione,
   a.marca,
@@ -448,6 +449,7 @@ WHERE a.stato != 'dismesso'
 UNION ALL
 SELECT
   a.id AS apparecchio_id,
+  a.struttura_id,
   a.divisione_id,
   a.descrizione,
   a.marca,

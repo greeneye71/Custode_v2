@@ -139,15 +139,15 @@
             {% if scadenze_imminenti %}
             <div class="list-group list-group-flush">
                 {% for s in scadenze_imminenti %}
-                <a href="{{ url_for('apparecchi.dettaglio', id=s.apparecchio_id) }}"
+                <a href="{% if s.origine == 'impianto' %}{{ url_for('impianti.dettaglio', impianto_id=s.oggetto_id) }}{% else %}{{ url_for('apparecchi.dettaglio', id=s.oggetto_id) }}{% endif %}"
                    class="list-group-item list-group-item-action py-2">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <div class="fw-medium" style="font-size: 0.85rem;">
-                                {{ s.marca }} {{ s.modello }}
+                                {% if s.origine == 'impianto' %}<i class="bi bi-building-gear me-1"></i>{% else %}<i class="bi bi-heart-pulse me-1"></i>{% endif %}{{ s.oggetto }}
                             </div>
                             <small class="text-muted">
-                                {{ s.matricola }} &middot; {{ s.tipo_manutenzione|capitalize }}
+                                {{ s.dettaglio }} &middot; {{ s.tipo|capitalize }}
                             </small>
                         </div>
                         <div class="text-end">

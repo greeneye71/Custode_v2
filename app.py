@@ -472,31 +472,53 @@ def create_app():
         )
         totale_apparecchi = r['cnt'] if r else 0
 
-        # Stat 2: Active alerts (deadlines <= 30 days)
+        # Stat 2: Active alerts (deadlines <= 30 days), somma apparecchi + impianti
+        priorita_attive = ('scaduto', 'urgente', 'attenzione', 'avviso')
         if div and div.get('id') != 'tutte':
             r = query_one(
-                "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id = ? AND priorita IN ('scaduto','urgente','attenzione','avviso')",
-                [div['id']]
+                """SELECT (SELECT COUNT(*) FROM prossime_scadenze
+                            WHERE divisione_id = ?
+                              AND priorita IN ('scaduto','urgente','attenzione','avviso'))
+                        + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                            WHERE divisione_id = ?
+                              AND priorita IN ('scaduto','urgente','attenzione','avviso'))
+                        AS cnt""",
+                [div['id'], div['id']]
             )
         elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
             if struttura_id:
                 r = query_one(
-                    """SELECT COUNT(*) as cnt FROM prossime_scadenze ps
-                       JOIN apparecchi a ON a.id = ps.apparecchio_id
-                       WHERE a.struttura_id = ? AND ps.priorita IN ('scaduto','urgente','attenzione','avviso')""",
-                    [struttura_id]
+                    """SELECT (SELECT COUNT(*) FROM prossime_scadenze ps
+                                JOIN apparecchi a ON a.id = ps.apparecchio_id
+                                WHERE a.struttura_id = ?
+                                  AND ps.priorita IN ('scaduto','urgente','attenzione','avviso'))
+                            + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                                WHERE struttura_id = ?
+                                  AND priorita IN ('scaduto','urgente','attenzione','avviso'))
+                            AS cnt""",
+                    [struttura_id, struttura_id]
                 )
             else:
                 r = query_one(
-                    "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE priorita IN ('scaduto','urgente','attenzione','avviso')"
+                    """SELECT (SELECT COUNT(*) FROM prossime_scadenze
+                                WHERE priorita IN ('scaduto','urgente','attenzione','avviso'))
+                            + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                                WHERE priorita IN ('scaduto','urgente','attenzione','avviso'))
+                            AS cnt"""
                 )
         else:
             ids = [d['id'] for d in getattr(g, 'divisioni', [])]
             if ids:
                 ph = ','.join('?' * len(ids))
                 r = query_one(
-                    f"SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id IN ({ph}) AND priorita IN ('scaduto','urgente','attenzione','avviso')",
-                    ids
+                    f"""SELECT (SELECT COUNT(*) FROM prossime_scadenze
+                                WHERE divisione_id IN ({ph})
+                                  AND priorita IN ('scaduto','urgente','attenzione','avviso'))
+                            + (SELECT COUNT(*) FROM prossime_scadenze_impianti
+                                WHERE divisione_id IN ({ph})
+                                  AND priorita IN ('scaduto','urgente','attenzione','avviso'))
+                            AS cnt""",
+                    ids + ids
                 )
             else:
                 r = None
@@ -522,33 +544,9 @@ def create_app():
         )
         costi_mese = r['tot'] if r else 0
 
-        # Upcoming deadlines (top 10)
-        if div and div.get('id') != 'tutte':
-            scadenze_imminenti = query_all(
-                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   WHERE ps.divisione_id = ?
-                   ORDER BY ps.prossima_scadenza ASC LIMIT 10""",
-                [div['id']]
-            )
-        elif struttura_id:
-            scadenze_imminenti = query_all(
-                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   JOIN apparecchi a ON a.id = ps.apparecchio_id
-                   WHERE a.struttura_id = ?
-                   ORDER BY ps.prossima_scadenza ASC LIMIT 10""",
-                [struttura_id]
-            )
-        else:
-            scadenze_imminenti = query_all(
-                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   ORDER BY ps.prossima_scadenza ASC LIMIT 10"""
-            )
+        # Upcoming deadlines (top 10), unificate fra apparecchi e impianti
+        from manutenzioni import _scadenze_unificate
+        scadenze_imminenti = _scadenze_unificate('tutto')[:10]
 
         # Recent interventions (last 10)
         ultimi_interventi = query_all(
