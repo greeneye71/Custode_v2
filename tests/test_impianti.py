@@ -994,3 +994,126 @@ def test_impianti_alerts_invio_fallito_non_registra(app, ambiente, monkeypatch):
         righe = query_all("SELECT * FROM impianti_avvisi_inviati"
                           " WHERE scadenza_id = ?", (scad,))
         assert righe == []
+
+
+# ---------------------------------------------------------------------------
+# Perimetro della struttura, importazione e versione (task 14)
+# ---------------------------------------------------------------------------
+
+def test_perimetro_allegati_include_gli_impianti():
+    """Un allegato di impianto deve stare nel perimetro della struttura.
+
+    COLONNE_ALLEGATI e' una tupla di TRIPLE (tabella, colonna, condizione):
+    qui interessa solo la coppia tabella/colonna, la condizione e' provata
+    dai test funzionali di struttura_service.
+    """
+    from struttura_service import COLONNE_ALLEGATI
+    coppie = {(t, c) for t, c, _ in COLONNE_ALLEGATI}
+    assert ('impianti_documenti', 'filepath') in coppie
+    assert ('impianti_interventi', 'verbale_path') in coppie
+
+
+def test_riferimenti_utente_copre_le_colonne_degli_impianti():
+    """Le FK verso utenti degli impianti non hanno ON DELETE.
+
+    rimuovi_strutture() cancella gli utenti (passo 6) PRIMA della struttura
+    (passo 7, che porta via gli impianti in cascata): se una di queste
+    colonne non viene azzerata prima, la FK rifiuta l'intera cancellazione -
+    e quindi anche ogni esportazione, che cancella tutte le altre strutture
+    su una copia.
+    """
+    from struttura_service import RIFERIMENTI_UTENTE
+    assert {('impianti', 'created_by'), ('impianti', 'updated_by'),
+            ('impianti_documenti', 'uploaded_by'),
+            ('impianti_interventi', 'created_by')} <= set(RIFERIMENTI_UTENTE)
+
+
+def test_contenuto_struttura_conta_gli_impianti(app, ambiente, tmp_path):
+    """I conteggi della scheda struttura vedono impianti, figlie e manutentori."""
+    from models import get_db
+    from struttura_service import contenuto_struttura
+
+    with app.app_context():
+        a = ambiente['a']
+        manutentore = execute(
+            "INSERT INTO manutentori (struttura_id, ragione_sociale)"
+            " VALUES (?, 'Ditta Rossi')", (a['struttura'],)).lastrowid
+        impianto = _crea_impianto(ambiente, nome='Cabina conteggio')
+        execute("UPDATE impianti SET manutentore_id = ? WHERE id = ?",
+                (manutentore, impianto))
+        componente = execute(
+            "INSERT INTO impianti_componenti (impianto_id, descrizione)"
+            " VALUES (?, 'Quadro generale')", (impianto,)).lastrowid
+        execute("INSERT INTO impianti_documenti (impianto_id, filename, filepath)"
+                " VALUES (?, 'progetto.pdf', 'impianti/progetto.pdf')", (impianto,))
+        scadenza = execute(
+            "INSERT INTO impianti_scadenze (impianto_id, componente_id, nome,"
+            " prossima_scadenza) VALUES (?, ?, 'Verifica', '2027-01-01')",
+            (impianto, componente)).lastrowid
+        execute("INSERT INTO impianti_interventi (impianto_id, scadenza_id,"
+                " data_intervento) VALUES (?, ?, '2026-01-01')",
+                (impianto, scadenza))
+
+        # Un impianto dell'altra struttura non deve entrare nel conteggio.
+        _crea_impianto(ambiente, chiave='b', nome='Cabina altrui')
+
+        contenuto = contenuto_struttura(get_db(), a['struttura'],
+                                        str(tmp_path / 'uploads'))
+        assert contenuto['manutentori'] == 1
+        assert contenuto['impianti'] == 1
+        assert contenuto['impianti_componenti'] == 1
+        assert contenuto['impianti_documenti'] == 1
+        assert contenuto['impianti_scadenze'] == 1
+        assert contenuto['impianti_interventi'] == 1
+
+
+def test_colonne_file_import_include_gli_impianti():
+    """L'importatore deve sapere che questi due percorsi sono allegati da
+    copiare, e in quale sottocartella metterli quando la sorgente non la dice."""
+    from importa_installazione import COLONNE_FILE
+    assert COLONNE_FILE['impianti_documenti']['filepath'] == 'impianti'
+    assert COLONNE_FILE['impianti_interventi']['verbale_path'] == 'impianti'
+
+
+def test_versione_allineata():
+    import json
+    with open('config.example.json', encoding='utf-8') as f:
+        assert json.load(f)['version'] == '2.7.0'
+    import app as modulo_app
+    assert modulo_app.APP_VERSION == '2.7.0'
+
+
+def test_rimozione_struttura_con_impianti_firmati(app, ambiente):
+    """Cancellare una struttura i cui impianti portano una firma utente.
+
+    impianti.created_by/updated_by, impianti_documenti.uploaded_by e
+    impianti_interventi.created_by sono REFERENCES utenti(id) senza ON DELETE:
+    rimuovi_strutture() cancella gli utenti al passo 6, prima della struttura
+    al passo 7, quindi senza azzerarli prima la FK rifiuta tutto. Vale anche
+    per l'esportazione, che gira lo stesso codice su una copia con le FK
+    attive.
+    """
+    from models import get_db
+    from struttura_service import rimuovi_strutture
+
+    with app.app_context():
+        a = ambiente['a']
+        impianto = _crea_impianto(ambiente, nome='Cabina firmata')
+        execute("UPDATE impianti SET created_by = ?, updated_by = ? WHERE id = ?",
+                (a['utente'], a['utente'], impianto))
+        execute("INSERT INTO impianti_documenti (impianto_id, filename, filepath,"
+                " uploaded_by) VALUES (?, 'dico.pdf', 'impianti/dico.pdf', ?)",
+                (impianto, a['utente']))
+        execute("INSERT INTO impianti_interventi (impianto_id, data_intervento,"
+                " created_by) VALUES (?, '2026-02-01', ?)", (impianto, a['utente']))
+
+        conn = get_db()
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        rimuovi_strutture(conn, [a['struttura']])
+        conn.commit()
+
+        assert query_one("SELECT COUNT(*) as c FROM impianti "
+                         "WHERE struttura_id = ?", (a['struttura'],))['c'] == 0
+        # L'altra struttura non e' stata toccata.
+        assert query_one("SELECT COUNT(*) as c FROM strutture WHERE id = ?",
+                         (ambiente['b']['struttura'],))['c'] == 1

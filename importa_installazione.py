@@ -73,6 +73,26 @@ VINCOLI = {
     'utenti_divisioni': {
         'ruolo_divisione': ({'admin', 'utente'}, 'utente'),
     },
+    'impianti': {
+        'tipo': ({'elettrico', 'idraulico', 'riscaldamento', 'climatizzazione',
+                  'antincendio', 'gas_medicali', 'ascensori', 'rete_dati',
+                  'altro'}, 'altro'),
+        'stato': ({'attivo', 'in_manutenzione', 'fuori_servizio', 'dismesso'},
+                  'attivo'),
+    },
+    'impianti_documenti': {
+        'tipo': ({'progetto', 'dichiarazione_conformita', 'collaudo',
+                  'certificato', 'libretto', 'planimetria', 'verbale',
+                  'altro'}, 'altro'),
+    },
+    'impianti_interventi': {
+        'tipo': ({'verifica', 'ordinaria', 'straordinaria', 'riparazione'},
+                 'ordinaria'),
+        # Default None e non 'positivo': esito e' nullable, e inventare un
+        # esito positivo su un intervento che non lo dichiara e' una bugia
+        # su un registro di manutenzione.
+        'esito': ({'positivo', 'negativo', 'con_riserva'}, None),
+    },
 }
 
 # Colonne che contengono un percorso di file da copiare, con la sottocartella
@@ -82,6 +102,8 @@ COLONNE_FILE = {
     'documenti': {'filepath': 'documenti'},
     'manutenzioni': {'verbale_path': 'verbali'},
     'verifiche': {'documento_path': 'verifiche'},
+    'impianti_documenti': {'filepath': 'impianti'},
+    'impianti_interventi': {'verbale_path': 'impianti'},
 }
 
 # Chiavi di configurazione copiate in strutture_config con --con-config.
@@ -909,6 +931,247 @@ class Importatore:
             })
             self.rep.conta('documenti', 'importati')
 
+    def importa_manutentori(self):
+        mappa = self._mappa('manutentori')
+        semplici = ['indirizzo', 'telefono', 'email', 'partita_iva', 'note',
+                    'created_at', 'updated_at']
+        for riga in self._righe('manutentori'):
+            ragione = self._valore(riga, 'manutentori', 'ragione_sociale', '')
+            if not ragione:
+                self.rep.conta('manutentori', 'errori')
+                continue
+
+            # Ricerca diretta invece di _riusa_esistente: manutentori porta
+            # UNIQUE (struttura_id, ragione_sociale), quindi "duplica" qui non
+            # e' realizzabile e la riga gia' presente si riusa comunque.
+            esistente = self.conn.execute(
+                "SELECT id FROM manutentori WHERE struttura_id = ? AND ragione_sociale = ?",
+                (self.struttura_id, ragione)).fetchone()
+            if esistente:
+                mappa[riga['id']] = esistente[0]
+                self.rep.conta('manutentori', 'saltati')
+                continue
+
+            dati = {c: self._valore(riga, 'manutentori', c) for c in semplici}
+            dati['struttura_id'] = self.struttura_id
+            dati['ragione_sociale'] = ragione
+            dati['attivo'] = self._valore(riga, 'manutentori', 'attivo', 1)
+            mappa[riga['id']] = self._inserisci('manutentori', dati)
+            self.rep.conta('manutentori', 'importati')
+
+    def importa_impianti(self):
+        mappa = self._mappa('impianti')
+        d_map, u_map = self._mappa('divisioni'), self._mappa('utenti')
+        m_map = self._mappa('manutentori')
+        semplici = ['tipo_custom', 'descrizione', 'ubicazione', 'anno_installazione',
+                    'identificativo', 'note', 'created_at', 'updated_at']
+        for riga in self._righe('impianti'):
+            nome = self._valore(riga, 'impianti', 'nome', '')
+            if not nome:
+                self.rep.conta('impianti', 'errori')
+                continue
+
+            divisione = d_map.get(self._valore(riga, 'impianti', 'divisione_id'))
+            if divisione is None:
+                # impianti.divisione_id e' NOT NULL con ON DELETE RESTRICT:
+                # senza divisione la riga non e' inseribile. Come per gli
+                # apparecchi la si aggancia alla prima divisione importata
+                # invece di perdere l'impianto.
+                divisione = next(iter(d_map.values()), None)
+                if divisione is None:
+                    self.rep.conta('impianti', 'errori')
+                    continue
+                self.rep.avviso("Impianti senza divisione valida agganciati "
+                                "alla prima divisione importata.")
+
+            # Come per i manutentori: UNIQUE (struttura_id, nome).
+            esistente = self.conn.execute(
+                "SELECT id FROM impianti WHERE struttura_id = ? AND nome = ?",
+                (self.struttura_id, nome)).fetchone()
+            if esistente:
+                mappa[riga['id']] = esistente[0]
+                self.rep.conta('impianti', 'saltati')
+                continue
+
+            dati = {c: self._valore(riga, 'impianti', c) for c in semplici}
+            dati['struttura_id'] = self.struttura_id
+            dati['divisione_id'] = divisione
+            dati['nome'] = nome
+            dati['tipo'] = self._normalizza(
+                'impianti', 'tipo', self._valore(riga, 'impianti', 'tipo', 'altro'))
+            dati['stato'] = self._normalizza(
+                'impianti', 'stato', self._valore(riga, 'impianti', 'stato', 'attivo'))
+            dati['manutentore_id'] = m_map.get(
+                self._valore(riga, 'impianti', 'manutentore_id'))
+            dati['created_by'] = u_map.get(self._valore(riga, 'impianti', 'created_by'))
+            dati['updated_by'] = u_map.get(self._valore(riga, 'impianti', 'updated_by'))
+            mappa[riga['id']] = self._inserisci('impianti', dati)
+            self.rep.conta('impianti', 'importati')
+
+    def importa_impianti_componenti(self):
+        mappa = self._mappa('impianti_componenti')
+        i_map = self._mappa('impianti')
+        semplici = ['marca', 'modello', 'ubicazione', 'note', 'created_at']
+        for riga in self._righe('impianti_componenti'):
+            imp_id = i_map.get(self._valore(riga, 'impianti_componenti', 'impianto_id'))
+            if not imp_id:
+                self.rep.conta('impianti_componenti', 'saltati')
+                continue
+
+            descrizione = self._valore(riga, 'impianti_componenti', 'descrizione', '')
+            matricola = self._valore(riga, 'impianti_componenti', 'matricola')
+            esistente = self._riusa_esistente(
+                ('impianti_componenti', imp_id, descrizione, matricola),
+                "SELECT id FROM impianti_componenti WHERE impianto_id = ?"
+                " AND descrizione = ? AND matricola IS ? ORDER BY id",
+                (imp_id, descrizione, matricola))
+            if esistente:
+                mappa[riga['id']] = esistente
+                self.rep.conta('impianti_componenti', 'saltati')
+                continue
+
+            dati = {c: self._valore(riga, 'impianti_componenti', c) for c in semplici}
+            dati['impianto_id'] = imp_id
+            dati['descrizione'] = descrizione
+            dati['matricola'] = matricola
+            mappa[riga['id']] = self._inserisci('impianti_componenti', dati)
+            self.rep.conta('impianti_componenti', 'importati')
+
+    def importa_impianti_documenti(self):
+        i_map, u_map = self._mappa('impianti'), self._mappa('utenti')
+        semplici = ['descrizione', 'data_documento', 'emittente_ragione_sociale',
+                    'emittente_indirizzo', 'emittente_telefono', 'emittente_email',
+                    'filesize', 'uploaded_at']
+        for riga in self._righe('impianti_documenti'):
+            imp_id = i_map.get(self._valore(riga, 'impianti_documenti', 'impianto_id'))
+            if not imp_id:
+                self.rep.conta('impianti_documenti', 'saltati')
+                continue
+
+            nome_file = self._valore(riga, 'impianti_documenti', 'filename', '')
+            data_doc = self._valore(riga, 'impianti_documenti', 'data_documento')
+            if self._riusa_esistente(
+                    ('impianti_documenti', imp_id, nome_file, data_doc),
+                    "SELECT id FROM impianti_documenti WHERE impianto_id = ?"
+                    " AND filename = ? AND data_documento IS ? ORDER BY id",
+                    (imp_id, nome_file, data_doc)):
+                self.rep.conta('impianti_documenti', 'saltati')
+                continue
+
+            nuovo_path = self._copia_file(
+                self._valore(riga, 'impianti_documenti', 'filepath'), 'impianti')
+            if nuovo_path is None and not self.opz.senza_file:
+                # Qui il documento E' il file: una dichiarazione di conformita'
+                # senza il suo PDF non dichiara niente.
+                self.rep.conta('impianti_documenti', 'saltati')
+                continue
+
+            dati = {c: self._valore(riga, 'impianti_documenti', c) for c in semplici}
+            dati['impianto_id'] = imp_id
+            dati['tipo'] = self._normalizza(
+                'impianti_documenti', 'tipo',
+                self._valore(riga, 'impianti_documenti', 'tipo', 'altro'))
+            dati['filename'] = nome_file
+            dati['filepath'] = nuovo_path
+            dati['uploaded_by'] = u_map.get(
+                self._valore(riga, 'impianti_documenti', 'uploaded_by'))
+            self._inserisci('impianti_documenti', dati)
+            self.rep.conta('impianti_documenti', 'importati')
+
+    def importa_impianti_scadenze(self):
+        mappa = self._mappa('impianti_scadenze')
+        i_map, c_map = self._mappa('impianti'), self._mappa('impianti_componenti')
+        semplici = ['riferimento_normativo', 'periodicita_mesi', 'email_extra',
+                    'note', 'created_at', 'updated_at']
+        for riga in self._righe('impianti_scadenze'):
+            imp_id = i_map.get(self._valore(riga, 'impianti_scadenze', 'impianto_id'))
+            if not imp_id:
+                self.rep.conta('impianti_scadenze', 'saltati')
+                continue
+
+            nome = self._valore(riga, 'impianti_scadenze', 'nome', '')
+            prossima = self._valore(riga, 'impianti_scadenze', 'prossima_scadenza')
+            if not prossima:
+                # prossima_scadenza e' NOT NULL ed e' l'unico dato che rende
+                # utile la riga: senza, non c'e' niente da scadenzare.
+                self.rep.conta('impianti_scadenze', 'errori')
+                continue
+
+            esistente = self._riusa_esistente(
+                ('impianti_scadenze', imp_id, nome, prossima),
+                "SELECT id FROM impianti_scadenze WHERE impianto_id = ?"
+                " AND nome = ? AND prossima_scadenza = ? ORDER BY id",
+                (imp_id, nome, prossima))
+            if esistente:
+                mappa[riga['id']] = esistente
+                self.rep.conta('impianti_scadenze', 'saltati')
+                continue
+
+            dati = {c: self._valore(riga, 'impianti_scadenze', c) for c in semplici}
+            dati['impianto_id'] = imp_id
+            dati['componente_id'] = c_map.get(
+                self._valore(riga, 'impianti_scadenze', 'componente_id'))
+            dati['nome'] = nome
+            dati['prossima_scadenza'] = prossima
+            dati['giorni_anticipo'] = self._valore(
+                riga, 'impianti_scadenze', 'giorni_anticipo', 30)
+            dati['avvisa_manutentore'] = self._valore(
+                riga, 'impianti_scadenze', 'avvisa_manutentore', 1)
+            dati['attiva'] = self._valore(riga, 'impianti_scadenze', 'attiva', 1)
+            mappa[riga['id']] = self._inserisci('impianti_scadenze', dati)
+            self.rep.conta('impianti_scadenze', 'importati')
+
+    def importa_impianti_interventi(self):
+        i_map, u_map = self._mappa('impianti'), self._mappa('utenti')
+        s_map, c_map = self._mappa('impianti_scadenze'), self._mappa('impianti_componenti')
+        m_map = self._mappa('manutentori')
+        semplici = ['tecnico_ditta', 'descrizione', 'costo', 'note', 'created_at']
+        for riga in self._righe('impianti_interventi'):
+            imp_id = i_map.get(self._valore(riga, 'impianti_interventi', 'impianto_id'))
+            if not imp_id:
+                self.rep.conta('impianti_interventi', 'saltati')
+                continue
+
+            data = self._valore(riga, 'impianti_interventi', 'data_intervento')
+            if not data:
+                self.rep.conta('impianti_interventi', 'errori')
+                continue
+            tipo = self._normalizza(
+                'impianti_interventi', 'tipo',
+                self._valore(riga, 'impianti_interventi', 'tipo', 'ordinaria'))
+            scadenza = s_map.get(self._valore(riga, 'impianti_interventi', 'scadenza_id'))
+
+            if self._riusa_esistente(
+                    ('impianti_interventi', imp_id, tipo, data, scadenza),
+                    "SELECT id FROM impianti_interventi WHERE impianto_id = ?"
+                    " AND tipo = ? AND data_intervento = ? AND scadenza_id IS ?"
+                    " ORDER BY id",
+                    (imp_id, tipo, data, scadenza)):
+                self.rep.conta('impianti_interventi', 'saltati')
+                continue
+
+            dati = {c: self._valore(riga, 'impianti_interventi', c) for c in semplici}
+            dati['impianto_id'] = imp_id
+            dati['scadenza_id'] = scadenza
+            dati['componente_id'] = c_map.get(
+                self._valore(riga, 'impianti_interventi', 'componente_id'))
+            dati['tipo'] = tipo
+            dati['data_intervento'] = data
+            dati['esito'] = self._normalizza(
+                'impianti_interventi', 'esito',
+                self._valore(riga, 'impianti_interventi', 'esito'))
+            dati['manutentore_id'] = m_map.get(
+                self._valore(riga, 'impianti_interventi', 'manutentore_id'))
+            # verbale_path e' nullable: a differenza di impianti_documenti,
+            # l'intervento resta un dato valido (data, esito, costo) anche se
+            # il verbale non e' piu' sul disco della sorgente.
+            dati['verbale_path'] = self._copia_file(
+                self._valore(riga, 'impianti_interventi', 'verbale_path'), 'impianti')
+            dati['created_by'] = u_map.get(
+                self._valore(riga, 'impianti_interventi', 'created_by'))
+            self._inserisci('impianti_interventi', dati)
+            self.rep.conta('impianti_interventi', 'importati')
+
     def importa_log(self):
         if not self.opz.con_log:
             return
@@ -1025,11 +1288,20 @@ class Importatore:
             self.importa_divisioni()
             self.importa_utenti()
             self.importa_utenti_divisioni()
+            self.importa_manutentori()
             self.importa_apparecchi()
             self.importa_accessori()
             self.importa_manutenzioni()
             self.importa_verifiche()
             self.importa_documenti()
+            # Ordine obbligato: impianti dopo divisioni e manutentori (FK),
+            # componenti prima delle scadenze (FK componente_id), interventi
+            # per ultimi (FK su scadenze, componenti e manutentori).
+            self.importa_impianti()
+            self.importa_impianti_componenti()
+            self.importa_impianti_documenti()
+            self.importa_impianti_scadenze()
+            self.importa_impianti_interventi()
             self.importa_import_history()
             self.importa_log()
             self.importa_config()
@@ -1051,9 +1323,13 @@ class Importatore:
 
 def analizza(sorgente, report):
     """Conta cosa c'è nella sorgente, senza scrivere nulla."""
+    # impianti_avvisi_inviati non compare: come sessioni e login_attempts
+    # appartiene al deployment di origine e non viene importata.
     interesse = ['divisioni', 'utenti', 'utenti_divisioni', 'apparecchi',
                  'accessori', 'manutenzioni', 'verifiche', 'documenti',
-                 'import_history', 'log_attivita']
+                 'manutentori', 'impianti', 'impianti_componenti',
+                 'impianti_documenti', 'impianti_scadenze',
+                 'impianti_interventi', 'import_history', 'log_attivita']
     tabelle = sorgente.tabelle()
     conteggi = {}
     for t in interesse:

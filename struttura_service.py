@@ -25,6 +25,14 @@ RIFERIMENTI_UTENTE = (
     ('documenti', 'uploaded_by'),
     ('import_history', 'imported_by'),
     ('api_tokens', 'created_by'),
+    # Impianti: stesse FK senza ON DELETE. Vanno liberate qui e non lasciate
+    # alla cascata di strutture, perche' rimuovi_strutture() cancella gli
+    # utenti (passo 6) PRIMA della struttura (passo 7): quando la cascata
+    # porterebbe via gli impianti, l'utente e' gia' sparito da un pezzo.
+    ('impianti', 'created_by'),
+    ('impianti', 'updated_by'),
+    ('impianti_documenti', 'uploaded_by'),
+    ('impianti_interventi', 'created_by'),
 )
 
 CHIAVI_CONTEGGIO = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
@@ -295,6 +303,9 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
         return conn.execute(sql, (struttura_id,)).fetchone()[0]
 
     figli = "SELECT id FROM apparecchi WHERE struttura_id = ?"
+    # Le tabelle figlie degli impianti non portano struttura_id: si passa
+    # sempre da impianti, l'unica che la porta.
+    impianti_figli = "SELECT id FROM impianti WHERE struttura_id = ?"
     contenuto = {
         'apparecchi': conta("SELECT COUNT(*) FROM apparecchi WHERE struttura_id = ?"),
         'manutenzioni': conta(f"SELECT COUNT(*) FROM manutenzioni WHERE apparecchio_id IN ({figli})"),
@@ -306,6 +317,16 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
         'utenti': conta("SELECT COUNT(*) FROM utenti WHERE struttura_id = ? "
                         "AND eliminato_il IS NULL"),
         'tecnici': conta("SELECT COUNT(*) FROM tecnici_strutture WHERE struttura_id = ?"),
+        'manutentori': conta("SELECT COUNT(*) FROM manutentori WHERE struttura_id = ?"),
+        'impianti': conta("SELECT COUNT(*) FROM impianti WHERE struttura_id = ?"),
+        'impianti_componenti': conta(
+            f"SELECT COUNT(*) FROM impianti_componenti WHERE impianto_id IN ({impianti_figli})"),
+        'impianti_documenti': conta(
+            f"SELECT COUNT(*) FROM impianti_documenti WHERE impianto_id IN ({impianti_figli})"),
+        'impianti_scadenze': conta(
+            f"SELECT COUNT(*) FROM impianti_scadenze WHERE impianto_id IN ({impianti_figli})"),
+        'impianti_interventi': conta(
+            f"SELECT COUNT(*) FROM impianti_interventi WHERE impianto_id IN ({impianti_figli})"),
     }
 
     numero, byte = 0, 0
@@ -691,7 +712,10 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                 f.write(f"Struttura:  {nome} (id {struttura_id})\n")
                 f.write(f"Esportata:  {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n")
                 for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
-                               'accessori', 'import', 'divisioni', 'utenti', 'tecnici', 'file'):
+                               'accessori', 'import', 'divisioni', 'utenti', 'tecnici',
+                               'manutentori', 'impianti', 'impianti_componenti',
+                               'impianti_documenti', 'impianti_scadenze',
+                               'impianti_interventi', 'file'):
                     f.write(f"  {chiave:14} {contenuto[chiave]}\n")
                 f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
                 f.write(
