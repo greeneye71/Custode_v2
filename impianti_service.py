@@ -9,7 +9,7 @@ import calendar
 import logging
 from datetime import date, datetime
 
-from models import execute, query_one
+from models import execute, query_all, query_one
 from impianti_catalogo import voci_per_tipo
 
 logger = logging.getLogger('medinventory.impianti')
@@ -87,6 +87,152 @@ def registra_intervento(impianto_id, dati, utente_id=None):
         " WHERE id = ?", (scadenza_id,)
     )
     return intervento_id, None
+
+
+#: Soglie in ordine di gravita' crescente. Sono cumulative: una scadenza a 3
+#: giorni ha superato sia 'anticipo' sia 'imminente'. Si invia solo la piu'
+#: grave non ancora registrata, ma si registrano tutte quelle raggiunte —
+#: altrimenti la soglia saltata partirebbe al giro dopo, fuori tempo massimo.
+SOGLIE = ('anticipo', 'imminente', 'scaduto')
+
+
+def _soglie_raggiunte(giorni_rimasti, giorni_anticipo):
+    """Le soglie superate da una scadenza, dalla piu' lieve alla piu' grave.
+
+    'scaduto' scatta a giorni_rimasti <= 0, mentre la vista classifica
+    'scaduto' con < 0: il giorno stesso della scadenza la vista dice ancora
+    'urgente', ma un avviso che parte il giorno dopo arriva tardi. La
+    divergenza e' voluta.
+    """
+    raggiunte = []
+    if giorni_rimasti <= giorni_anticipo:
+        raggiunte.append('anticipo')
+    if giorni_rimasti <= 7:
+        raggiunte.append('imminente')
+    if giorni_rimasti <= 0:
+        raggiunte.append('scaduto')
+        # Solleciti mensili finche' la verifica non viene registrata.
+        mesi = int(-giorni_rimasti) // 30
+        if mesi >= 1:
+            raggiunte.append(f'sollecito_{mesi}')
+    return raggiunte
+
+
+def avvisi_da_inviare(struttura_id):
+    """Le scadenze della struttura che hanno un avviso da spedire.
+
+    Un elemento per scadenza, con la soglia piu' grave non ancora registrata in
+    impianti_avvisi_inviati. Le scadenze sospese e gli impianti dismessi sono
+    gia' esclusi dalla vista.
+    """
+    righe = query_all(
+        """SELECT v.*, d.nome as divisione_nome, d.email as divisione_email,
+                  s.email_extra, s.avvisa_manutentore,
+                  m.email as manutentore_email,
+                  (SELECT MAX(i.data_intervento) FROM impianti_interventi i
+                    WHERE i.scadenza_id = v.scadenza_id) as ultimo_intervento
+           FROM prossime_scadenze_impianti v
+           JOIN impianti_scadenze s ON s.id = v.scadenza_id
+           JOIN impianti imp ON imp.id = v.impianto_id
+           LEFT JOIN divisioni d ON d.id = v.divisione_id
+           LEFT JOIN manutentori m ON m.id = imp.manutentore_id
+           WHERE v.struttura_id = ?""",
+        (struttura_id,)
+    )
+
+    avvisi = []
+    for r in righe:
+        raggiunte = _soglie_raggiunte(r['giorni_rimasti'], r['giorni_anticipo'])
+        if not raggiunte:
+            continue
+        gia_inviate = {x['soglia'] for x in query_all(
+            "SELECT soglia FROM impianti_avvisi_inviati"
+            " WHERE scadenza_id = ? AND scadenza_target = ?",
+            (r['scadenza_id'], r['prossima_scadenza']))}
+        da_fare = [s for s in raggiunte if s not in gia_inviate]
+        if not da_fare:
+            continue
+        avviso = dict(r)
+        avviso['soglia'] = da_fare[-1]          # la piu' grave
+        avviso['soglie_coperte'] = da_fare      # tutte quelle da registrare
+        avvisi.append(avviso)
+    return avvisi
+
+
+def destinatari(struttura, avviso):
+    """Gli indirizzi a cui spedire l'avviso, in cascata e senza doppioni.
+
+    1) responsabile della struttura (o, in mancanza, l'indirizzo di notifica)
+    2) email della divisione
+    3) indirizzi extra della riga di piano (elenco separato da virgole)
+    4) manutentore dell'impianto, se la riga lo prevede
+    """
+    elenco = []
+    responsabile = (struttura['email_responsabile']
+                    or struttura['email_notifiche'])
+    for candidato in (responsabile, avviso.get('divisione_email')):
+        if candidato:
+            elenco.append(candidato)
+    for pezzo in (avviso.get('email_extra') or '').split(','):
+        if pezzo.strip():
+            elenco.append(pezzo.strip())
+    if avviso.get('avvisa_manutentore') and avviso.get('manutentore_email'):
+        elenco.append(avviso['manutentore_email'])
+
+    visti, puliti = set(), []
+    for indirizzo in elenco:
+        chiave = indirizzo.strip().lower()
+        if chiave and chiave not in visti:
+            visti.add(chiave)
+            puliti.append(indirizzo.strip())
+    return puliti
+
+
+ETICHETTE_SOGLIA = {
+    'anticipo': 'in scadenza',
+    'imminente': 'in scadenza imminente',
+    'scaduto': 'SCADUTA',
+}
+
+
+def corpo_avviso(struttura, avviso):
+    """Oggetto e testo dell'avviso. L'oggetto nomina la struttura: il mittente
+    e' lo stesso per tutte le strutture del deployment."""
+    soglia = avviso['soglia']
+    etichetta = (ETICHETTE_SOGLIA.get(soglia)
+                 or f"SCADUTA — sollecito n. {soglia.rsplit('_', 1)[-1]}")
+    oggetto = (f"[{struttura['nome']}] {avviso['impianto_nome']}: "
+               f"{avviso['scadenza_nome']} {etichetta}")
+
+    giorni = avviso['giorni_rimasti']
+    quando = (f"mancano {giorni} giorni" if giorni > 0
+              else f"scaduta da {-giorni} giorni" if giorni < 0
+              else 'scade oggi')
+    righe = [
+        f"Struttura: {struttura['nome']}",
+        f"Divisione: {avviso.get('divisione_nome') or '-'}",
+        f"Impianto: {avviso['impianto_nome']}"
+        + (f" ({avviso['ubicazione']})" if avviso.get('ubicazione') else ''),
+        f"Verifica: {avviso['scadenza_nome']}",
+        f"Riferimento: {avviso.get('riferimento_normativo') or '-'}",
+        f"Scadenza: {avviso['prossima_scadenza']} ({quando})",
+        f"Ultimo intervento registrato: {avviso.get('ultimo_intervento') or 'nessuno'}",
+        "",
+        "Messaggio automatico di MedInventory.",
+    ]
+    return oggetto, "\n".join(righe)
+
+
+def registra_avviso(scadenza_id, soglia, scadenza_target, indirizzi):
+    """Segna una soglia come inviata. Scritta solo dopo un invio riuscito:
+    una riga scritta in anticipo trasformerebbe un errore SMTP in un avviso
+    perso per sempre."""
+    execute(
+        """INSERT OR IGNORE INTO impianti_avvisi_inviati
+           (scadenza_id, soglia, scadenza_target, destinatari)
+           VALUES (?, ?, ?, ?)""",
+        (scadenza_id, soglia, scadenza_target, ', '.join(indirizzi))
+    )
 
 
 def applica_catalogo(impianto_id, tipo, nomi_scelti, partenza):
