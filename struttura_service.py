@@ -46,7 +46,8 @@ CHIAVI_CONTEGGIO = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
 # lo stesso in entrambe le direzioni: se l'importatore non le legge,
 # l'esportatore non deve portarle in un archivio consegnabile.
 TABELLE_DEPLOYMENT_SORGENTE = ('sessioni', 'login_attempts', 'api_tokens',
-                              'email_config', 'import_preview')
+                              'email_config', 'import_preview',
+                              'impianti_avvisi_inviati')
 
 # Colonna che contiene un percorso relativo di un allegato, per tabella, con
 # la condizione che la lega alla struttura. Serve sia a contenuto_struttura
