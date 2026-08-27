@@ -763,3 +763,113 @@ def test_libretto_di_altra_struttura_non_scaricabile(client, app, ambiente):
         impianto_b = _crea_impianto(ambiente, 'b', 'Cabina B libretto')
     entra(client, ambiente['a']['email'])
     assert client.get(f'/impianti/{impianto_b}/libretto.pdf').status_code == 302
+
+
+def _scadenza_fra(ambiente, giorni, anticipo=30, extra=None, manutentore=None):
+    a = ambiente['a']
+    impianto = execute(
+        "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo,"
+        " manutentore_id) VALUES (?, ?, ?, 'elettrico', ?)",
+        (a['struttura'], a['divisione'], f'Cabina {giorni}', manutentore)).lastrowid
+    return execute(
+        "INSERT INTO impianti_scadenze (impianto_id, nome, periodicita_mesi,"
+        " prossima_scadenza, giorni_anticipo, email_extra)"
+        " VALUES (?, 'Verifica di terra', 24, date('now', ?), ?, ?)",
+        (impianto, f'{giorni} days', anticipo, extra)).lastrowid
+
+
+def test_soglie_avvisi(app, ambiente):
+    """Solo la soglia più grave raggiunta, e mai prima dell'anticipo."""
+    from impianti_service import avvisi_da_inviare
+    with app.app_context():
+        sid = ambiente['a']['struttura']
+        lontana = _scadenza_fra(ambiente, 60)
+        anticipo = _scadenza_fra(ambiente, 20)
+        imminente = _scadenza_fra(ambiente, 3)
+        scaduta = _scadenza_fra(ambiente, -45)
+
+        per_id = {a['scadenza_id']: a for a in avvisi_da_inviare(sid)}
+        assert lontana not in per_id
+        assert per_id[anticipo]['soglia'] == 'anticipo'
+        assert per_id[imminente]['soglia'] == 'imminente'
+        assert per_id[scaduta]['soglia'] == 'sollecito_1'
+
+
+def test_avviso_non_si_ripete(app, ambiente):
+    from impianti_service import avvisi_da_inviare, registra_avviso
+    with app.app_context():
+        sid = ambiente['a']['struttura']
+        scad = _scadenza_fra(ambiente, 20)
+        avviso = [a for a in avvisi_da_inviare(sid)
+                  if a['scadenza_id'] == scad][0]
+        registra_avviso(scad, avviso['soglia'], avviso['prossima_scadenza'],
+                        ['x@test.it'])
+        assert [a for a in avvisi_da_inviare(sid)
+                if a['scadenza_id'] == scad] == []
+
+
+def test_avviso_riparte_dopo_lo_spostamento_della_scadenza(app, ambiente):
+    """scadenza_target sta nella chiave: il ciclo successivo avvisa di nuovo."""
+    from impianti_service import (avvisi_da_inviare, registra_avviso,
+                                  registra_intervento)
+    with app.app_context():
+        sid = ambiente['a']['struttura']
+        scad = _scadenza_fra(ambiente, 20)
+        riga = query_one("SELECT * FROM impianti_scadenze WHERE id = ?", (scad,))
+        registra_avviso(scad, 'anticipo', riga['prossima_scadenza'], ['x@test.it'])
+        # Verifica eseguita: la scadenza si sposta di 24 mesi, poi la si
+        # riporta indietro per simulare il ciclo successivo. +21 e non +20:
+        # deve atterrare su una data diversa da quella gia' registrata, sennò
+        # la chiave di deduplica (scadenza_id, soglia, scadenza_target) resta
+        # la stessa e il test non starebbe verificando nulla di diverso dal
+        # caso "non si ripete".
+        registra_intervento(riga['impianto_id'], {
+            'scadenza_id': scad, 'tipo': 'verifica',
+            'data_intervento': '2026-01-01', 'esito': 'positivo'})
+        execute("UPDATE impianti_scadenze SET prossima_scadenza ="
+                " date('now', '+21 days') WHERE id = ?", (scad,))
+        assert [a for a in avvisi_da_inviare(sid)
+                if a['scadenza_id'] == scad] != []
+
+
+def test_destinatari_in_cascata(app, ambiente):
+    from impianti_service import avvisi_da_inviare, destinatari
+    with app.app_context():
+        a = ambiente['a']
+        mid = execute("INSERT INTO manutentori (struttura_id, ragione_sociale,"
+                      " email) VALUES (?, 'Ditta', 'ditta@test.it')",
+                      (a['struttura'],)).lastrowid
+        scad = _scadenza_fra(ambiente, 10, extra='perito@test.it, ,perito@test.it',
+                             manutentore=mid)
+        struttura = query_one("SELECT * FROM strutture WHERE id = ?",
+                              (a['struttura'],))
+        avviso = [x for x in avvisi_da_inviare(a['struttura'])
+                  if x['scadenza_id'] == scad][0]
+        elenco = destinatari(struttura, avviso)
+        assert elenco.count('perito@test.it') == 1
+        assert 'responsabile.a@test.it' in elenco
+        assert 'divisione.a@test.it' in elenco
+        assert 'ditta@test.it' in elenco
+        assert '' not in elenco
+
+
+def test_avviso_senza_destinatari_non_e_un_errore(app, ambiente):
+    from impianti_service import avvisi_da_inviare, destinatari
+    with app.app_context():
+        b = ambiente['b']
+        execute("UPDATE strutture SET email_responsabile = NULL,"
+                " email_notifiche = NULL WHERE id = ?", (b['struttura'],))
+        execute("UPDATE divisioni SET email = NULL WHERE id = ?",
+                (b['divisione'],))
+        impianto = execute(
+            "INSERT INTO impianti (struttura_id, divisione_id, nome, tipo)"
+            " VALUES (?, ?, 'Cabina muta', 'elettrico')",
+            (b['struttura'], b['divisione'])).lastrowid
+        execute("INSERT INTO impianti_scadenze (impianto_id, nome,"
+                " periodicita_mesi, prossima_scadenza)"
+                " VALUES (?, 'Verifica', 24, date('now', '+10 days'))",
+                (impianto,))
+        struttura = query_one("SELECT * FROM strutture WHERE id = ?",
+                              (b['struttura'],))
+        avviso = avvisi_da_inviare(b['struttura'])[0]
+        assert destinatari(struttura, avviso) == []
