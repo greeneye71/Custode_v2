@@ -852,3 +852,35 @@ def elimina_manutentore(manutentore_id):
                  riga['ragione_sociale'])
     flash('Manutentore eliminato.', 'success')
     return redirect(url_for('impianti.manutentori'))
+
+
+# ---------------------------------------------------------------------------
+# Libretto impianto (PDF)
+# ---------------------------------------------------------------------------
+
+@impianti_bp.route('/<int:impianto_id>/libretto.pdf')
+@login_required
+def libretto(impianto_id):
+    """Scarica il libretto dell'impianto in PDF."""
+    impianto = impianto_accessibile(impianto_id)
+    if not impianto:
+        flash('Impianto non trovato.', 'danger')
+        return redirect(url_for('impianti.lista'))
+
+    import os
+    import tempfile
+    from export_service import genera_libretto_impianto
+
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+        percorso = tmp.name
+    genera_libretto_impianto(impianto_id, percorso)
+    log_attivita(g.user['id'], 'esportazione', 'impianto', impianto_id,
+                 f"Libretto di {impianto['nome']}")
+    nome = secure_filename(f"libretto_{impianto['nome']}.pdf")
+    risposta = send_file(percorso, as_attachment=True, download_name=nome)
+    # send_file trasmette il file in streaming: la rimozione va agganciata
+    # alla chiusura della risposta, non fatta subito dopo (come in
+    # scheduler._invia_report_pdf, dove invece l'allegato e' gia' letto
+    # in memoria prima del cleanup).
+    risposta.call_on_close(lambda: os.path.exists(percorso) and os.remove(percorso))
+    return risposta

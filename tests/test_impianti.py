@@ -683,3 +683,27 @@ def test_scadenzario_summary_sopravvive_al_filtro_priorita(client, app, ambiente
     match = re.search(r'text-success">\s*(\d+)\s*</div>\s*<small class="text-muted">OK', filtrato)
     assert match is not None
     assert int(match.group(1)) >= 1
+
+
+def test_libretto_pdf_generato(app, ambiente, tmp_path):
+    from export_service import genera_libretto_impianto
+    with app.app_context():
+        impianto, scad = _impianto_con_piano(ambiente, scadenza='2027-01-10')
+        execute("INSERT INTO impianti_componenti (impianto_id, descrizione)"
+                " VALUES (?, 'Quadro generale')", (impianto,))
+        execute("INSERT INTO impianti_interventi (impianto_id, tipo,"
+                " data_intervento, esito) VALUES (?, 'verifica', '2025-01-10',"
+                " 'positivo')", (impianto,))
+        percorso = str(tmp_path / 'libretto.pdf')
+        genera_libretto_impianto(impianto, percorso)
+    import os
+    assert os.path.exists(percorso) and os.path.getsize(percorso) > 500
+    with open(percorso, 'rb') as f:
+        assert f.read(4) == b'%PDF'
+
+
+def test_libretto_di_altra_struttura_non_scaricabile(client, app, ambiente):
+    with app.app_context():
+        impianto_b = _crea_impianto(ambiente, 'b', 'Cabina B libretto')
+    entra(client, ambiente['a']['email'])
+    assert client.get(f'/impianti/{impianto_b}/libretto.pdf').status_code in (302, 404)

@@ -689,3 +689,135 @@ def export_scadenzario_pdf(scadenze, divisione_nome='', structure_name='', app_n
     pdf.output(buffer)
     buffer.seek(0)
     return buffer
+
+
+def genera_libretto_impianto(impianto_id, output_path):
+    """Il libretto dell'impianto: anagrafica, componenti, documenti, piano,
+    storico interventi.
+
+    Servizio interno: non convalida lo scope. La tenant-isolation passa dalla
+    rotta chiamante (impianti.libretto), che verifica l'accesso con
+    models.impianto_accessibile() prima di invocare questa funzione — qui
+    l'impianto_id arriva gia' verificato e le query sulle tabelle figlie
+    restano chiavi su di esso.
+
+    Dei documenti riporta i metadati, non i file: e' un indice di cosa esiste e
+    chi l'ha emesso, non un archivio da stampare.
+    """
+    from models import query_one, query_all, percorso_logo_struttura
+    from report_service import ReportPDF, testo_sicuro as _t
+
+    impianto = query_one(
+        """SELECT i.*, d.nome as divisione_nome, s.nome as struttura_nome,
+                  s.logo_path as struttura_logo_path,
+                  m.ragione_sociale as manutentore_nome
+           FROM impianti i
+           LEFT JOIN divisioni d ON d.id = i.divisione_id
+           LEFT JOIN strutture s ON s.id = i.struttura_id
+           LEFT JOIN manutentori m ON m.id = i.manutentore_id
+           WHERE i.id = ?""", (impianto_id,))
+    if not impianto:
+        raise ValueError(f"Impianto {impianto_id} inesistente")
+
+    componenti = query_all(
+        "SELECT * FROM impianti_componenti WHERE impianto_id = ?"
+        " ORDER BY descrizione", (impianto_id,))
+    documenti = query_all(
+        "SELECT * FROM impianti_documenti WHERE impianto_id = ?"
+        " ORDER BY data_documento DESC, id DESC", (impianto_id,))
+    piano = query_all(
+        "SELECT * FROM impianti_scadenze WHERE impianto_id = ?"
+        " ORDER BY attiva DESC, prossima_scadenza", (impianto_id,))
+    interventi = query_all(
+        """SELECT i.*, m.ragione_sociale as manutentore_nome
+           FROM impianti_interventi i
+           LEFT JOIN manutentori m ON m.id = i.manutentore_id
+           WHERE i.impianto_id = ? ORDER BY i.data_intervento DESC""",
+        (impianto_id,))
+
+    contesto = {
+        'struttura_nome': impianto['struttura_nome'] or 'MedInventory',
+        'titolo': f"Libretto impianto - {impianto['nome']}",
+        'ambito': impianto['divisione_nome'] or '',
+        'logo_path': percorso_logo_struttura(
+            {'logo_path': impianto['struttura_logo_path']}),
+        'mostra_firma': False,
+    }
+
+    pdf = ReportPDF(contesto)
+    pdf.add_page()
+
+    def titolo(testo):
+        pdf.ln(3)
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(0, 7, _t(testo), new_x='LMARGIN', new_y='NEXT')
+        pdf.set_font('Helvetica', '', 9)
+
+    def riga(etichetta, valore):
+        pdf.cell(45, 5, _t(etichetta), border=0)
+        pdf.multi_cell(0, 5, _t(valore if valore not in (None, '') else '-'),
+                        new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Anagrafica')
+    riga('Tipo', impianto['tipo_custom'] or impianto['tipo'])
+    riga('Stato', impianto['stato'])
+    riga('Ubicazione', impianto['ubicazione'])
+    riga('Identificativo', impianto['identificativo'])
+    riga('Anno installazione', impianto['anno_installazione'])
+    riga('Manutentore', impianto['manutentore_nome'])
+    riga('Descrizione', impianto['descrizione'])
+
+    titolo('Componenti')
+    if componenti:
+        for c in componenti:
+            pdf.multi_cell(0, 5, _t(
+                f"- {c['descrizione']} "
+                f"({c['marca'] or '-'} {c['modello'] or ''} "
+                f"mat. {c['matricola'] or '-'})"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Nessun componente censito.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Documentazione')
+    if documenti:
+        for d in documenti:
+            pdf.multi_cell(0, 5, _t(
+                f"- [{d['tipo']}] {d['descrizione'] or d['filename']} - "
+                f"{d['data_documento'] or 's.d.'} - "
+                f"{d['emittente_ragione_sociale'] or 'emittente non indicato'}"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Nessun documento caricato.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Piano di manutenzione e verifica')
+    if piano:
+        for p in piano:
+            periodo = (f"ogni {p['periodicita_mesi']} mesi"
+                       if p['periodicita_mesi'] else 'una tantum')
+            stato = '' if p['attiva'] else ' [sospesa]'
+            pdf.multi_cell(0, 5, _t(
+                f"- {p['nome']} ({periodo}) - prossima: "
+                f"{p['prossima_scadenza']} - "
+                f"{p['riferimento_normativo'] or 'nessun riferimento'}{stato}"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Piano non ancora definito.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Storico interventi')
+    if interventi:
+        for i in interventi:
+            pdf.multi_cell(0, 5, _t(
+                f"- {i['data_intervento']} [{i['tipo']}] "
+                f"{i['esito'] or 'esito non indicato'} - "
+                f"{i['manutentore_nome'] or i['tecnico_ditta'] or '-'} - "
+                f"{i['descrizione'] or ''}"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Nessun intervento registrato.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    pdf.output(output_path)
+    return output_path
