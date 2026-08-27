@@ -12,6 +12,12 @@ import logging
 import sqlite3
 from datetime import datetime
 
+# A livello di modulo (non dentro il metodo, come le altre import locali di
+# questo file) cosi' i test possono sostituirla con monkeypatch.setattr
+# facendo scheduler.invia = ... invece di rimettere mano a posta.py, che e'
+# codice di invio condiviso con altri flussi.
+from posta import invia
+
 logger = logging.getLogger('medinventory.scheduler')
 
 
@@ -196,17 +202,20 @@ class BackgroundScheduler:
                     logger.error(f"Errore avvisi struttura {struttura['nome']}: {e}")
 
     def _send_impianti_alerts(self):
-        """Avvisi di scadenza degli impianti, una email per voce di piano.
+        """Avvisi di scadenza degli impianti, un invio per indirizzo.
 
         Non c'e' digest: ogni verifica ha destinatari propri (il manutentore
         della riga, l'indirizzo extra del perito) e un messaggio unico non
-        potrebbe rispettarli.
+        potrebbe rispettarli. Un invio per indirizzo e non un unico invio con
+        i destinatari uniti da virgola: smtplib.SMTP.sendmail (dentro
+        posta.invia) tratta una stringa come UN SOLO destinatario di envelope,
+        quindi "a@x.it, b@y.it" diventa un RCPT TO invalido per RFC 5321 e i
+        server veri lo rifiutano.
         """
         with self.app.app_context():
             from email.mime.multipart import MIMEMultipart
             from email.mime.text import MIMEText
             from models import query_all, get_struttura_config
-            from posta import invia
             import impianti_service
 
             if datetime.now().hour < 7:
@@ -233,21 +242,45 @@ class BackgroundScheduler:
                             continue
                         oggetto, testo = impianti_service.corpo_avviso(
                             struttura, avviso)
-                        msg = MIMEMultipart()
-                        msg['Subject'] = oggetto
-                        msg.attach(MIMEText(testo, 'plain', 'utf-8'))
-                        if invia(self.app.config.get('APP_CONFIG'),
-                                 ', '.join(indirizzi), msg):
+
+                        # Un messaggio nuovo per indirizzo: posta.invia()
+                        # scrive dentro From/To, e Message.__setitem__
+                        # accumula invece di sostituire, quindi riusare lo
+                        # stesso MIMEMultipart fra piu' invii duplicherebbe
+                        # gli header dal secondo invio in poi.
+                        falliti = []
+                        inviati = 0
+                        for indirizzo in indirizzi:
+                            msg = MIMEMultipart()
+                            msg['Subject'] = oggetto
+                            msg.attach(MIMEText(testo, 'plain', 'utf-8'))
+                            if invia(self.app.config.get('APP_CONFIG'),
+                                     indirizzo, msg):
+                                inviati += 1
+                            else:
+                                falliti.append(indirizzo)
+
+                        if falliti:
+                            logger.error(
+                                f"Avviso impianto non partito per "
+                                f"{falliti} (scadenza {avviso['scadenza_id']}, "
+                                f"{struttura['nome']})")
+
+                        # Si registra se almeno un invio e' partito: un
+                        # indirizzo permanentemente rotto non deve bloccare
+                        # per sempre il riavviso a quelli buoni (altrimenti il
+                        # ciclo orario ritenta all'infinito), al prezzo che
+                        # quell'indirizzo perda la notifica in silenzio — per
+                        # questo il fallimento e' loggato sopra a livello
+                        # ERROR, cosi' l'operatore vede quale indirizzo e'
+                        # rotto.
+                        if inviati:
                             for soglia in avviso['soglie_coperte']:
                                 impianti_service.registra_avviso(
                                     avviso['scadenza_id'], soglia,
                                     avviso['prossima_scadenza'], indirizzi)
                             logger.info(f"Avviso impianto inviato a "
                                         f"{indirizzi} ({struttura['nome']})")
-                        else:
-                            logger.error(
-                                f"Avviso impianto non partito per la scadenza "
-                                f"{avviso['scadenza_id']} ({struttura['nome']})")
                 except Exception as e:
                     logger.error(f"Errore avvisi impianti struttura "
                                  f"{struttura['nome']}: {e}")
