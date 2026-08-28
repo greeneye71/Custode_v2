@@ -360,13 +360,11 @@ def _load_user_from_session():
             (g.struttura_id, g.struttura_id)
         )
     elif g.user['ruolo'] in ('admin', 'superadmin', 'tecnico'):
-        result = query_one(
-            """SELECT (SELECT COUNT(*) FROM prossime_scadenze
-                        WHERE priorita IN ('scaduto', 'urgente', 'attenzione'))
-                    + (SELECT COUNT(*) FROM prossime_scadenze_impianti
-                        WHERE priorita IN ('scaduto', 'urgente', 'attenzione'))
-                    AS cnt"""
-        )
+        # Ruolo con visione di struttura ma nessuna struttura attiva. Fino alla
+        # 2.7.1 qui si contavano le scadenze di tutte le strutture: il badge
+        # rivelava il volume di lavoro degli altri tenant. Nessuno scope,
+        # nessun conteggio.
+        result = None
     else:
         ids = [d['id'] for d in g.divisioni]
         if ids:
@@ -474,6 +472,22 @@ def login():
         _time.sleep(1)  # Rallenta il brute force: 1 tentativo/sec per IP
         flash('Credenziali non valide.', 'danger')
         return render_template('login.html', email=email)
+
+    # Struttura disattivata: l'account resta valido ma non ha piu' un ambito.
+    # Fino alla 2.7.1 l'accesso riusciva lo stesso e l'utente si ritrovava con
+    # g.struttura_id a None — che diverse rotte interpretavano come "nessun
+    # filtro" invece che "nessun dato". Meglio dirlo qui.
+    if user['ruolo'] in ('admin', 'utente') and user['struttura_id']:
+        _str = query_one(
+            "SELECT attiva FROM strutture WHERE id = ?", (user['struttura_id'],))
+        if not _str or not _str['attiva']:
+            execute(
+                "INSERT INTO login_attempts (ip_address, email, esito) VALUES (?, ?, 'fallito')",
+                (ip, email)
+            )
+            flash("La struttura a cui appartiene questo utente non e' attiva. "
+                  "Contattare l'amministratore.", 'danger')
+            return render_template('login.html', email=email)
 
     if con_temporanea:
         # consuma_temporanea ha gia' messo primo_accesso = 1 e chiuso le altre

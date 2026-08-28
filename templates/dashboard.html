@@ -291,7 +291,7 @@
     };
 
     // Chart 1: Apparecchi per Classificazione (Doughnut)
-    const dataClass = JSON.parse('{{ chart_classificazione_json|safe }}');
+    const dataClass = {{ chart_classificazione|tojson }};
     if (dataClass.length > 0) {
         new Chart(document.getElementById('chartClassificazione'), {
             type: 'doughnut',
@@ -318,7 +318,7 @@
     }
 
     // Chart 2: Costi Mensili (Line)
-    const dataCosti = JSON.parse('{{ chart_costi_json|safe }}');
+    const dataCosti = {{ chart_costi|tojson }};
     if (dataCosti.length > 0) {
         new Chart(document.getElementById('chartCosti'), {
             type: 'line',
@@ -350,7 +350,7 @@
     }
 
     // Chart 4: Stato Verifiche Elettriche (Doughnut)
-    const dataVerifiche = JSON.parse('{{ chart_verifiche_json|safe }}');
+    const dataVerifiche = {{ chart_verifiche|tojson }};
     const verificheColors = {
         'Scaduta': chartColors.red,
         'Nessuna': chartColors.gray,
@@ -383,7 +383,7 @@
     }
 
     // Chart 3: Interventi per Tipo (Bar)
-    const dataTipi = JSON.parse('{{ chart_tipi_json|safe }}');
+    const dataTipi = {{ chart_tipi|tojson }};
     const tipoColors = {
         'preventiva': chartColors.blue,
         'correttiva': chartColors.red,

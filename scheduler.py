@@ -107,10 +107,15 @@ class BackgroundScheduler:
 
             for task in self._tasks:
                 if now - task['last_run'] >= task['interval']:
+                    # last_run si aggiorna comunque: fino alla 2.7.1 stava
+                    # dentro il try, dopo la chiamata, quindi un task che
+                    # sollevava veniva ritentato ogni 30 secondi per sempre —
+                    # riempiendo il log e, per il controllo email, ribussando
+                    # all'IMAP di continuo.
+                    task['last_run'] = now
                     try:
                         logger.debug(f"Esecuzione task: {task['name']}")
                         task['func']()
-                        task['last_run'] = now
                     except Exception as e:
                         logger.error(f"Errore nel task {task['name']}: {e}")
 
@@ -176,7 +181,7 @@ class BackgroundScheduler:
         report PDF non e' mai stato raggiungibile.
         """
         with self.app.app_context():
-            from models import query_all, get_struttura_config
+            from models import query_all, get_struttura_config, set_struttura_config
             strutture = query_all(
                 "SELECT * FROM strutture WHERE attiva=1 AND email_notifiche IS NOT NULL"
             )
@@ -185,8 +190,14 @@ class BackgroundScheduler:
                 sid = struttura['id']
                 if get_struttura_config(sid, 'avvisi_scadenza_attivi', '') != '1':
                     continue
-                if not self._is_digest_due(get_struttura_config(sid, 'report_frequenza',
-                                                                'settimanale')):
+                frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
+                periodo = self._periodo_digest(frequenza)
+                if periodo is None:
+                    continue
+                # Registrato in strutture_config e non in memoria: un riavvio
+                # dell'applicazione non deve far ripartire gli avvisi già
+                # inviati per questo periodo.
+                if get_struttura_config(sid, 'ultimo_avviso_scadenze', '') == periodo:
                     continue
 
                 formato = get_struttura_config(sid, 'avvisi_scadenza_formato', 'testo')
@@ -195,6 +206,7 @@ class BackgroundScheduler:
                         self._invia_report_pdf(struttura)
                     else:
                         self._invia_digest(struttura)
+                    set_struttura_config(sid, 'ultimo_avviso_scadenze', periodo)
                 except Exception as e:
                     # Gira in un thread di fondo: un'eccezione qui fermerebbe
                     # gli avvisi di tutte le strutture successive, e nessuno la
@@ -346,16 +358,35 @@ class BackgroundScheduler:
             if os.path.exists(percorso):
                 os.remove(percorso)
 
-    def _is_digest_due(self, frequenza):
-        """Controlla se è il momento giusto per inviare il digest."""
-        now = datetime.now()
+    def _periodo_digest(self, frequenza, now=None):
+        """La chiave del periodo corrente, o None se il momento non e' ancora passato.
+
+        Fino alla 2.7.1 qui si confrontava l'ora esatta (now.hour == 7) su un
+        task che gira ogni 3600 secondi *di orologio*: il timer deriva, quindi
+        due controlli potevano cadere nella stessa ora (digest doppio) o
+        saltarla del tutto (digest mai inviato per quel giorno). Ora si
+        risponde a una domanda che non dipende dall'istante del controllo:
+        "il momento di questo periodo e' passato?". Chi chiama confronta la
+        chiave con l'ultimo invio registrato e manda una volta sola.
+        """
+        now = now or datetime.now()
         if frequenza == 'giornaliero':
-            return now.hour == 7
-        elif frequenza == 'settimanale':
-            return now.weekday() == 0 and now.hour == 7  # lunedì alle 7:00
-        elif frequenza == 'mensile':
-            return now.day == 1 and now.hour == 7  # primo del mese alle 7:00
-        return False
+            if now.hour < 7:
+                return None
+            return now.strftime('%Y-%m-%d')
+        if frequenza == 'settimanale':
+            # Lunedì alle 7:00. Se l'applicazione era ferma quel lunedì,
+            # l'invio si recupera nei giorni successivi della stessa settimana
+            # invece di essere perso.
+            if now.weekday() == 0 and now.hour < 7:
+                return None
+            anno, settimana, _ = now.isocalendar()
+            return f'{anno}-W{settimana:02d}'
+        if frequenza == 'mensile':
+            if now.day == 1 and now.hour < 7:
+                return None
+            return now.strftime('%Y-%m')
+        return None
 
     def _invia_digest(self, struttura):
         """Il digest di testo delle scadenze della struttura.
@@ -432,22 +463,53 @@ class BackgroundScheduler:
         msg.attach(MIMEText("\n".join(righe), 'plain', 'utf-8'))
         self._invia(struttura, msg)
 
-    def _check_backup(self):
-        """Check if a weekly backup is needed (Sunday 03:00)."""
-        now = datetime.now()
-        # Only run on Sunday (weekday 6) between 03:00 and 03:59
-        if now.weekday() == 6 and now.hour == 3:
-            try:
-                from backup_service import create_backup
-                config = self.app.config['APP_CONFIG']
-                db_path = self.app.config['DATABASE_PATH']
-                backups_path = self.app.config['BACKUPS_PATH']
-                retention = config.get('backup_retention', 4)
+    def _eta_ultimo_backup(self, backups_path):
+        """Giorni trascorsi dal backup piu' recente, o None se non ce ne sono."""
+        import os
+        try:
+            file_backup = [
+                os.path.join(backups_path, n) for n in os.listdir(backups_path)
+                if n.startswith('medinventory_backup_') and n.endswith('.sqlite')
+            ]
+        except OSError:
+            return None
+        if not file_backup:
+            return None
+        piu_recente = max(os.path.getmtime(f) for f in file_backup)
+        return (time.time() - piu_recente) / 86400
 
-                create_backup(db_path, backups_path, retention)
-                logger.info("Backup settimanale completato.")
-            except Exception as e:
-                logger.error(f"Errore backup settimanale: {e}")
+    def _check_backup(self):
+        """Backup settimanale, la domenica dalle 03:00.
+
+        Fino alla 2.7.1 la condizione era now.hour == 3 su un task che gira
+        ogni 3600 secondi *di orologio*: il timer deriva, quindi la finestra
+        poteva essere saltata (nessun backup per una settimana intera) o
+        colpita due volte. Ora conta l'eta' del backup piu' recente sul disco,
+        che sopravvive anche a un riavvio e tiene conto dei backup manuali.
+        """
+        now = datetime.now()
+        backups_path = self.app.config['BACKUPS_PATH']
+        eta = self._eta_ultimo_backup(backups_path)
+
+        if eta is not None:
+            if eta < 6:
+                return
+            # Fuori dalla finestra della domenica si aspetta ancora un po':
+            # oltre gli otto giorni pero' si recupera comunque, altrimenti
+            # un'applicazione spenta la domenica resterebbe senza backup.
+            if not (now.weekday() == 6 and now.hour >= 3) and eta < 8:
+                return
+
+        try:
+            from backup_service import create_backup
+            config = self.app.config['APP_CONFIG']
+            db_path = self.app.config['DATABASE_PATH']
+            retention = config.get('backup_retention', 4)
+
+            create_backup(db_path, backups_path, retention)
+            logger.info("Backup settimanale completato.")
+        except Exception as e:
+            logger.error(f"Errore backup settimanale: {e}")
 
 
 # Global scheduler instance

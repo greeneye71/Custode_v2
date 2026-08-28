@@ -56,6 +56,21 @@ def _token_auth(scope='read'):
     return decorator
 
 
+def _paginazione():
+    """Pagina e dimensione richieste, riportate dentro limiti sensati.
+
+    request.args.get(type=int) restituisce None su un valore non numerico e
+    non ha limite inferiore: fino alla 2.7.1 ?per_page=-1 arrivava a SQLite
+    come LIMIT -1, che significa 'nessun limite', e ?page=0 dava un OFFSET
+    negativo.
+    """
+    page = request.args.get('page', 1, type=int) or 1
+    per_page = request.args.get('per_page', 50, type=int) or 50
+    page = max(1, page)
+    per_page = max(1, min(per_page, 200))
+    return page, per_page, (page - 1) * per_page
+
+
 def _pagina(query_result, page, per_page, total):
     return {
         'dati': [dict(r) for r in query_result],
@@ -66,9 +81,7 @@ def _pagina(query_result, page, per_page, total):
 @api_bp.route('/apparecchi')
 @_token_auth('read')
 def lista_apparecchi():
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-    offset = (page - 1) * per_page
+    page, per_page, offset = _paginazione()
 
     total = query_one(
         "SELECT COUNT(*) as c FROM apparecchi WHERE struttura_id=? AND stato!='dismesso'",
@@ -106,9 +119,7 @@ def dettaglio_apparecchio(apparecchio_id):
 @api_bp.route('/scadenze')
 @_token_auth('read')
 def scadenze():
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-    offset = (page - 1) * per_page
+    page, per_page, offset = _paginazione()
 
     total = query_one("""
         SELECT COUNT(*) as c FROM prossime_scadenze ps
@@ -132,9 +143,7 @@ def scadenze():
 @api_bp.route('/manutenzioni')
 @_token_auth('read')
 def lista_manutenzioni():
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-    offset = (page - 1) * per_page
+    page, per_page, offset = _paginazione()
 
     total = query_one("""
         SELECT COUNT(*) as c FROM manutenzioni m
@@ -177,6 +186,21 @@ def crea_manutenzione():
                 _dt.strptime(val, '%Y-%m-%d')
             except ValueError:
                 return jsonify({'errore': f'{campo_data} deve essere nel formato YYYY-MM-DD'}), 400
+
+    # manutenzioni.esito e' testo libero (nessun CHECK): non si valida.
+    # Questi due invece finivano in colonne numeriche e un valore non numerico
+    # o negativo usciva come 500 invece che come 400.
+    for campo_num, tipo_num in (('costo', float), ('periodicita_giorni', int)):
+        val = data.get(campo_num)
+        if val is None or val == '':
+            continue
+        try:
+            num = tipo_num(val)
+        except (TypeError, ValueError):
+            return jsonify({'errore': f'{campo_num} deve essere numerico'}), 400
+        if num < 0:
+            return jsonify({'errore': f'{campo_num} non puo essere negativo'}), 400
+        data[campo_num] = num
 
     app_ = query_one(
         "SELECT id FROM apparecchi WHERE id=? AND struttura_id=?",

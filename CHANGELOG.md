@@ -6,6 +6,87 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.8.0] - 2026-08-28
+
+Release di correzione: un audit della codebase ha trovato sedici difetti, in
+larga parte punti in cui il codice riscriveva a mano uno scope che
+l'applicazione ha gia' pronto e fail-closed. La regola applicata ovunque e'
+quella di `models.filtro_divisione()`: in un'applicazione multi-tenant
+l'assenza di scope significa "nessun dato", mai "tutti i dati".
+
+### Sicurezza
+- **Dashboard senza filtro per l'admin senza struttura attiva.** La rotta `/`
+  riscriveva lo scope inline e il ramo "admin, nessuna struttura" cadeva su una
+  clausola vuota: conteggi, scadenze e ultimi interventi erano quelli di tutte
+  le strutture. Ora usa `filtro_divisione()`, unica fonte dello scope.
+- **Badge scadenze in `auth.py`** aveva lo stesso ramo scoperto: rivelava il
+  volume di lavoro degli altri tenant. Senza scope non si conta nulla.
+- **Elenchi e ricerche degli import** (`import_bp.py`) cadevano su una query
+  senza filtro quando lo scope mancava. Introdotto `_scope_import()`.
+- **`/uploads/<path>`**: i file senza il prefisso `strutture/<id>/` — quelli
+  delle installazioni precedenti alla 2.5, della modalita' single-struttura e
+  di ogni `upload_subdir()` con `struttura_id` a None — venivano serviti a
+  qualunque utente autenticato. Ora `models.strutture_proprietarie_file()`
+  risale al proprietario dalla riga che referenzia il file; un file che nessuna
+  riga referenzia viene negato.
+- **Pagina sicurezza / sblocco IP** (`admin.py`) era `@admin_required`, ma
+  `login_attempts` e' una tabella globale: un admin di struttura leggeva IP ed
+  email di chi tenta l'accesso alle altre. Ora `@operazione_globale_required`.
+- **Import email senza struttura attribuibile.** Con IMAP globale e piu'
+  strutture attive il monitor proseguiva con `struttura_id` a None e
+  `_find_apparecchio()` cercava la matricola su tutto il database: manutenzioni
+  e verbali potevano finire sull'apparecchio di un'altra struttura. Ora
+  l'import si sospende e lo dice nel log; la ricerca per matricola senza scope
+  non restituisce nulla.
+- **Token API in chiaro dentro il cookie di sessione.** Il segreto appena
+  creato viaggiava in un `flash()` — quindi nel cookie firmato ma non cifrato,
+  nella cronologia del browser e nei log di ogni proxy. Ora esiste solo nel
+  corpo della risposta che lo mostra.
+- **Login su struttura disattivata.** L'accesso riusciva lo stesso e l'utente
+  si ritrovava con `g.struttura_id` a None, che diverse rotte leggevano come
+  "nessun filtro". Ora viene rifiutato con un messaggio esplicito.
+
+### Corretto
+- **Task dello scheduler in loop.** `last_run` veniva aggiornato dopo la
+  chiamata: un task che sollevava un'eccezione veniva ritentato ogni 30 secondi
+  per sempre, riempiendo il log e, per il controllo email, ribussando all'IMAP
+  di continuo. Ora `last_run` si aggiorna comunque.
+- **Avvisi scadenza e backup settimanale legati all'ora esatta.** Entrambi i
+  controlli confrontavano `now.hour ==` su un task che gira ogni 3600 secondi
+  *di orologio*: il timer deriva, quindi la finestra poteva essere colpita due
+  volte (digest doppio) o saltata del tutto (nessun avviso, nessun backup per
+  una settimana). Ora si risponde a una domanda indipendente dall'istante del
+  controllo — "il momento di questo periodo e' passato, e ho gia' agito?" — con
+  la risposta persistita: `strutture_config.ultimo_avviso_scadenze` per i
+  digest, la data del backup piu' recente su disco per i backup. Un riavvio non
+  provoca piu' un doppio invio, e un'applicazione spenta la domenica recupera
+  il backup nei giorni successivi.
+- **Piano di manutenzione duplicato.** `applica_catalogo()` filtrava le voci
+  gia' presenti nella rotta chiamante, non nel servizio: un doppio invio del
+  modulo (o due schede aperte) duplicava le scadenze, e da li' ogni avviso
+  partiva due volte. Il controllo e' ora dentro il servizio.
+- **Paginazione API senza limiti.** `?per_page=-1` arrivava a SQLite come
+  `LIMIT -1`, cioe' nessun limite, e `?page=0` dava un OFFSET negativo. Pagina
+  e dimensione sono ora riportate dentro limiti sensati (max 200 per pagina).
+- **`POST /api/v1/manutenzioni`** rispondeva 500 invece che 400 su `costo` o
+  `periodicita_giorni` non numerici o negativi. Le scritture via API finiscono
+  ora anche nel registro attivita'.
+
+### Modificato
+- I dati dei grafici della dashboard passano al template come oggetti e
+  vengono resi con `|tojson` invece che con `json.dumps()` piu' `|safe` dentro
+  una stringa JavaScript fra apici: un valore proveniente dal database non puo'
+  piu' chiudere il tag `<script>`.
+
+### Test
+- `tests/test_schema_impianti_sync.py`: verifica che il DDL degli impianti in
+  `schema.sql` e quello in `schema_impianti.DDL_IMPIANTI` creino gli stessi
+  oggetti con lo stesso testo. Le due copie servono percorsi diversi
+  (installazione nuova / migrazione) e una divergenza sulla vista
+  `prossime_scadenze_impianti` resterebbe invisibile fino allo scadenzario.
+
+---
+
 ## [2.7.1] - 2026-08-28
 
 ### Corretto

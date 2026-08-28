@@ -975,8 +975,18 @@ def nuovo_token(struttura_id):
     log_attivita(g.user['id'], 'crea_token', 'api_tokens', None,
                  f'Token "{nome}" creato per struttura {struttura_id}',
                  struttura_id=struttura_id)
-    flash(f'Token creato. Copia ora, non sarà più visibile: {raw}', 'warning')
-    return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
+
+    # Il token in chiaro si mostra rendendo la pagina, non con flash() e un
+    # redirect: fino alla 2.7.1 il segreto passava dentro il cookie di sessione
+    # (firmato ma non cifrato) e restava nella cronologia del browser e in
+    # qualunque proxy che registri le intestazioni. Qui esiste solo nel corpo
+    # di questa risposta.
+    tokens = query_all(
+        "SELECT * FROM api_tokens WHERE struttura_id=? ORDER BY created_at DESC",
+        (struttura_id,)
+    )
+    return render_template('strutture/api_tokens.html', struttura=struttura,
+                           tokens=tokens, token_nuovo=raw)
 
 
 @strutture_bp.route('/<int:struttura_id>/tokens/<int:token_id>/revoca', methods=['POST'])

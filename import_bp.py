@@ -75,6 +75,22 @@ def get_import_in_scope(import_id):
     )
 
 
+def _scope_import(alias='ih'):
+    """Clausola di scope per gli elenchi di import_history.
+
+    Stessa semantica di get_import_in_scope(): superadmin senza impersonazione
+    vede tutto, chi ha una struttura attiva vede la sua, chiunque altro non vede
+    nulla. Fino alla 2.7.1 gli elenchi cadevano invece su una query senza
+    filtro, e un admin senza struttura attiva leggeva gli import di tutti.
+    """
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id is None:
+        if g.user['ruolo'] == 'superadmin':
+            return '', []
+        return 'AND 1=0', []
+    return f'AND {alias}.struttura_id = ?', [struttura_id]
+
+
 @import_bp.route('/import')
 @login_required
 def upload():
@@ -516,20 +532,19 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
 
 def _match_apparecchi(items, struttura_id=None):
     """Match matricole in items to existing apparecchi. Sets _match_id on each item.
-    Filtra per struttura_id quando disponibile per garantire isolamento multi-tenant.
+
+    Senza struttura_id non si cerca: la matricola non è unica fra strutture
+    diverse, e fino alla 2.7.1 il fallback senza filtro poteva agganciare le
+    righe importate all'apparecchio di un altro tenant. Nessuno scope, nessun
+    match: le righe restano da abbinare a mano.
     """
     matricole = list({(item.get('matricola') or '').strip() for item in items} - {''})
     lookup = {}
-    if matricole:
+    if matricole and struttura_id:
         placeholders = ','.join('?' * len(matricole))
-        if struttura_id:
-            rows = query_all(
-                f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso' AND struttura_id = ?",
-                [m.lower() for m in matricole] + [struttura_id])
-        else:
-            rows = query_all(
-                f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso'",
-                [m.lower() for m in matricole])
+        rows = query_all(
+            f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso' AND struttura_id = ?",
+            [m.lower() for m in matricole] + [struttura_id])
         lookup = {r['matricola'].lower(): r['id'] for r in rows}
     for item in items:
         matricola = (item.get('matricola') or '').strip().lower()
@@ -1029,27 +1044,17 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
 @login_required
 def storico():
     """Import history. Filtrato per struttura dell'utente."""
-    struttura_id = getattr(g, 'struttura_id', None)
-    if struttura_id:
-        imports = query_all(
-            """SELECT ih.*, d.nome as divisione_nome, u.nome || ' ' || u.cognome as utente_nome
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               LEFT JOIN utenti u ON ih.imported_by = u.id
-               WHERE ih.struttura_id = ?
-               ORDER BY ih.created_at DESC
-               LIMIT 50""",
-            (struttura_id,)
-        )
-    else:
-        imports = query_all(
-            """SELECT ih.*, d.nome as divisione_nome, u.nome || ' ' || u.cognome as utente_nome
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               LEFT JOIN utenti u ON ih.imported_by = u.id
-               ORDER BY ih.created_at DESC
-               LIMIT 50"""
-        )
+    clausola, parametri = _scope_import()
+    imports = query_all(
+        f"""SELECT ih.*, d.nome as divisione_nome, u.nome || ' ' || u.cognome as utente_nome
+            FROM import_history ih
+            LEFT JOIN divisioni d ON ih.divisione_id = d.id
+            LEFT JOIN utenti u ON ih.imported_by = u.id
+            WHERE 1=1 {clausola}
+            ORDER BY ih.created_at DESC
+            LIMIT 50""",
+        parametri
+    )
     return render_template('import/storico.html', imports=imports)
 
 
@@ -1061,70 +1066,43 @@ def storico():
 @login_required
 def email_queue():
     """Email verbale queue: pending items for manual review. Filtrato per struttura."""
-    struttura_id = getattr(g, 'struttura_id', None)
-    if struttura_id:
-        pending = query_all(
-            """SELECT ih.*, d.nome as divisione_nome
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
-                     AND ih.struttura_id = ?
-               ORDER BY ih.created_at DESC""",
-            (struttura_id,)
-        )
-    else:
-        pending = query_all(
-            """SELECT ih.*, d.nome as divisione_nome
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
-               ORDER BY ih.created_at DESC"""
-        )
+    clausola, parametri = _scope_import()
+    pending = query_all(
+        f"""SELECT ih.*, d.nome as divisione_nome
+            FROM import_history ih
+            LEFT JOIN divisioni d ON ih.divisione_id = d.id
+            WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'pending'
+                  {clausola}
+            ORDER BY ih.created_at DESC""",
+        parametri
+    )
 
     for item in pending:
         parsed = _parse_email_ai_response(item.get('ai_response'))
         item['matricola_estratta'] = parsed.get('matricola', '')
         item['tipo_estratto'] = parsed.get('tipo', '')
 
-    if struttura_id:
-        counts = query_one(
-            """SELECT COUNT(*) as total,
-                      SUM(CASE WHEN ih.stato = 'completed' THEN 1 ELSE 0 END) as completed,
-                      SUM(CASE WHEN ih.stato = 'failed' THEN 1 ELSE 0 END) as failed
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               WHERE ih.tipo_import = 'verbale_email' AND ih.struttura_id = ?""",
-            (struttura_id,)
-        )
-    else:
-        counts = query_one(
-            """SELECT COUNT(*) as total,
-                      SUM(CASE WHEN stato = 'completed' THEN 1 ELSE 0 END) as completed,
-                      SUM(CASE WHEN stato = 'failed' THEN 1 ELSE 0 END) as failed
-               FROM import_history WHERE tipo_import = 'verbale_email'"""
-        )
+    counts = query_one(
+        f"""SELECT COUNT(*) as total,
+                   SUM(CASE WHEN ih.stato = 'completed' THEN 1 ELSE 0 END) as completed,
+                   SUM(CASE WHEN ih.stato = 'failed' THEN 1 ELSE 0 END) as failed
+            FROM import_history ih
+            WHERE ih.tipo_import = 'verbale_email' {clausola}""",
+        parametri
+    )
     completed_count = counts['completed'] or 0
     failed_count = counts['failed'] or 0
     total_count = counts['total'] or 0
 
-    if struttura_id:
-        recent_completed = query_all(
-            """SELECT ih.*, d.nome as divisione_nome
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
-                     AND ih.struttura_id = ?
-               ORDER BY ih.created_at DESC LIMIT 10""",
-            (struttura_id,)
-        )
-    else:
-        recent_completed = query_all(
-            """SELECT ih.*, d.nome as divisione_nome
-               FROM import_history ih
-               LEFT JOIN divisioni d ON ih.divisione_id = d.id
-               WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
-               ORDER BY ih.created_at DESC LIMIT 10"""
-        )
+    recent_completed = query_all(
+        f"""SELECT ih.*, d.nome as divisione_nome
+            FROM import_history ih
+            LEFT JOIN divisioni d ON ih.divisione_id = d.id
+            WHERE ih.tipo_import = 'verbale_email' AND ih.stato = 'completed'
+                  {clausola}
+            ORDER BY ih.created_at DESC LIMIT 10""",
+        parametri
+    )
 
     return render_template('import/email_queue.html',
                            pending=pending,

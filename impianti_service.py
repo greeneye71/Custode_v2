@@ -111,7 +111,11 @@ def _soglie_raggiunte(giorni_rimasti, giorni_anticipo):
         raggiunte.append('imminente')
     if giorni_rimasti <= 0:
         raggiunte.append('scaduto')
-        # Solleciti mensili finche' la verifica non viene registrata.
+        # Solleciti ogni 30 giorni finche' la verifica non viene registrata.
+        # Trenta giorni e non un mese di calendario: il numero nella soglia
+        # ('sollecito_2') e' un contatore di solleciti, non un conteggio di
+        # mesi, e serve solo a distinguere un sollecito dal precedente dentro
+        # impianti_avvisi_inviati.
         mesi = int(-giorni_rimasti) // 30
         if mesi >= 1:
             raggiunte.append(f'sollecito_{mesi}')
@@ -243,9 +247,16 @@ def applica_catalogo(impianto_id, tipo, nomi_scelti, partenza):
     Restituisce il numero di righe create.
     """
     scelti = {(n or '').strip().lower() for n in nomi_scelti}
+    # Le voci gia' a piano si saltano qui, non solo nella rotta che chiama:
+    # fino alla 2.7.1 un doppio invio del modulo (o due schede aperte)
+    # duplicava le righe di scadenza, e da li' in poi ogni avviso partiva due
+    # volte e il piano mostrava la stessa verifica ripetuta.
+    gia_presenti = {(r['nome'] or '').strip().lower() for r in query_all(
+        "SELECT nome FROM impianti_scadenze WHERE impianto_id = ?", (impianto_id,))}
     creati = 0
     for voce in voci_per_tipo(tipo):
-        if voce['nome'].strip().lower() not in scelti:
+        nome_norm = voce['nome'].strip().lower()
+        if nome_norm not in scelti or nome_norm in gia_presenti:
             continue
         execute(
             """INSERT INTO impianti_scadenze

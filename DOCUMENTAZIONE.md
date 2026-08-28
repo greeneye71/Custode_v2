@@ -1403,5 +1403,5 @@ venv\Scripts\python seed.py
 
 ---
 
-*Documentazione MedInventory v2.7.1*
+*Documentazione MedInventory v2.8.0*
 *Studio Bergamaschi*

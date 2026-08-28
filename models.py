@@ -61,6 +61,51 @@ def upload_subdir(subdir, struttura_id=None, uploads_base=None, single_struttura
     return abs_path, rel_prefix
 
 
+# Colonne che contengono un percorso relativo dentro uploads/, con la query
+# che risale alla struttura proprietaria. Se si aggiunge una colonna di
+# upload va aggiunta anche qui, altrimenti /uploads non sapra' a chi
+# appartiene il file e lo neghera'.
+_COLONNE_UPLOAD = (
+    "SELECT struttura_id FROM apparecchi WHERE foto_path = ?",
+    "SELECT a.struttura_id FROM manutenzioni m"
+    " JOIN apparecchi a ON a.id = m.apparecchio_id WHERE m.verbale_path = ?",
+    "SELECT a.struttura_id FROM verifiche v"
+    " JOIN apparecchi a ON a.id = v.apparecchio_id WHERE v.documento_path = ?",
+    "SELECT a.struttura_id FROM documenti d"
+    " JOIN apparecchi a ON a.id = d.apparecchio_id WHERE d.filepath = ?",
+    "SELECT i.struttura_id FROM impianti_documenti id_"
+    " JOIN impianti i ON i.id = id_.impianto_id WHERE id_.filepath = ?",
+    "SELECT i.struttura_id FROM impianti_interventi ii"
+    " JOIN impianti i ON i.id = ii.impianto_id WHERE ii.verbale_path = ?",
+    "SELECT struttura_id FROM import_history WHERE filepath = ?",
+)
+
+
+def strutture_proprietarie_file(percorso_relativo):
+    """Strutture che possiedono il file di upload indicato.
+
+    Serve a /uploads per i percorsi che non hanno il prefisso
+    strutture/<id>/ — quelli prodotti in modalita' single-struttura, dalle
+    installazioni precedenti alla 2.5 e da ogni chiamata a upload_subdir()
+    con struttura_id a None. Su quei percorsi il prefisso non dice nulla, e
+    fino alla 2.7.1 il file veniva servito a chiunque fosse autenticato.
+
+    Restituisce l'insieme degli struttura_id proprietari. Insieme vuoto =
+    file non referenziato da alcuna riga: chi chiama deve negarlo, non
+    servirlo. Un NULL in colonna (import via email non attribuito) entra
+    nell'insieme come None e non combacia con nessuna struttura.
+    """
+    proprietarie = set()
+    for sql in _COLONNE_UPLOAD:
+        try:
+            for riga in query_all(sql, (percorso_relativo,)):
+                proprietarie.add(riga['struttura_id'])
+        except sqlite3.OperationalError:
+            # Tabella o colonna non ancora migrata: l'assenza non autorizza.
+            continue
+    return proprietarie
+
+
 def percorso_logo_struttura(struttura):
     """Percorso assoluto del logo di una struttura, o None se non ne ha uno.
 

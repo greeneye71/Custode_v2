@@ -1345,9 +1345,15 @@ def superadmin_dashboard():
 # ============================================================================
 
 @admin_bp.route('/sicurezza')
-@admin_required
+@operazione_globale_required
 def sicurezza():
-    """Visualizza e sblocca IP/utenti bloccati dal rate limiting."""
+    """Visualizza e sblocca IP/utenti bloccati dal rate limiting.
+
+    login_attempts e' una tabella globale: non ha struttura_id e raccoglie i
+    tentativi di tutto il deployment. Fino alla 2.7.1 la rotta era
+    @admin_required, e un admin di struttura leggeva gli indirizzi IP e le
+    email di chi tenta l'accesso alle altre.
+    """
     # Finestra calcolata da SQLite: created_at e' scritta con
     # CURRENT_TIMESTAMP, che e' UTC, e confrontarla con l'ora locale teneva
     # questo elenco sempre vuoto (vedi la nota in auth.login).
@@ -1363,7 +1369,7 @@ def sicurezza():
 
 
 @admin_bp.route('/sicurezza/sblocca', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def sblocca_ip():
     """Rimuove i tentativi falliti per un IP specifico."""
     import ipaddress

@@ -31,7 +31,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.7.1"
+APP_VERSION = "2.8.0"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -431,39 +431,21 @@ def create_app():
     @auth_login_required
     def index():
         from flask import redirect, url_for
-        from models import query_one, query_all
+        from models import query_one, query_all, filtro_divisione
 
         # Tecnico senza struttura selezionata → pagina di selezione
         if getattr(g, 'user', {}).get('ruolo') == 'tecnico' and not getattr(g, 'struttura_id', None):
             return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
 
-        # Division filter
-        div = getattr(g, 'divisione_attiva', None)
-        struttura_id = getattr(g, 'struttura_id', None)
-        if div and div.get('id') != 'tutte':
-            div_clause = "AND a.divisione_id = ?"
-            div_params = [div['id']]
-            div_clause_m = "AND a.divisione_id = ?"
-        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
-            if struttura_id:
-                div_clause = "AND a.struttura_id = ?"
-                div_params = [struttura_id]
-                div_clause_m = "AND a.struttura_id = ?"
-            else:
-                div_clause = ""
-                div_params = []
-                div_clause_m = ""
-        else:
-            ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-            if ids:
-                ph = ','.join('?' * len(ids))
-                div_clause = f"AND a.divisione_id IN ({ph})"
-                div_params = ids
-                div_clause_m = div_clause
-            else:
-                div_clause = "AND 1=0"
-                div_params = []
-                div_clause_m = "AND 1=0"
+        # Scope dell'utente. Fino alla 2.7.1 questa rotta riscriveva
+        # filtro_divisione() inline, e il ramo admin senza struttura attiva
+        # cadeva su div_clause = "" — cioe' nessun filtro, e la dashboard
+        # mostrava conteggi e ultimi interventi di tutte le strutture.
+        # L'unica fonte dello scope e' models.filtro_divisione().
+        # Tutte le query qui sotto usano l'alias "a" per apparecchi, anche
+        # quelle che partono da manutenzioni: una sola clausola basta.
+        div_clause, div_params = filtro_divisione('a')
+        div_clause_m = div_clause
 
         # Stat 1: Total apparecchi (non dismessi)
         r = query_one(
@@ -473,54 +455,22 @@ def create_app():
         totale_apparecchi = r['cnt'] if r else 0
 
         # Stat 2: Active alerts (deadlines <= 30 days), somma apparecchi + impianti
-        if div and div.get('id') != 'tutte':
-            r = query_one(
-                """SELECT (SELECT COUNT(*) FROM prossime_scadenze
-                            WHERE divisione_id = ?
-                              AND priorita IN ('scaduto','urgente','attenzione','avviso'))
-                        + (SELECT COUNT(*) FROM prossime_scadenze_impianti
-                            WHERE divisione_id = ?
-                              AND priorita IN ('scaduto','urgente','attenzione','avviso'))
-                        AS cnt""",
-                [div['id'], div['id']]
-            )
-        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
-            if struttura_id:
-                r = query_one(
-                    """SELECT (SELECT COUNT(*) FROM prossime_scadenze ps
-                                JOIN apparecchi a ON a.id = ps.apparecchio_id
-                                WHERE a.struttura_id = ?
-                                  AND ps.priorita IN ('scaduto','urgente','attenzione','avviso'))
-                            + (SELECT COUNT(*) FROM prossime_scadenze_impianti
-                                WHERE struttura_id = ?
-                                  AND priorita IN ('scaduto','urgente','attenzione','avviso'))
-                            AS cnt""",
-                    [struttura_id, struttura_id]
-                )
-            else:
-                r = query_one(
-                    """SELECT (SELECT COUNT(*) FROM prossime_scadenze
-                                WHERE priorita IN ('scaduto','urgente','attenzione','avviso'))
-                            + (SELECT COUNT(*) FROM prossime_scadenze_impianti
-                                WHERE priorita IN ('scaduto','urgente','attenzione','avviso'))
-                            AS cnt"""
-                )
-        else:
-            ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-            if ids:
-                ph = ','.join('?' * len(ids))
-                r = query_one(
-                    f"""SELECT (SELECT COUNT(*) FROM prossime_scadenze
-                                WHERE divisione_id IN ({ph})
-                                  AND priorita IN ('scaduto','urgente','attenzione','avviso'))
-                            + (SELECT COUNT(*) FROM prossime_scadenze_impianti
-                                WHERE divisione_id IN ({ph})
-                                  AND priorita IN ('scaduto','urgente','attenzione','avviso'))
-                            AS cnt""",
-                    ids + ids
-                )
-            else:
-                r = None
+        # Anche questo blocco riscriveva lo scope a mano e per l'admin senza
+        # struttura attiva contava le scadenze di tutte le strutture. Le due
+        # viste espongono struttura_id e divisione_id, quindi filtro_divisione()
+        # si applica direttamente all'alias della vista.
+        cl_ps, par_ps = filtro_divisione('ps')
+        cl_psi, par_psi = filtro_divisione('psi')
+        r = query_one(
+            f"""SELECT (SELECT COUNT(*) FROM prossime_scadenze ps
+                        WHERE ps.priorita IN ('scaduto','urgente','attenzione','avviso')
+                          {cl_ps})
+                    + (SELECT COUNT(*) FROM prossime_scadenze_impianti psi
+                        WHERE psi.priorita IN ('scaduto','urgente','attenzione','avviso')
+                          {cl_psi})
+                    AS cnt""",
+            par_ps + par_psi
+        )
         scadenze_attive = r['cnt'] if r else 0
 
         # Stat 3: Manutenzioni this month
@@ -655,7 +605,12 @@ def create_app():
             div_params
         )
 
-        import json
+        # I dati dei grafici viaggiano come oggetti, non come stringhe JSON:
+        # in dashboard.html il filtro |tojson li scrive gia' come letterale
+        # JavaScript, con le sequenze di escape che rendono impossibile a un
+        # valore proveniente dal database (la descrizione di un apparecchio,
+        # per esempio) chiudere il tag <script>. Fino alla 2.7.1 erano
+        # json.dumps() piu' |safe dentro una stringa fra apici.
         return render_template('dashboard.html',
                                totale_apparecchi=totale_apparecchi,
                                scadenze_attive=scadenze_attive,
@@ -666,10 +621,10 @@ def create_app():
                                apparecchi_senza_verifica=apparecchi_senza_verifica,
                                scadenze_imminenti=scadenze_imminenti,
                                ultimi_interventi=ultimi_interventi,
-                               chart_classificazione_json=json.dumps(chart_classificazione),
-                               chart_costi_json=json.dumps(chart_costi),
-                               chart_tipi_json=json.dumps(chart_tipi),
-                               chart_verifiche_json=json.dumps(chart_verifiche))
+                               chart_classificazione=chart_classificazione,
+                               chart_costi=chart_costi,
+                               chart_tipi=chart_tipi,
+                               chart_verifiche=chart_verifiche)
 
     # ---------------------------------------------------------------------------
     # HTTP error handlers
@@ -714,19 +669,38 @@ def create_app():
     def uploaded_file(filename):
         import re
         from flask import send_from_directory, abort as _abort
+        from models import strutture_proprietarie_file
         uploads_path = app.config['UPLOADS_PATH']
         resolved = os.path.realpath(os.path.join(uploads_path, filename))
         if not resolved.startswith(os.path.realpath(uploads_path) + os.sep):
             _abort(403)
+
+        ruolo = g.user.get('ruolo')
+        if ruolo == 'superadmin':
+            return send_from_directory(uploads_path, filename)
+
+        # In modalita' single-struttura non esiste una dimensione tenant.
+        if app.config.get('APP_CONFIG', {}).get('single_struttura', False):
+            return send_from_directory(uploads_path, filename)
+
+        user_struttura_id = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
+
         # Multi-tenant: verify caller has access to the struttura owning this file
         m = re.match(r'^strutture/(\d+)/', filename)
         if m:
-            file_struttura_id = int(m.group(1))
-            ruolo = g.user.get('ruolo')
-            if ruolo != 'superadmin':
-                user_struttura_id = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
-                if user_struttura_id != file_struttura_id:
-                    _abort(403)
+            if user_struttura_id != int(m.group(1)):
+                _abort(403)
+            return send_from_directory(uploads_path, filename)
+
+        # Nessun prefisso di struttura: il percorso da solo non dice a chi
+        # appartiene il file. Fino alla 2.7.1 questi file venivano serviti a
+        # qualunque utente autenticato di qualunque struttura. Si risale al
+        # proprietario dalla riga che li referenzia; se nessuna riga li
+        # referenzia, o se appartengono a un'altra struttura, si nega.
+        if not user_struttura_id:
+            _abort(403)
+        if user_struttura_id not in strutture_proprietarie_file(filename):
+            _abort(403)
         return send_from_directory(uploads_path, filename)
 
     return app

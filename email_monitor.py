@@ -415,7 +415,13 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
 
 
 def _find_apparecchio(conn, matricola, divisione_id=None, struttura_id=None):
-    """Trova apparecchio per matricola, filtrando per struttura_id e/o divisione_id."""
+    """Trova apparecchio per matricola dentro lo scope indicato.
+
+    Senza struttura_id né divisione_id non si cerca: la matricola non è unica
+    fra strutture diverse e fino alla 2.7.1 il fallback senza scope poteva
+    restituire l'apparecchio di un altro tenant, sul quale poi venivano scritte
+    manutenzioni e verifiche. Nessuno scope significa nessun risultato.
+    """
     if not matricola:
         return None
     # Priorità: filtra per struttura_id se disponibile
@@ -426,17 +432,15 @@ def _find_apparecchio(conn, matricola, divisione_id=None, struttura_id=None):
         ).fetchone()
         if row:
             return row['id']
+        if not divisione_id:
+            return None
     # Fallback: filtra per divisione_id
-    if divisione_id:
-        row = conn.execute(
-            "SELECT id FROM apparecchi WHERE matricola = ? AND divisione_id = ? AND stato != 'dismesso'",
-            (matricola, divisione_id)
-        ).fetchone()
-    else:
-        row = conn.execute(
-            "SELECT id FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
-            (matricola,)
-        ).fetchone()
+    if not divisione_id:
+        return None
+    row = conn.execute(
+        "SELECT id FROM apparecchi WHERE matricola = ? AND divisione_id = ? AND stato != 'dismesso'",
+        (matricola, divisione_id)
+    ).fetchone()
     return row['id'] if row else None
 
 
@@ -522,10 +526,17 @@ def check_all_emails(app):
     # resterebbe invisibile a ogni utente (che filtra per struttura).
     struttura_id = _struttura_unica(db_path)
     if struttura_id is None:
-        logger.warning(
-            "IMAP globale con più strutture attive: i verbali importati non "
-            "saranno attribuibili a una struttura. Configurare l'import per struttura."
+        # Fino alla 2.7.1 qui si proseguiva con struttura_id None: i verbali
+        # finivano senza attribuzione e _find_apparecchio() cercava la matricola
+        # su tutto il database, scrivendo manutenzioni e verifiche
+        # sull'apparecchio di un'altra struttura. Meglio non importare nulla.
+        logger.error(
+            "IMAP globale con più strutture attive (o nessuna): import email "
+            "sospeso. I verbali non sarebbero attribuibili a una struttura e "
+            "potrebbero finire sugli apparecchi di un'altra. Configurare "
+            "l'import per struttura."
         )
+        return
 
     email_cfg = {
         'id': None,
