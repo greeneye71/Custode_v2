@@ -18,7 +18,8 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile, filtro_divisione, get_db)
+                    nome_file_unico, apparecchio_accessibile, filtro_divisione,
+                    get_db)
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -905,7 +906,7 @@ def upload_foto(id):
     # Save file
     struttura_id = getattr(g, 'struttura_id', None)
     uploads_dir, rel_prefix = upload_subdir('foto', struttura_id)
-    filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+    filename = nome_file_unico(file.filename)
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
 
@@ -947,7 +948,7 @@ def upload_documento(id):
     # Save file
     struttura_id = getattr(g, 'struttura_id', None)
     uploads_dir, rel_prefix = upload_subdir('documenti', struttura_id)
-    filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+    filename = nome_file_unico(file.filename)
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
 

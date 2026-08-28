@@ -10,6 +10,7 @@ import os
 import shutil
 import threading
 import time
+import uuid
 
 from flask import (
     Blueprint, jsonify, render_template, request, redirect, url_for,
@@ -19,7 +20,9 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile)
+                    nome_file_unico, apparecchio_accessibile,
+                    divisione_accessibile, filtro_divisione,
+                    scegli_apparecchio)
 
 import_bp = Blueprint('import', __name__)
 logger = logging.getLogger('medinventory.import')
@@ -47,6 +50,79 @@ def _parse_email_ai_response(raw):
     except (json.JSONDecodeError, TypeError):
         return {}
 
+def _righe_email(record):
+    """Le righe di un import email: una per ogni elemento estratto dal documento.
+
+    I record creati prima della 2.8.0 non hanno righe in import_preview: per
+    loro si ricostruisce l'unica riga che la revisione manuale mostrava, cosi'
+    la coda storica resta lavorabile senza migrazione dei dati.
+    """
+    righe = query_all(
+        """SELECT id, riga_numero, dati_estratti, apparecchio_match_id, stato,
+                  note_revisione
+           FROM import_preview
+           WHERE import_id = ?
+           ORDER BY riga_numero, id""",
+        (record['id'],)
+    )
+    if righe:
+        return [{
+            'preview_id': r['id'],
+            'numero': r['riga_numero'] or 0,
+            'dati': _parse_email_ai_response(r['dati_estratti']),
+            'apparecchio_match_id': r['apparecchio_match_id'],
+            'stato': r['stato'] or 'pending',
+            'nota': r['note_revisione'],
+        } for r in righe]
+    return [{
+        'preview_id': None,
+        'numero': 1,
+        'dati': _parse_email_ai_response(record.get('ai_response')),
+        'apparecchio_match_id': None,
+        'stato': 'imported' if record.get('stato') == 'completed' else 'pending',
+        'nota': None,
+    }]
+
+
+def _aggiorna_stato_import(import_id):
+    """Allinea import_history alle sue righe.
+
+    Il record esce dalla coda solo quando nessuna riga e' piu' in attesa: fino
+    alla 2.8.0 la prima conferma lo marcava 'completed' e gli altri interventi
+    dello stesso verbale non erano piu' raggiungibili da nessuna pagina.
+    """
+    conteggi = query_one(
+        """SELECT COUNT(*) AS totale,
+                  SUM(CASE WHEN stato = 'imported' THEN 1 ELSE 0 END) AS importate,
+                  SUM(CASE WHEN stato = 'pending' THEN 1 ELSE 0 END) AS pendenti
+           FROM import_preview WHERE import_id = ?""",
+        (import_id,)
+    )
+    totale = (conteggi or {}).get('totale') or 0
+    if not totale:
+        # Record storico senza righe: resta il comportamento a riga singola.
+        execute(
+            """UPDATE import_history SET stato = 'completed', righe_importate = 1,
+                      completed_at = datetime('now') WHERE id = ?""",
+            (import_id,)
+        )
+        return 0
+    importate = conteggi['importate'] or 0
+    pendenti = conteggi['pendenti'] or 0
+    if pendenti:
+        execute(
+            "UPDATE import_history SET stato = 'pending', righe_importate = ? WHERE id = ?",
+            (importate, import_id)
+        )
+    else:
+        execute(
+            """UPDATE import_history SET stato = ?, righe_importate = ?,
+                      completed_at = datetime('now') WHERE id = ?""",
+            ('completed' if importate else 'failed', importate, import_id)
+        )
+    return pendenti
+
+
 DOC_TYPE_LABELS = {
     'inventario': 'Inventario',
     'verbale_manutenzione': 'Verbale di Manutenzione',
@@ -57,11 +133,22 @@ TIPI_VALIDI_MANUTENZIONE = {'preventiva', 'correttiva', 'verifica', 'calibrazion
 ESITI_VALIDI_VERIFICA = {'positivo', 'negativo', 'con_riserva'}
 
 
+def _ruolo_vede_ogni_divisione():
+    """True per i ruoli che leggono l'intera struttura, divisioni comprese.
+
+    Gli import arrivati dalla posta hanno divisione_id NULL: non appartengono
+    ad alcun reparto, quindi possono gestirli solo questi ruoli.
+    """
+    return getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico', 'superadmin')
+
+
 def get_import_in_scope(import_id):
-    """Restituisce il record di import solo se appartiene alla struttura corrente.
+    """Restituisce il record di import solo se e' nello scope di chi chiede.
 
     Senza questo controllo qualunque utente autenticato potrebbe leggere le
     estrazioni AI di un altro tenant — o eseguirne l'import — indovinando l'id.
+    Oltre alla struttura si controlla la divisione: fino alla 2.8.0 un ruolo
+    'utente' apriva ed eseguiva gli import dei reparti a cui non e' assegnato.
     """
     struttura_id = getattr(g, 'struttura_id', None)
     if struttura_id is None:
@@ -69,10 +156,17 @@ def get_import_in_scope(import_id):
         if g.user['ruolo'] == 'superadmin':
             return query_one("SELECT * FROM import_history WHERE id = ?", (import_id,))
         return None
-    return query_one(
+    rec = query_one(
         "SELECT * FROM import_history WHERE id = ? AND struttura_id = ?",
         (import_id, struttura_id)
     )
+    if not rec:
+        return None
+    if not _ruolo_vede_ogni_divisione():
+        ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if rec['divisione_id'] not in ids:
+            return None
+    return rec
 
 
 def _scope_import(alias='ih'):
@@ -88,7 +182,16 @@ def _scope_import(alias='ih'):
         if g.user['ruolo'] == 'superadmin':
             return '', []
         return 'AND 1=0', []
-    return f'AND {alias}.struttura_id = ?', [struttura_id]
+    if _ruolo_vede_ogni_divisione():
+        return f'AND {alias}.struttura_id = ?', [struttura_id]
+    # Stesso perimetro di get_import_in_scope(): l'elenco non deve mostrare
+    # righe che l'utente non potrebbe comunque aprire.
+    ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+    if not ids:
+        return 'AND 1=0', []
+    segnaposto = ','.join('?' * len(ids))
+    return (f'AND {alias}.struttura_id = ? AND {alias}.divisione_id IN ({segnaposto})',
+            [struttura_id] + ids)
 
 
 @import_bp.route('/import')
@@ -149,8 +252,11 @@ def analizza():
     # Save uploaded file (in cartella scoped per struttura: i sorgenti di import
     # sono serviti da /uploads/<path>, che isola solo i percorsi strutture/<id>/)
     uploads_dir, _import_rel_prefix = upload_subdir('import', _struttura_import)
-    timestamp = int(time.time())
-    filename = f"{timestamp}_{secure_filename(file.filename)}"
+    # Identifica la cartella pages_<...> in cui viene spezzato il PDF: con il
+    # solo secondo, due import avviati insieme scrivevano le proprie pagine
+    # nella stessa cartella e si mescolavano.
+    timestamp = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    filename = nome_file_unico(file.filename)
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
 
@@ -426,13 +532,14 @@ def _run_verbali(import_id, filepath, ext, text, is_scanned,
 
     for i, item in enumerate(all_items):
         match_id = item.pop('_match_id', None)
+        confidenza = item.pop('_match_confidenza', 1.0 if match_id else 0.0)
         execute(
             """INSERT INTO import_preview
                (import_id, riga_numero, dati_estratti, apparecchio_match_id,
                 match_confidence, stato)
                VALUES (?, ?, ?, ?, ?, 'pending')""",
             (import_id, i + 1, json.dumps(item, ensure_ascii=False),
-             match_id, 1.0 if match_id else 0.0)
+             match_id, confidenza)
         )
 
     execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
@@ -515,13 +622,14 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
 
     for i, item in enumerate(all_items):
         match_id = item.pop('_match_id', None)
+        confidenza = item.pop('_match_confidenza', 1.0 if match_id else 0.0)
         execute(
             """INSERT INTO import_preview
                (import_id, riga_numero, dati_estratti, apparecchio_match_id,
                 match_confidence, stato)
                VALUES (?, ?, ?, ?, ?, 'pending')""",
             (import_id, i + 1, json.dumps(item, ensure_ascii=False),
-             match_id, 1.0 if match_id else 0.0)
+             match_id, confidenza)
         )
 
     execute("UPDATE import_history SET stato='completed' WHERE id=?", (import_id,))
@@ -531,7 +639,16 @@ def _run_verifiche(import_id, filepath, ext, text, is_scanned,
 
 
 def _match_apparecchi(items, struttura_id=None):
-    """Match matricole in items to existing apparecchi. Sets _match_id on each item.
+    """Aggancia gli item agli apparecchi esistenti, o li lascia in scelta manuale.
+
+    Scrive su ogni item `_match_id`, `_match_confidenza` e, quando la matricola
+    e' condivisa da piu' apparecchi senza che il documento dica quale,
+    `_match_ambiguo` con l'elenco dei candidati.
+
+    Lo schema impone UNIQUE(struttura_id, modello, matricola): la matricola da
+    sola non e' una chiave. Fino alla 2.8.0 qui si prendeva una riga qualsiasi
+    fra quelle omonime, quindi il verbale poteva finire sull'apparecchio
+    sbagliato in modo dipendente dall'ordine di inserimento.
 
     Senza struttura_id non si cerca: la matricola non è unica fra strutture
     diverse, e fino alla 2.7.1 il fallback senza filtro poteva agganciare le
@@ -539,16 +656,29 @@ def _match_apparecchi(items, struttura_id=None):
     match: le righe restano da abbinare a mano.
     """
     matricole = list({(item.get('matricola') or '').strip() for item in items} - {''})
-    lookup = {}
+    per_matricola = {}
     if matricole and struttura_id:
         placeholders = ','.join('?' * len(matricole))
         rows = query_all(
-            f"SELECT id, matricola FROM apparecchi WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso' AND struttura_id = ?",
+            f"SELECT id, matricola, marca, modello FROM apparecchi "
+            f"WHERE LOWER(matricola) IN ({placeholders}) AND stato != 'dismesso' AND struttura_id = ?",
             [m.lower() for m in matricole] + [struttura_id])
-        lookup = {r['matricola'].lower(): r['id'] for r in rows}
+        for r in rows:
+            per_matricola.setdefault((r['matricola'] or '').lower(), []).append(r)
     for item in items:
         matricola = (item.get('matricola') or '').strip().lower()
-        item['_match_id'] = lookup.get(matricola)
+        candidati = per_matricola.get(matricola, [])
+        riga, motivo = scegli_apparecchio(candidati,
+                                          modello=item.get('modello'),
+                                          marca=item.get('marca'))
+        item['_match_id'] = riga['id'] if riga else None
+        item['_match_confidenza'] = 1.0 if motivo == 'matricola' else (0.8 if riga else 0.0)
+        item.pop('_match_ambiguo', None)
+        if motivo == 'ambiguo':
+            item['_match_ambiguo'] = [
+                {'id': c['id'], 'marca': c['marca'], 'modello': c['modello']}
+                for c in candidati
+            ]
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +844,11 @@ def _execute_inventario(import_id, selected_ids, import_rec):
         try:
             data = json.loads(row['dati_estratti'])
             if row['apparecchio_match_id']:
+                # Il match nasce nel thread di analisi: prima di riscrivere la
+                # scheda va riverificato nello scope di chi esegue l'import,
+                # struttura e divisione comprese.
+                if not apparecchio_accessibile(row['apparecchio_match_id']):
+                    raise ValueError("Apparecchio abbinato non accessibile")
                 execute(
                     """UPDATE apparecchi SET
                        descrizione = COALESCE(descrizione, ?),
@@ -735,14 +870,16 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                      data.get('note'), g.user['id'], row['apparecchio_match_id'])
                 )
             else:
-                # struttura_id dalla sessione (authoritative); fallback query solo per superadmin
-                imp_struttura_id = getattr(g, 'struttura_id', None)
-                if imp_struttura_id is None:
-                    div_row = query_one(
-                        "SELECT struttura_id FROM divisioni WHERE id=?",
-                        (import_rec['divisione_id'],)
-                    )
-                    imp_struttura_id = div_row['struttura_id'] if div_row else None
+                # La divisione di destinazione e' quella dichiarata nell'import:
+                # va convalidata contro lo scope di chi esegue, non contro la
+                # sola struttura, altrimenti si crea una scheda in un reparto
+                # non assegnato.
+                div_row = divisione_accessibile(import_rec['divisione_id'])
+                if not div_row:
+                    raise ValueError("Divisione di destinazione non accessibile")
+                # struttura_id dalla sessione (authoritative); fallback alla
+                # divisione solo per il superadmin che non impersona nessuno.
+                imp_struttura_id = getattr(g, 'struttura_id', None) or div_row['struttura_id']
                 execute(
                     """INSERT INTO apparecchi
                        (divisione_id, struttura_id, matricola, descrizione, numero_inventario,
@@ -933,12 +1070,11 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                         "per creare un nuovo apparecchio"
                     )
 
-                struttura_id_user = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
-                div_check = query_one(
-                    "SELECT struttura_id FROM divisioni WHERE id=? AND attiva=1",
-                    (n_divisione_id,)
-                )
-                if not div_check or (struttura_id_user and div_check['struttura_id'] != struttura_id_user):
+                # La divisione arriva dal form: struttura *e* assegnazione.
+                # Il controllo precedente si fermava alla struttura, cosi' un
+                # ruolo 'utente' creava schede in qualunque reparto del tenant.
+                div_check = divisione_accessibile(n_divisione_id)
+                if not div_check or not div_check['attiva']:
                     raise ValueError("Divisione non accessibile")
 
                 cur = execute(
@@ -1078,9 +1214,13 @@ def email_queue():
     )
 
     for item in pending:
-        parsed = _parse_email_ai_response(item.get('ai_response'))
-        item['matricola_estratta'] = parsed.get('matricola', '')
-        item['tipo_estratto'] = parsed.get('tipo', '')
+        righe = _righe_email(item)
+        pendenti = [r for r in righe if r['stato'] == 'pending']
+        prima = (pendenti or righe)[0]['dati']
+        item['matricola_estratta'] = prima.get('matricola', '')
+        item['tipo_estratto'] = prima.get('tipo', '')
+        item['righe_totali'] = len(righe)
+        item['righe_pendenti'] = len(pendenti)
 
     counts = query_one(
         f"""SELECT COUNT(*) as total,
@@ -1121,51 +1261,60 @@ def email_dettaglio(id):
         flash('Record non trovato.', 'danger')
         return redirect(url_for('import.email_queue'))
 
-    parsed = _parse_email_ai_response(record.get('ai_response'))
+    righe = _righe_email(record)
 
     struttura_id = getattr(g, 'struttura_id', None)
 
-    apparecchio = None
-    matricola = parsed.get('matricola', '').strip()
-    if matricola:
-        if struttura_id:
-            apparecchio = query_one(
-                """SELECT a.*, d.nome as divisione_nome
-                   FROM apparecchi a
-                   LEFT JOIN divisioni d ON a.divisione_id = d.id
-                   WHERE a.matricola = ? AND a.stato != 'dismesso' AND a.struttura_id = ?""",
-                (matricola, struttura_id)
-            )
-        else:
-            apparecchio = query_one(
-                """SELECT a.*, d.nome as divisione_nome
-                   FROM apparecchi a
-                   LEFT JOIN divisioni d ON a.divisione_id = d.id
-                   WHERE a.matricola = ? AND a.stato != 'dismesso'""",
-                (matricola,)
-            )
-
+    # L'elenco proposto e il match sulla matricola passano dallo scope di chi
+    # guarda: fino alla 2.8.0 mostravano tutti gli apparecchi della struttura,
+    # reparti non assegnati compresi. Il superadmin che non impersona nessuno
+    # resta l'unico caso senza filtro.
     if struttura_id:
-        apparecchi_list = query_all(
-            """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
-               FROM apparecchi a
-               LEFT JOIN divisioni d ON a.divisione_id = d.id
-               WHERE a.stato != 'dismesso' AND a.struttura_id = ?
-               ORDER BY a.matricola""",
-            (struttura_id,)
-        )
+        clausola_div, parametri_div = filtro_divisione('a')
+    elif g.user['ruolo'] == 'superadmin':
+        clausola_div, parametri_div = '', []
     else:
-        apparecchi_list = query_all(
-            """SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
-               FROM apparecchi a
-               LEFT JOIN divisioni d ON a.divisione_id = d.id
-               WHERE a.stato != 'dismesso'
-               ORDER BY a.matricola"""
+        clausola_div, parametri_div = 'AND 1=0', []
+
+    # Una matricola puo' appartenere a piu' modelli (UNIQUE e' su
+    # struttura+modello+matricola): si prendono tutti i candidati e si decide
+    # solo se il verbale dice abbastanza. Altrimenti nessun preselezionato e
+    # l'operatore sceglie dall'elenco.
+    for riga in righe:
+        riga['apparecchio'] = None
+        riga['candidati_ambigui'] = []
+        if riga['stato'] != 'pending':
+            continue
+        matricola = (riga['dati'].get('matricola') or '').strip()
+        if not matricola:
+            continue
+        candidati = query_all(
+            f"""SELECT a.*, d.nome as divisione_nome
+                FROM apparecchi a
+                LEFT JOIN divisioni d ON a.divisione_id = d.id
+                WHERE a.matricola = ? AND a.stato != 'dismesso' {clausola_div}""",
+            [matricola] + parametri_div
         )
+        riga['apparecchio'], motivo = scegli_apparecchio(
+            candidati,
+            modello=riga['dati'].get('modello'),
+            marca=riga['dati'].get('marca'))
+        if motivo == 'ambiguo':
+            riga['candidati_ambigui'] = candidati
+
+    apparecchi_list = query_all(
+        f"""SELECT a.id, a.matricola, a.marca, a.modello, d.nome as divisione_nome
+            FROM apparecchi a
+            LEFT JOIN divisioni d ON a.divisione_id = d.id
+            WHERE a.stato != 'dismesso' {clausola_div}
+            ORDER BY a.matricola""",
+        parametri_div
+    )
 
     return render_template('import/email_dettaglio.html',
-                           record=record, parsed=parsed,
-                           apparecchio=apparecchio,
+                           record=record,
+                           righe_pendenti=[r for r in righe if r['stato'] == 'pending'],
+                           righe_chiuse=[r for r in righe if r['stato'] != 'pending'],
                            apparecchi_list=apparecchi_list)
 
 
@@ -1178,22 +1327,44 @@ def email_conferma(id):
         flash('Record non trovato.', 'danger')
         return redirect(url_for('import.email_queue'))
 
+    # La riga da confermare: un verbale puo' contenere piu' interventi e ognuno
+    # si conferma per conto suo. I record storici non hanno righe e arrivano qui
+    # senza preview_id.
+    riga = None
+    preview_id = request.form.get('preview_id')
+    if preview_id:
+        try:
+            preview_id = int(preview_id)
+        except (ValueError, TypeError):
+            flash('Riga non valida.', 'danger')
+            return redirect(url_for('import.email_dettaglio', id=id))
+        riga = query_one(
+            "SELECT * FROM import_preview WHERE id = ? AND import_id = ?",
+            (preview_id, id)
+        )
+        if not riga:
+            flash('Riga non trovata.', 'danger')
+            return redirect(url_for('import.email_dettaglio', id=id))
+        if riga['stato'] != 'pending':
+            flash('Riga gia\' lavorata.', 'warning')
+            return redirect(url_for('import.email_dettaglio', id=id))
+
     apparecchio_id = request.form.get('apparecchio_id')
     if not apparecchio_id:
         flash('Seleziona un apparecchio.', 'warning')
         return redirect(url_for('import.email_dettaglio', id=id))
 
-    # FIX 5: verifica che l'apparecchio appartenga alla struttura dell'utente
-    if apparecchio_id:
-        struttura_id = getattr(g, 'struttura_id', None)
-        if struttura_id:
-            appar = query_one(
-                "SELECT id FROM apparecchi WHERE id = ? AND struttura_id = ?",
-                (apparecchio_id, struttura_id)
-            )
-            if not appar:
-                flash('Apparecchio non trovato o non accessibile.', 'danger')
-                return redirect(url_for('import.email_queue'))
+    # L'apparecchio arriva dal form: struttura *e* divisione. Il controllo
+    # precedente si fermava alla struttura, e senza struttura attiva non
+    # controllava nulla.
+    try:
+        apparecchio_id = int(apparecchio_id)
+    except (ValueError, TypeError):
+        flash('Apparecchio non valido.', 'danger')
+        return redirect(url_for('import.email_dettaglio', id=id))
+    if not apparecchio_accessibile(apparecchio_id):
+        flash('Apparecchio non trovato o non accessibile.', 'danger')
+        return redirect(url_for('import.email_queue'))
 
     # FIX 7: validazione tipo manutenzione
     TIPI_VALIDI = ('preventiva', 'correttiva', 'verifica', 'calibrazione')
@@ -1221,7 +1392,7 @@ def email_conferma(id):
                 periodicita_giorni, tecnico_ditta, descrizione, esito, costo, created_by)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                int(apparecchio_id),
+                apparecchio_id,
                 tipo,
                 request.form.get('data_intervento'),
                 request.form.get('prossima_scadenza') or None,
@@ -1234,16 +1405,26 @@ def email_conferma(id):
             )
         )
 
-        execute(
-            """UPDATE import_history SET stato = 'completed', righe_importate = 1,
-                      completed_at = datetime('now') WHERE id = ?""",
-            (id,)
-        )
+        if riga:
+            execute(
+                """UPDATE import_preview
+                   SET stato = 'imported', apparecchio_match_id = ?,
+                       note_revisione = 'Confermata manualmente'
+                   WHERE id = ?""",
+                (apparecchio_id, preview_id)
+            )
+        pendenti = _aggiorna_stato_import(id)
 
+        dettaglio = f"Confermato verbale email: {record.get('filename', '')}"
+        if riga:
+            dettaglio += f" (riga {riga['riga_numero']})"
         log_attivita(g.user['id'], 'import_email_conferma', 'import_history', id,
-                     f"Confermato verbale email: {record.get('filename', '')}", request.remote_addr,
+                     dettaglio, request.remote_addr,
                      struttura_id=record.get('struttura_id'))
 
+        if pendenti:
+            flash(f'Manutenzione importata. Restano {pendenti} righe da rivedere.', 'success')
+            return redirect(url_for('import.email_dettaglio', id=id))
         flash('Manutenzione importata con successo dal verbale email.', 'success')
         return redirect(url_for('import.email_queue'))
 
@@ -1261,6 +1442,41 @@ def email_scarta(id):
         flash('Record non trovato.', 'danger')
         return redirect(url_for('import.email_queue'))
 
+    preview_id = request.form.get('preview_id')
+    if preview_id:
+        # Si scarta la singola riga: le altre restano in coda.
+        try:
+            preview_id = int(preview_id)
+        except (ValueError, TypeError):
+            flash('Riga non valida.', 'danger')
+            return redirect(url_for('import.email_dettaglio', id=id))
+        riga = query_one(
+            "SELECT * FROM import_preview WHERE id = ? AND import_id = ?",
+            (preview_id, id)
+        )
+        if not riga or riga['stato'] != 'pending':
+            flash('Riga non trovata o gia\' lavorata.', 'warning')
+            return redirect(url_for('import.email_dettaglio', id=id))
+        execute(
+            """UPDATE import_preview SET stato = 'rejected',
+                      note_revisione = 'Scartata manualmente' WHERE id = ?""",
+            (preview_id,)
+        )
+        pendenti = _aggiorna_stato_import(id)
+        log_attivita(g.user['id'], 'import_email_scarta', 'import_history', id,
+                     f"Scartata riga {riga['riga_numero']} del verbale email: "
+                     f"{record.get('filename', '')}", request.remote_addr,
+                     struttura_id=record.get('struttura_id'))
+        flash('Riga scartata.', 'info')
+        if pendenti:
+            return redirect(url_for('import.email_dettaglio', id=id))
+        return redirect(url_for('import.email_queue'))
+
+    execute(
+        "UPDATE import_preview SET stato = 'rejected', "
+        "note_revisione = 'Scartata manualmente' WHERE import_id = ? AND stato = 'pending'",
+        (id,)
+    )
     execute(
         "UPDATE import_history SET stato = 'failed', errori_dettaglio = 'Scartato manualmente' WHERE id = ?",
         (id,)

@@ -1268,7 +1268,12 @@ def log_attivita_view():
             FROM log_attivita l LEFT JOIN utenti u ON u.id = l.utente_id
             {where_sql} ORDER BY l.created_at DESC
         """, params)
-        writer.writerows([dict(r) for r in all_logs])
+        # Le stesse formule di Excel valgono per il CSV: il log riporta
+        # testo scritto dagli utenti (dettagli, nomi), che aperto in un foglio
+        # di calcolo verrebbe eseguito. Vedi export_service.cella_sicura().
+        from export_service import cella_sicura
+        writer.writerows([{k: cella_sicura(v) for k, v in dict(r).items()}
+                          for r in all_logs])
         return Response(
             output.getvalue(), mimetype='text/csv',
             headers={'Content-Disposition': 'attachment; filename=log_attivita.csv'}

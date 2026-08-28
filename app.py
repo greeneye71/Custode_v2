@@ -31,7 +31,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.8.1"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -87,7 +87,7 @@ LOCAL_CONFIG_KEYS = frozenset({
     'imap_enabled', 'imap_account', 'imap_password', 'imap_server', 'imap_port', 'imap_ssl',
     'alert_email_enabled', 'alert_email_to',
     'smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_use_tls',
-    'single_struttura', 'force_https', 'cloudflare_mode',
+    'single_struttura', 'force_https', 'cloudflare_mode', 'behind_proxy',
 })
 
 
@@ -244,7 +244,14 @@ def create_app():
     # ProxyFix: corregge request.remote_addr e scheme quando l'app è dietro
     # un reverse proxy o tunnel (Cloudflare Tunnel, Nginx, ecc.).
     # x_for=1 si fida di un solo hop proxy (cloudflared → app).
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    #
+    # Applicato solo se il deployment dichiara di stare dietro un proxy: in
+    # accesso LAN diretto X-Forwarded-For arriva dal client, e fidarsene
+    # significa lasciargli scegliere l'IP con cui viene contato il rate limit
+    # del login e con cui finisce nel log attività.
+    if (config.get('cloudflare_mode', False) or config.get('force_https', False)
+            or config.get('behind_proxy', False)):
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     # ---------------------------------------------------------------------------
     # Cookie security

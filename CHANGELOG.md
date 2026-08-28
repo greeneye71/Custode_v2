@@ -6,6 +6,48 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.8.1] - 2026-08-28
+
+Seguito della 2.8.0: le correzioni dell'audit ora hanno i test di regressione
+che mancavano, piu' quattro difetti che la revisione della copertura ha fatto
+emergere. Nessun cambio di schema — `PRAGMA user_version` resta 271.
+
+### Sicurezza
+- **Operazioni globali riservate al superadmin.** `operazione_globale_required`
+  concedeva l'accesso a qualunque `admin`: l'amministratore di una struttura
+  poteva scaricare il backup, ripristinarlo e leggere la configurazione globale,
+  cioe' i dati e le credenziali di tutti gli altri tenant. Ora passa il solo
+  superadmin. Fa eccezione l'installazione a struttura singola, dove `seed.py`
+  non crea nessun superadmin e "globale" coincide con "la mia struttura": li'
+  l'admin conserva l'accesso. Le strutture si contano tutte, anche quelle
+  disattivate, perche' i loro dati restano nel database.
+- **Formule nei fogli Excel esportati.** Descrizioni, ubicazioni e note le
+  scrivono gli utenti, i report li apre qualcun altro: una cella che inizia per
+  `=`, `+`, `-`, `@`, TAB o CR viene eseguita da Excel e LibreOffice. Ogni
+  valore passa ora da `export_service.cella_sicura()`, che antepone un apostrofo
+  alle sole stringhe a rischio; numeri e date restano numeri e date.
+
+### Correzioni
+- **Verbali email bruciati da un errore di elaborazione.** La posta si leggeva
+  con `FETCH RFC822`, che marca `\Seen` da solo. Un'eccezione a meta' lavoro
+  lasciava il messaggio letto e la ricerca successiva, che e' su `UNSEEN`, non lo
+  ritrovava piu': il verbale era perso senza traccia in coda. Ora si legge con
+  `BODY.PEEK[]`, un FETCH fallito o incompleto solleva, e il flag di lettura lo
+  mette il chiamante solo dopo un giro andato a buon fine.
+- **Il launcher apriva sempre la porta 5000.** `launcher.pyw` leggeva soltanto
+  `config.json`, ma dalla 2.6 `port` e `app_name` stanno in
+  `config.local.json`. Ora fonde i due file, con il locale che vince, come fa
+  `load_config()` in `app.py`.
+
+### Test
+- Nuovo `tests/test_hardening_audit.py` (29 test) sui quattro punti sopra: i
+  ruoli ammessi alle operazioni globali nelle due modalita' di installazione,
+  il FETCH che non tocca il flag di lettura, la neutralizzazione delle formule
+  fino al foglio scritto, e la porta letta dal launcher.
+- La suite completa e' a 597 test.
+
+---
+
 ## [2.8.0] - 2026-08-28
 
 Release di correzione: un audit della codebase ha trovato sedici difetti, in

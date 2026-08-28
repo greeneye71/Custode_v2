@@ -64,6 +64,8 @@ Ti verrà fornito il testo (o il PDF) di uno o più verbali/rapporti di interven
 
 Devi estrarre i dati e restituire un ARRAY JSON. Ogni elemento dell'array rappresenta un intervento su un singolo apparecchio e contiene:
 - matricola (il numero di serie/matricola dell'apparecchio su cui è stato fatto l'intervento)
+- marca (produttore dell'apparecchio, null se non indicato)
+- modello (modello dell'apparecchio, null se non indicato)
 - tipo (uno tra: preventiva, correttiva, verifica, calibrazione)
 - data_intervento (formato YYYY-MM-DD)
 - tecnico_ditta (nome del tecnico e/o ditta che ha eseguito l'intervento)
@@ -77,7 +79,7 @@ REGOLE:
 - Restituisci SOLO un array JSON valido, senza altro testo
 - Se il documento riguarda un solo apparecchio, restituisci un array con un solo elemento
 - Se il documento riguarda più apparecchi (pagine diverse, sezioni diverse), restituisci un elemento per ciascuno
-- La matricola è fondamentale per identificare l'apparecchio
+- La matricola è fondamentale per identificare l'apparecchio; riporta anche marca e modello quando compaiono, servono a distinguere apparecchi diversi con la stessa matricola
 - Per il tipo, deduci dal contesto: "manutenzione programmata" -> "preventiva", "guasto" -> "correttiva", etc.
 - Se la data non è in formato standard, convertila in YYYY-MM-DD
 - Se non trovi un campo, usa null
@@ -884,7 +886,7 @@ def find_duplicates(items, divisione_id, struttura_id=None):
     """Match extracted items against existing apparecchi in the database.
     Filtra per struttura_id quando disponibile per garantire isolamento multi-tenant.
     """
-    from models import query_one, query_all
+    from models import query_one, query_all, scegli_apparecchio
 
     results = []
     for item in items:
@@ -900,21 +902,40 @@ def find_duplicates(items, divisione_id, struttura_id=None):
         descrizione = item.get('descrizione', '').strip() if item.get('descrizione') else ''
 
         if matricola:
+            # UNIQUE e' su (struttura_id, modello, matricola): la matricola da
+            # sola puo' tornare piu' righe. Prenderne una a caso significava
+            # dichiarare "duplicato esatto" di un apparecchio che poteva non
+            # essere quello del documento.
             if struttura_id:
-                existing = query_one(
+                candidati = query_all(
                     "SELECT * FROM apparecchi WHERE matricola = ? AND struttura_id = ? AND stato != 'dismesso'",
                     (matricola, struttura_id)
                 )
             else:
-                existing = query_one(
+                candidati = query_all(
                     "SELECT * FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
                     (matricola,)
                 )
+            existing, motivo = scegli_apparecchio(candidati,
+                                                  modello=item.get('modello'),
+                                                  marca=item.get('marca'))
             if existing:
                 result['match_type'] = 'esatto'
                 result['match_id'] = existing['id']
-                result['match_confidence'] = 1.0
+                result['match_confidence'] = 1.0 if motivo == 'matricola' else 0.8
                 result['match_info'] = f"{existing['marca']} {existing['modello']}"
+                results.append(result)
+                continue
+            if motivo == 'ambiguo':
+                # Non e' ne' nuovo ne' abbinato: senza una scelta umana
+                # importarlo creerebbe un doppione della matricola.
+                item['_match_ambiguo'] = [
+                    {'id': c['id'], 'marca': c['marca'], 'modello': c['modello']}
+                    for c in candidati
+                ]
+                result['match_type'] = 'ambiguo'
+                result['match_info'] = ', '.join(
+                    f"{c['marca']} {c['modello']}" for c in candidati)
                 results.append(result)
                 continue
 

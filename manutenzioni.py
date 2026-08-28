@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile, filtro_divisione)
+                    nome_file_unico, apparecchio_accessibile, filtro_divisione)
 
 manutenzioni_bp = Blueprint('manutenzioni', __name__)
 
@@ -106,7 +106,7 @@ def _save_verbale(file_obj, manutenzione_id, struttura_id=None):
     if ext not in ALLOWED_VERBALE_EXT:
         return None
     uploads_dir, rel_prefix = upload_subdir('verbali', struttura_id)
-    safe_name = secure_filename(f"{int(datetime.now().timestamp())}_{file_obj.filename}")
+    safe_name = nome_file_unico(file_obj.filename)
     full_path = os.path.join(uploads_dir, safe_name)
     file_obj.save(full_path)
     return f"{rel_prefix}/{safe_name}"

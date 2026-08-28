@@ -73,10 +73,12 @@
           {% endif %}
         </td>
         <td class="text-end">
-          <a href="{{ url_for('auth.impersona_struttura', struttura_id=s.id) }}"
-             class="btn btn-sm btn-outline-primary me-1">
-            <i class="bi bi-box-arrow-in-right me-1"></i>Entra
-          </a>
+          <form method="post" action="{{ url_for('auth.impersona_struttura', struttura_id=s.id) }}" class="d-inline me-1">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-box-arrow-in-right me-1"></i>Entra
+            </button>
+          </form>
           <a href="{{ url_for('strutture.modifica', struttura_id=s.id) }}"
              class="btn btn-sm btn-outline-secondary">
             <i class="bi bi-pencil me-1"></i>Gestisci

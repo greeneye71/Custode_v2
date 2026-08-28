@@ -759,4 +759,4 @@ def test_la_versione_e_coerente_ovunque():
     import app as modulo_app
     with open(os.path.join(RADICE, 'config.json'), encoding='utf-8') as f:
         config = _json.load(f)
-    assert config['version'] == modulo_app.APP_VERSION == '2.8.0'
+    assert config['version'] == modulo_app.APP_VERSION == '2.8.1'

@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config, \
-    upload_subdir, percorso_logo_struttura
+    upload_subdir, nome_file_unico, percorso_logo_struttura
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
@@ -1039,7 +1039,7 @@ def carica_logo(struttura_id):
     vecchio_logo_path = (precedente or {}).get('logo_path')
 
     cartella, prefisso = upload_subdir('loghi', struttura_id)
-    nome = secure_filename(f"{int(datetime.now().timestamp())}_{file.filename}")
+    nome = nome_file_unico(file.filename)
     nuovo_logo_path = f"{prefisso}/{nome}"
     file.save(os.path.join(cartella, nome))
     execute("UPDATE strutture SET logo_path = ? WHERE id = ?",

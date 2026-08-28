@@ -7,6 +7,7 @@ import sqlite3
 import os
 import logging
 from flask import g, current_app
+from werkzeug.utils import secure_filename
 
 from schema_impianti import (
     DDL_IMPIANTI,
@@ -59,6 +60,26 @@ def upload_subdir(subdir, struttura_id=None, uploads_base=None, single_struttura
 
     os.makedirs(abs_path, exist_ok=True)
     return abs_path, rel_prefix
+
+
+def nome_file_unico(filename, prefisso=None):
+    """Nome su disco per un file caricato, che non puo' collidere con un altro.
+
+    Il nome originale passa da secure_filename(); davanti ci vanno il momento
+    del caricamento e un token casuale. Il solo timestamp al secondo non
+    bastava: due file omonimi caricati nello stesso secondo — due verbali
+    'scan.pdf', due allegati della stessa email — finivano sullo stesso
+    percorso, e il primo veniva sovrascritto restando citato a database.
+    """
+    import time
+    import uuid
+    base = secure_filename(filename or '')
+    if not base:
+        base = 'file'
+    parti = [str(int(time.time())), uuid.uuid4().hex[:8], base]
+    if prefisso:
+        parti.insert(0, secure_filename(prefisso))
+    return '_'.join(parti)
 
 
 # Colonne che contengono un percorso relativo dentro uploads/, con la query
@@ -932,6 +953,83 @@ def apparecchio_accessibile(apparecchio_id):
         if app_row['divisione_id'] not in accessible_ids:
             return None
     return app_row
+
+
+def divisione_accessibile(divisione_id):
+    """Verifica che la divisione sia una destinazione lecita per chi scrive.
+
+    Gemella di apparecchio_accessibile() per i casi in cui il bersaglio della
+    scrittura non e' un apparecchio esistente ma una divisione scelta in un
+    form: creazione di una scheda da import, conferma di un verbale email.
+    Fino alla 2.8.0 questi punti convalidavano solo la struttura, cosi' un
+    ruolo 'utente' poteva depositare dati in un reparto non suo.
+
+    Restituisce la riga della divisione, oppure None se non accessibile.
+    """
+    if not divisione_id:
+        return None
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        div = query_one(
+            "SELECT * FROM divisioni WHERE id = ? AND struttura_id = ?",
+            (divisione_id, struttura_id)
+        )
+    elif g.user['ruolo'] == 'superadmin':
+        div = query_one("SELECT * FROM divisioni WHERE id = ?", (divisione_id,))
+    else:
+        return None
+    if not div:
+        return None
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        accessible_ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if div['id'] not in accessible_ids:
+            return None
+    return div
+
+
+def scegli_apparecchio(candidati, modello=None, marca=None):
+    """Sceglie a quale apparecchio appartiene un documento, o rifiuta di farlo.
+
+    La chiave naturale dello schema e' UNIQUE(struttura_id, modello, matricola):
+    la matricola da sola NON identifica un apparecchio, due modelli diversi
+    possono portarla. Fino alla 2.8.0 tutti i matcher facevano fetchone() sulla
+    sola matricola, quindi con due candidati la scelta era arbitraria e un
+    verbale o una verifica potevano essere scritti sul dispositivo sbagliato.
+
+    Qui, quando il documento non basta a decidere, non si decide: si restituisce
+    None e la riga finisce in scelta manuale.
+
+    `candidati` sono le righe gia' filtrate per matricola e per scope (struttura
+    e divisione): questa funzione non interroga il database e non conosce Flask,
+    cosi' la usano anche i matcher che lavorano su una sqlite3.Connection nuda.
+
+    Restituisce (riga, motivo) con motivo in:
+      'nessuno'            nessun candidato
+      'matricola'          candidato unico
+      'matricola+modello'  piu' candidati, uno solo combacia per modello (e marca)
+      'ambiguo'            piu' candidati e nessuna certezza: non associare
+    """
+    candidati = list(candidati or [])
+    if not candidati:
+        return None, 'nessuno'
+    if len(candidati) == 1:
+        return candidati[0], 'matricola'
+
+    def _norm(valore):
+        return (valore or '').strip().lower()
+
+    modello_n = _norm(modello)
+    if not modello_n:
+        return None, 'ambiguo'
+    ristretti = [c for c in candidati if _norm(c['modello']) == modello_n]
+    marca_n = _norm(marca)
+    if marca_n:
+        per_marca = [c for c in ristretti if _norm(c['marca']) == marca_n]
+        if per_marca:
+            ristretti = per_marca
+    if len(ristretti) == 1:
+        return ristretti[0], 'matricola+modello'
+    return None, 'ambiguo'
 
 
 def impianto_accessibile(impianto_id):

@@ -15,7 +15,8 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required, tecnico_o_admin_required
 from models import (query_one, query_all, execute, log_attivita,
-                    upload_subdir, filtro_divisione, impianto_accessibile)
+                    upload_subdir, nome_file_unico, filtro_divisione,
+                    impianto_accessibile)
 import impianti_service
 from impianti_catalogo import voci_per_tipo, voci_mancanti
 
@@ -416,7 +417,7 @@ def carica_documento(impianto_id):
         tipo = 'altro'
 
     uploads_dir, rel_prefix = upload_subdir('impianti', impianto['struttura_id'])
-    filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+    filename = nome_file_unico(file.filename)
     filepath = os.path.join(uploads_dir, filename)
     file.save(filepath)
 
@@ -702,7 +703,7 @@ def nuovo_intervento(impianto_id):
                                     impianto_id=impianto_id))
         uploads_dir, rel_prefix = upload_subdir('impianti',
                                                 impianto['struttura_id'])
-        filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+        filename = nome_file_unico(file.filename)
         file.save(os.path.join(uploads_dir, filename))
         verbale_path = f"{rel_prefix}/{filename}"
 

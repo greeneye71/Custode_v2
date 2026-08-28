@@ -29,9 +29,10 @@
     <div class="alert alert-info alert-sm py-1 px-3 mb-0 rounded-0 border-0 d-flex align-items-center">
       <i class="bi bi-shield-lock me-2"></i>
       <small>Superadmin › <strong>{{ g_struttura.nome }}</strong></small>
-      <a href="{{ url_for('auth.esci_impersonazione') }}" class="btn btn-sm btn-outline-dark ms-3 py-0">
-        Esci
-      </a>
+      <form method="post" action="{{ url_for('auth.esci_impersonazione') }}" class="d-inline ms-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-outline-dark py-0">Esci</button>
+      </form>
     </div>
     {% endif %}
 
@@ -145,21 +146,25 @@
                         <ul class="dropdown-menu dropdown-menu-end">
                             {% if current_user is defined and current_user.ruolo in ('admin', 'tecnico') %}
                             <li>
-                                <a class="dropdown-item {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == 'tutte' %}active{% endif %}"
-                                   href="{{ url_for('auth.cambia_divisione', divisione_id='tutte') }}">
-                                    <i class="bi bi-collection me-2"></i> Tutte le divisioni
-                                </a>
+                                <form method="post" action="{{ url_for('auth.cambia_divisione', divisione_id='tutte') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="dropdown-item {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == 'tutte' %}active{% endif %}">
+                                        <i class="bi bi-collection me-2"></i> Tutte le divisioni
+                                    </button>
+                                </form>
                             </li>
                             <li><hr class="dropdown-divider"></li>
                             {% endif %}
                             {% for div in divisioni_accessibili %}
                             <li>
-                                <a class="dropdown-item d-flex align-items-center
-                                          {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == div.id %}active{% endif %}"
-                                   href="{{ url_for('auth.cambia_divisione', divisione_id=div.id) }}">
-                                    <span class="divisione-dot me-2" style="background-color: {{ div.colore }}"></span>
-                                    {{ div.nome }}
-                                </a>
+                                <form method="post" action="{{ url_for('auth.cambia_divisione', divisione_id=div.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="dropdown-item d-flex align-items-center
+                                              {% if divisione_attiva is defined and divisione_attiva and divisione_attiva.id == div.id %}active{% endif %}">
+                                        <span class="divisione-dot me-2" style="background-color: {{ div.colore }}"></span>
+                                        {{ div.nome }}
+                                    </button>
+                                </form>
                             </li>
                             {% endfor %}
                         </ul>
@@ -207,9 +212,12 @@
                             {% endif %}
                             <li><hr class="dropdown-divider"></li>
                             <li>
-                                <a class="dropdown-item text-danger" href="{{ url_for('auth.logout') }}">
-                                    <i class="bi bi-box-arrow-right me-2"></i> Esci
-                                </a>
+                                <form method="post" action="{{ url_for('auth.logout') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="dropdown-item text-danger">
+                                        <i class="bi bi-box-arrow-right me-2"></i> Esci
+                                    </button>
+                                </form>
                             </li>
                         </ul>
                     </li>

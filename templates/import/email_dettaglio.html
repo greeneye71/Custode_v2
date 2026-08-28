@@ -13,7 +13,7 @@
 </div>
 
 <div class="row g-4">
-    {# Left: Email info + Extracted data #}
+    {# Sinistra: dati email + una scheda per ogni riga estratta #}
     <div class="col-lg-8">
         {# Email info #}
         <div class="card mb-4">
@@ -45,86 +45,161 @@
             </div>
         </div>
 
-        {# Extracted data form #}
-        <div class="card">
+        {# Righe gia' lavorate: restano visibili, con il motivo. #}
+        {% if righe_chiuse %}
+        <div class="card mb-4">
             <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-robot me-2"></i>Dati estratti dall'AI</h5>
+                <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Righe gi&agrave; lavorate
+                    <span class="badge bg-secondary ms-2">{{ righe_chiuse|length }}</span>
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width:4rem">#</th>
+                            <th>Matricola</th>
+                            <th>Data</th>
+                            <th>Stato</th>
+                            <th>Nota</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for riga in righe_chiuse %}
+                        <tr>
+                            <td>{{ riga.numero }}</td>
+                            <td>{{ riga.dati.get('matricola', '') or '-' }}</td>
+                            <td>{{ riga.dati.get('data_intervento') or riga.dati.get('data_verifica') or '-' }}</td>
+                            <td>
+                                {% if riga.stato == 'imported' %}
+                                <span class="badge bg-success">Importata</span>
+                                {% elif riga.stato == 'rejected' %}
+                                <span class="badge bg-danger">Scartata</span>
+                                {% else %}
+                                <span class="badge bg-secondary">{{ riga.stato }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="small text-muted">{{ riga.nota or '' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {# Righe da rivedere: una scheda e un form ciascuna. #}
+        {% if not righe_pendenti %}
+        <div class="alert alert-info">
+            <i class="bi bi-info-circle me-2"></i>
+            Nessuna riga in attesa di revisione per questo verbale.
+        </div>
+        {% endif %}
+
+        {% for riga in righe_pendenti %}
+        {% set i = loop.index %}
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-robot me-2"></i>Dati estratti dall'AI
+                    {% if righe_pendenti|length > 1 or righe_chiuse %}
+                    <span class="text-muted small ms-2">riga {{ riga.numero }}</span>
+                    {% endif %}
+                </h5>
+                {% if riga.nota %}
+                <span class="badge bg-warning text-dark">{{ riga.nota }}</span>
+                {% endif %}
             </div>
             <div class="card-body">
-                <form method="POST" action="{{ url_for('import.email_conferma', id=record.id) }}">
+                <form method="POST" action="{{ url_for('import.email_conferma', id=record.id) }}"
+                      id="form-conferma-{{ i }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    {% if riga.preview_id %}
+                    <input type="hidden" name="preview_id" value="{{ riga.preview_id }}">
+                    {% endif %}
                     <div class="row g-3">
                         <div class="col-md-6">
-                            <label for="matricola" class="form-label">Matricola <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="matricola" name="matricola"
-                                   value="{{ parsed.get('matricola', '') }}" required>
+                            <label for="matricola-{{ i }}" class="form-label">Matricola <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="matricola-{{ i }}" name="matricola"
+                                   value="{{ riga.dati.get('matricola', '') }}" required>
                         </div>
                         <div class="col-md-6">
-                            <label for="tipo" class="form-label">Tipo intervento <span class="text-danger">*</span></label>
-                            <select class="form-select" id="tipo" name="tipo" required>
-                                <option value="preventiva" {% if parsed.get('tipo') == 'preventiva' %}selected{% endif %}>Preventiva</option>
-                                <option value="correttiva" {% if parsed.get('tipo') == 'correttiva' %}selected{% endif %}>Correttiva</option>
-                                <option value="verifica" {% if parsed.get('tipo') == 'verifica' %}selected{% endif %}>Verifica</option>
-                                <option value="calibrazione" {% if parsed.get('tipo') == 'calibrazione' %}selected{% endif %}>Calibrazione</option>
+                            <label for="tipo-{{ i }}" class="form-label">Tipo intervento <span class="text-danger">*</span></label>
+                            <select class="form-select" id="tipo-{{ i }}" name="tipo" required>
+                                <option value="preventiva" {% if riga.dati.get('tipo') == 'preventiva' %}selected{% endif %}>Preventiva</option>
+                                <option value="correttiva" {% if riga.dati.get('tipo') == 'correttiva' %}selected{% endif %}>Correttiva</option>
+                                <option value="verifica" {% if riga.dati.get('tipo') == 'verifica' %}selected{% endif %}>Verifica</option>
+                                <option value="calibrazione" {% if riga.dati.get('tipo') == 'calibrazione' %}selected{% endif %}>Calibrazione</option>
                             </select>
                         </div>
                         <div class="col-md-6">
-                            <label for="data_intervento" class="form-label">Data intervento <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control" id="data_intervento" name="data_intervento"
-                                   value="{{ parsed.get('data_intervento', '') }}" required>
+                            <label for="data_intervento-{{ i }}" class="form-label">Data intervento <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control" id="data_intervento-{{ i }}" name="data_intervento"
+                                   value="{{ riga.dati.get('data_intervento') or riga.dati.get('data_verifica') or '' }}" required>
                         </div>
                         <div class="col-md-6">
-                            <label for="tecnico_ditta" class="form-label">Tecnico/Ditta</label>
-                            <input type="text" class="form-control" id="tecnico_ditta" name="tecnico_ditta"
-                                   value="{{ parsed.get('tecnico_ditta', '') }}">
+                            <label for="tecnico_ditta-{{ i }}" class="form-label">Tecnico/Ditta</label>
+                            <input type="text" class="form-control" id="tecnico_ditta-{{ i }}" name="tecnico_ditta"
+                                   value="{{ riga.dati.get('tecnico_ditta', '') }}">
                         </div>
                         <div class="col-12">
-                            <label for="descrizione" class="form-label">Descrizione</label>
-                            <textarea class="form-control" id="descrizione" name="descrizione" rows="3">{{ parsed.get('descrizione', '') }}</textarea>
+                            <label for="descrizione-{{ i }}" class="form-label">Descrizione</label>
+                            <textarea class="form-control" id="descrizione-{{ i }}" name="descrizione" rows="3">{{ riga.dati.get('descrizione', '') }}</textarea>
                         </div>
                         <div class="col-md-4">
-                            <label for="esito" class="form-label">Esito</label>
-                            <input type="text" class="form-control" id="esito" name="esito"
-                                   value="{{ parsed.get('esito', '') }}">
+                            <label for="esito-{{ i }}" class="form-label">Esito</label>
+                            <input type="text" class="form-control" id="esito-{{ i }}" name="esito"
+                                   value="{{ riga.dati.get('esito', '') }}">
                         </div>
                         <div class="col-md-4">
-                            <label for="costo" class="form-label">Costo (&euro;)</label>
-                            <input type="number" class="form-control" id="costo" name="costo" step="0.01"
-                                   value="{{ parsed.get('costo', '') or '' }}">
+                            <label for="costo-{{ i }}" class="form-label">Costo (&euro;)</label>
+                            <input type="number" class="form-control" id="costo-{{ i }}" name="costo" step="0.01"
+                                   value="{{ riga.dati.get('costo', '') or '' }}">
                         </div>
                         <div class="col-md-4">
-                            <label for="prossima_scadenza" class="form-label">Prossima scadenza</label>
-                            <input type="date" class="form-control" id="prossima_scadenza" name="prossima_scadenza"
-                                   value="{{ parsed.get('prossima_scadenza', '') or '' }}">
+                            <label for="prossima_scadenza-{{ i }}" class="form-label">Prossima scadenza</label>
+                            <input type="date" class="form-control" id="prossima_scadenza-{{ i }}" name="prossima_scadenza"
+                                   value="{{ riga.dati.get('prossima_scadenza', '') or '' }}">
                         </div>
                         <div class="col-md-4">
-                            <label for="periodicita_giorni" class="form-label">Periodicit&agrave; (giorni)</label>
-                            <input type="number" class="form-control" id="periodicita_giorni" name="periodicita_giorni"
-                                   value="{{ parsed.get('periodicita_giorni', '') or '' }}">
+                            <label for="periodicita_giorni-{{ i }}" class="form-label">Periodicit&agrave; (giorni)</label>
+                            <input type="number" class="form-control" id="periodicita_giorni-{{ i }}" name="periodicita_giorni"
+                                   value="{{ riga.dati.get('periodicita_giorni', '') or '' }}">
                         </div>
 
-                        {% if apparecchio %}
+                        {% if riga.apparecchio %}
                         <div class="col-12">
                             <div class="alert alert-success mb-0">
                                 <i class="bi bi-check-circle me-2"></i>
                                 <strong>Apparecchio trovato:</strong>
-                                {{ apparecchio.marca }} {{ apparecchio.modello }}
-                                ({{ apparecchio.matricola }})
-                                - {{ apparecchio.divisione_nome or '' }}
-                                <input type="hidden" name="apparecchio_id" value="{{ apparecchio.id }}">
+                                {{ riga.apparecchio.marca }} {{ riga.apparecchio.modello }}
+                                ({{ riga.apparecchio.matricola }})
+                                - {{ riga.apparecchio.divisione_nome or '' }}
+                                <input type="hidden" name="apparecchio_id" value="{{ riga.apparecchio.id }}">
                             </div>
                         </div>
                         {% else %}
                         <div class="col-12">
+                            {% if riga.candidati_ambigui %}
+                            {# La matricola non basta: piu' apparecchi la portano e il
+                               verbale non dice quale. Meglio chiedere che indovinare. #}
                             <div class="alert alert-warning mb-0">
                                 <i class="bi bi-exclamation-triangle me-2"></i>
-                                <strong>Apparecchio non trovato</strong> con matricola "{{ parsed.get('matricola', '') }}".
+                                <strong>Matricola ambigua:</strong> "{{ riga.dati.get('matricola', '') }}"
+                                appartiene a {{ riga.candidati_ambigui|length }} apparecchi
+                                ({% for c in riga.candidati_ambigui %}{{ c.marca }} {{ c.modello }}{% if not loop.last %}, {% endif %}{% endfor %}).
+                                Scegli quello giusto:
+                            </div>
+                            {% else %}
+                            <div class="alert alert-warning mb-0">
+                                <i class="bi bi-exclamation-triangle me-2"></i>
+                                <strong>Apparecchio non trovato</strong> con matricola "{{ riga.dati.get('matricola', '') }}".
                                 Seleziona manualmente:
                             </div>
+                            {% endif %}
                         </div>
                         <div class="col-12">
-                            <label for="apparecchio_id" class="form-label">Apparecchio <span class="text-danger">*</span></label>
-                            <select class="form-select" id="apparecchio_id" name="apparecchio_id" required>
+                            <label for="apparecchio_id-{{ i }}" class="form-label">Apparecchio <span class="text-danger">*</span></label>
+                            <select class="form-select" id="apparecchio_id-{{ i }}" name="apparecchio_id" required>
                                 <option value="">-- Seleziona apparecchio --</option>
                                 {% for a in apparecchi_list %}
                                 <option value="{{ a.id }}">
@@ -137,24 +212,40 @@
                         {% endif %}
                     </div>
 
-                    <div class="d-flex gap-2 mt-4">
+                    <div class="mt-4">
                         <button type="submit" class="btn btn-success">
                             <i class="bi bi-check-lg me-1"></i> Conferma e Importa
                         </button>
-                        <form method="post" action="{{ url_for('import.email_scarta', id=record.id) }}" style="display:inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="btn btn-outline-danger"
-                                    onclick="return confirm('Scartare questo verbale?')">
-                                <i class="bi bi-x-lg me-1"></i> Scarta
-                            </button>
-                        </form>
                     </div>
                 </form>
+
+                {# Fuori dal form di conferma: un form dentro un altro form viene
+                   scartato dal browser, e il pulsante Scarta finiva per inviare
+                   la conferma. #}
+                {% if riga.preview_id %}
+                <form method="post" action="{{ url_for('import.email_scarta', id=record.id) }}" class="mt-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="preview_id" value="{{ riga.preview_id }}">
+                    <button type="submit" class="btn btn-outline-danger btn-sm"
+                            onclick="return confirm('Scartare questa riga?')">
+                        <i class="bi bi-x-lg me-1"></i> Scarta riga
+                    </button>
+                </form>
+                {% endif %}
             </div>
         </div>
+        {% endfor %}
+
+        <form method="post" action="{{ url_for('import.email_scarta', id=record.id) }}" class="mb-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-outline-danger"
+                    onclick="return confirm('Scartare tutto il verbale?')">
+                <i class="bi bi-x-lg me-1"></i> Scarta il verbale
+            </button>
+        </form>
     </div>
 
-    {# Right: AI response #}
+    {# Destra: risposta AI grezza #}
     <div class="col-lg-4">
         <div class="card">
             <div class="card-header">

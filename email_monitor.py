@@ -13,6 +13,7 @@ import hashlib
 import json
 import tempfile
 import logging
+import uuid
 import traceback
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
@@ -176,8 +177,13 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
     # BODY.PEEK[] non tocca il flag \Seen: e' chi chiama a segnare il
     # messaggio come letto, e solo se l'elaborazione e' arrivata in fondo.
     status, data = mail.fetch(msg_id, '(BODY.PEEK[])')
+    # Un errore qui deve *sollevare*: chi chiama segna il messaggio come letto
+    # subito dopo il ritorno, e un return silenzioso su un FETCH fallito
+    # bruciava il messaggio senza averlo mai letto davvero.
     if status != 'OK':
-        return
+        raise RuntimeError(f"FETCH non riuscito per l'email {msg_id}: {status}")
+    if not data or not data[0] or not isinstance(data[0], (tuple, list)) or len(data[0]) < 2:
+        raise RuntimeError(f"Risposta FETCH incompleta per l'email {msg_id}")
 
     raw_email = data[0][1]
     msg = email.message_from_bytes(raw_email)
@@ -217,7 +223,10 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
             safe_base = secure_filename(att.get('filename', '') or 'allegato.pdf')
             if not safe_base or safe_base == '.pdf':
                 safe_base = 'allegato.pdf'
-            safe_name = f"{int(datetime.now().timestamp())}_{idx}_{safe_base}"
+            # Token casuale e non solo timestamp+indice: due allegati con lo
+            # stesso nome arrivati nello stesso secondo si sovrascrivevano, e
+            # il primo verbale spariva dal disco restando citato a database.
+            safe_name = f"{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{safe_base}"
             pdf_path = os.path.join(uploads_dir, safe_name)
             with open(pdf_path, 'wb') as f:
                 f.write(att['data'])
@@ -250,59 +259,77 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                     items, ai_response = analyze_verifiche_from_pdf_document(pdf_path, api_key, ai_model, config=app_config, struttura_id=struttura_id)
                 else:
                     items, ai_response = analyze_verifiche_with_ai(pdf_text, api_key, ai_model, config=app_config, struttura_id=struttura_id)
-                auto_imported = False
                 apparecchio_id = None
                 tipo_import_value = 'verifica_elettrica'
+                righe_preview = []
+                verifiche_importate = 0
 
                 conn = sqlite3.connect(db_path, timeout=10)
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA foreign_keys = ON")
                 try:
                     for item in items:
-                        matricola = item.get('matricola', '').strip()
-                        item_app_id = _find_apparecchio(conn, matricola, divisione_id, struttura_id=struttura_id)
+                        matricola = (item.get('matricola') or '').strip()
+                        item_app_id = _find_apparecchio(
+                            conn, matricola, divisione_id, struttura_id=struttura_id,
+                            modello=item.get('modello'), marca=item.get('marca'))
 
-                        if item_app_id and item.get('data_verifica'):
-                            try:
-                                # Default 730 giorni (2 anni) se non indicato
-                                periodicita_v = int(item.get('periodicita_giorni') or 730)
-                                prossima = item.get('prossima_scadenza') or None
-                                if not prossima:
-                                    try:
-                                        d = datetime.strptime(item['data_verifica'], '%Y-%m-%d')
-                                        d += timedelta(days=periodicita_v)
-                                        prossima = d.strftime('%Y-%m-%d')
-                                    except ValueError:
-                                        pass
-                                esito_v = (item.get('esito') or 'positivo').strip().lower()
-                                if esito_v not in ('positivo', 'negativo', 'con_riserva'):
-                                    esito_v = 'positivo'
+                        if not item_app_id:
+                            righe_preview.append(_riga_preview(
+                                item, None, False,
+                                'Apparecchio non individuato dalla matricola'))
+                            continue
+                        if not item.get('data_verifica'):
+                            righe_preview.append(_riga_preview(
+                                item, item_app_id, False,
+                                'Data della verifica assente'))
+                            continue
+                        try:
+                            # Default 730 giorni (2 anni) se non indicato
+                            periodicita_v = int(item.get('periodicita_giorni') or 730)
+                            prossima = item.get('prossima_scadenza') or None
+                            if not prossima:
+                                try:
+                                    d = datetime.strptime(item['data_verifica'], '%Y-%m-%d')
+                                    d += timedelta(days=periodicita_v)
+                                    prossima = d.strftime('%Y-%m-%d')
+                                except ValueError:
+                                    pass
+                            esito_v = (item.get('esito') or 'positivo').strip().lower()
+                            if esito_v not in ('positivo', 'negativo', 'con_riserva'):
+                                esito_v = 'positivo'
 
-                                conn.execute(
-                                    """INSERT INTO verifiche
-                                       (apparecchio_id, data_verifica, prossima_scadenza,
-                                        periodicita_giorni, esito, tecnico_ditta, note)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                                    (
-                                        item_app_id,
-                                        item.get('data_verifica'),
-                                        prossima,
-                                        periodicita_v,
-                                        esito_v,
-                                        item.get('tecnico_ditta'),
-                                        item.get('note'),
-                                    )
+                            conn.execute(
+                                """INSERT INTO verifiche
+                                   (apparecchio_id, data_verifica, prossima_scadenza,
+                                    periodicita_giorni, esito, tecnico_ditta, note)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    item_app_id,
+                                    item.get('data_verifica'),
+                                    prossima,
+                                    periodicita_v,
+                                    esito_v,
+                                    item.get('tecnico_ditta'),
+                                    item.get('note'),
                                 )
-                                auto_imported = True
-                                apparecchio_id = item_app_id
-                                logger.info(f"Auto-importata verifica per apparecchio {matricola}")
-                            except Exception as e:
-                                logger.error(f"Errore auto-import verifica: {e}")
+                            )
+                            verifiche_importate += 1
+                            apparecchio_id = item_app_id
+                            righe_preview.append(_riga_preview(item, item_app_id, True))
+                            logger.info(f"Auto-importata verifica per apparecchio {matricola}")
+                        except Exception as e:
+                            logger.error(f"Errore auto-import verifica: {e}")
+                            righe_preview.append(_riga_preview(
+                                item, item_app_id, False,
+                                f"Errore in fase di inserimento: {e}"))
                     conn.commit()
                 finally:
                     conn.close()
 
                 parsed_data_str = json.dumps(items)
+                totale = len(items)
+                righe_imp = verifiche_importate
 
             else:
                 # Branch manutenzioni — il documento può contenere più interventi
@@ -315,6 +342,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
 
                 imported_count = 0
                 last_apparecchio_id = None
+                righe_preview = []
 
                 # Copy PDF to verbali folder for attachment to manutenzioni
                 from models import upload_subdir as _upload_subdir
@@ -326,7 +354,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                     uploads_base=_uploads_base,
                     single_struttura=(app_config or {}).get('single_struttura', False)
                 )
-                verbale_name = f"{int(datetime.now().timestamp())}_{idx}_{safe_base}"
+                verbale_name = f"{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:8]}_{safe_base}"
                 verbale_dest = os.path.join(verbali_dir, verbale_name)
                 import shutil
                 shutil.copy2(pdf_path, verbale_dest)
@@ -338,67 +366,81 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 try:
                     for parsed_data in parsed_items:
                         matricola = (parsed_data.get('matricola') or '').strip()
-                        apparecchio_id = _find_apparecchio(conn, matricola, divisione_id, struttura_id=struttura_id)
+                        apparecchio_id = _find_apparecchio(
+                            conn, matricola, divisione_id, struttura_id=struttura_id,
+                            modello=parsed_data.get('modello'), marca=parsed_data.get('marca'))
 
                         if apparecchio_id:
                             last_apparecchio_id = apparecchio_id
-
-                        if apparecchio_id and parsed_data.get('data_intervento'):
-                            try:
-                                tipo_m = (parsed_data.get('tipo') or 'preventiva').strip().lower()
-                                if tipo_m not in ('preventiva', 'correttiva', 'verifica', 'calibrazione'):
-                                    tipo_m = 'preventiva'
-                                conn.execute(
-                                    """INSERT INTO manutenzioni
-                                       (apparecchio_id, tipo, data_intervento, prossima_scadenza,
-                                        periodicita_giorni, tecnico_ditta, descrizione, esito, costo,
-                                        verbale_path)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                    (
-                                        apparecchio_id,
-                                        tipo_m,
-                                        parsed_data.get('data_intervento'),
-                                        parsed_data.get('prossima_scadenza') or None,
-                                        parsed_data.get('periodicita_giorni'),
-                                        parsed_data.get('tecnico_ditta'),
-                                        parsed_data.get('descrizione'),
-                                        parsed_data.get('esito'),
-                                        parsed_data.get('costo'),
-                                        verbale_rel_path
-                                    )
+                        else:
+                            righe_preview.append(_riga_preview(
+                                parsed_data, None, False,
+                                'Apparecchio non individuato dalla matricola'))
+                            continue
+                        if not parsed_data.get('data_intervento'):
+                            righe_preview.append(_riga_preview(
+                                parsed_data, apparecchio_id, False,
+                                'Data intervento assente'))
+                            continue
+                        try:
+                            tipo_m = (parsed_data.get('tipo') or 'preventiva').strip().lower()
+                            if tipo_m not in ('preventiva', 'correttiva', 'verifica', 'calibrazione'):
+                                tipo_m = 'preventiva'
+                            conn.execute(
+                                """INSERT INTO manutenzioni
+                                   (apparecchio_id, tipo, data_intervento, prossima_scadenza,
+                                    periodicita_giorni, tecnico_ditta, descrizione, esito, costo,
+                                    verbale_path)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    apparecchio_id,
+                                    tipo_m,
+                                    parsed_data.get('data_intervento'),
+                                    parsed_data.get('prossima_scadenza') or None,
+                                    parsed_data.get('periodicita_giorni'),
+                                    parsed_data.get('tecnico_ditta'),
+                                    parsed_data.get('descrizione'),
+                                    parsed_data.get('esito'),
+                                    parsed_data.get('costo'),
+                                    verbale_rel_path
                                 )
-                                imported_count += 1
-                                logger.info(f"Auto-importata manutenzione per apparecchio {matricola} con verbale allegato")
-                            except Exception as e:
-                                logger.error(f"Errore auto-import manutenzione {matricola}: {e}")
+                            )
+                            imported_count += 1
+                            righe_preview.append(_riga_preview(parsed_data, apparecchio_id, True))
+                            logger.info(f"Auto-importata manutenzione per apparecchio {matricola} con verbale allegato")
+                        except Exception as e:
+                            logger.error(f"Errore auto-import manutenzione {matricola}: {e}")
+                            righe_preview.append(_riga_preview(
+                                parsed_data, apparecchio_id, False,
+                                f"Errore in fase di inserimento: {e}"))
                     conn.commit()
                 finally:
                     conn.close()
 
-                auto_imported = imported_count > 0
                 apparecchio_id = last_apparecchio_id
                 parsed_data_str = json.dumps(parsed_items)
-
-            # Save import record
-            if tipo_import_value == 'verbale_email':
                 totale = len(parsed_items)
                 righe_imp = imported_count
-            else:
-                totale = len(items)
-                righe_imp = 1 if auto_imported else 0
+
+            # Save import record.
+            # 'completed' solo se *ogni* elemento estratto e' stato importato:
+            # fino alla 2.8.0 bastava un intervento su dieci, e gli altri nove
+            # sparivano dalla coda sopravvivendo solo dentro il JSON grezzo.
+            completato = totale > 0 and righe_imp >= totale
             _save_email_import(
                 db_path, divisione_id, att['filename'],
                 f"{uploads_rel}/{safe_name}", sender, subject,
                 tipo_import_value=tipo_import_value,
-                stato='completed' if auto_imported else 'pending',
+                stato='completed' if completato else 'pending',
                 ai_prompt=f"[System prompt + PDF text ({len(pdf_text)} chars)]",
                 ai_response=ai_response,
                 parsed_data=parsed_data_str,
                 apparecchio_id=apparecchio_id,
-                errori=None if auto_imported else 'In attesa di revisione manuale',
+                errori=None if completato else 'In attesa di revisione manuale',
                 totale_righe=totale,
                 righe_importate=righe_imp,
-                struttura_id=struttura_id
+                struttura_id=struttura_id,
+                righe=righe_preview
             )
 
         except Exception as e:
@@ -414,34 +456,49 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
             )
 
 
-def _find_apparecchio(conn, matricola, divisione_id=None, struttura_id=None):
-    """Trova apparecchio per matricola dentro lo scope indicato.
+def _find_apparecchio(conn, matricola, divisione_id=None, struttura_id=None,
+                      modello=None, marca=None):
+    """Trova l'apparecchio di una matricola dentro lo scope indicato.
 
     Senza struttura_id né divisione_id non si cerca: la matricola non è unica
     fra strutture diverse e fino alla 2.7.1 il fallback senza scope poteva
     restituire l'apparecchio di un altro tenant, sul quale poi venivano scritte
     manutenzioni e verifiche. Nessuno scope significa nessun risultato.
+
+    Nemmeno dentro lo scope la matricola è una chiave: UNIQUE è su
+    struttura+modello+matricola. Se più apparecchi la portano e il documento
+    non dice quale, si restituisce None e il verbale finisce in coda per la
+    scelta manuale: scrivere una manutenzione sull'apparecchio sbagliato è
+    peggio che non scriverla.
     """
     if not matricola:
         return None
+    from models import scegli_apparecchio as _scegli
+
+    def _decidi(righe):
+        riga, _motivo = _scegli(righe, modello=modello, marca=marca)
+        return riga['id'] if riga else None
+
     # Priorità: filtra per struttura_id se disponibile
     if struttura_id:
-        row = conn.execute(
-            "SELECT id FROM apparecchi WHERE matricola = ? AND struttura_id = ? AND stato != 'dismesso'",
+        righe = conn.execute(
+            "SELECT id, marca, modello FROM apparecchi "
+            "WHERE matricola = ? AND struttura_id = ? AND stato != 'dismesso'",
             (matricola, struttura_id)
-        ).fetchone()
-        if row:
-            return row['id']
+        ).fetchall()
+        if righe:
+            return _decidi(righe)
         if not divisione_id:
             return None
     # Fallback: filtra per divisione_id
     if not divisione_id:
         return None
-    row = conn.execute(
-        "SELECT id FROM apparecchi WHERE matricola = ? AND divisione_id = ? AND stato != 'dismesso'",
+    righe = conn.execute(
+        "SELECT id, marca, modello FROM apparecchi "
+        "WHERE matricola = ? AND divisione_id = ? AND stato != 'dismesso'",
         (matricola, divisione_id)
-    ).fetchone()
-    return row['id'] if row else None
+    ).fetchall()
+    return _decidi(righe)
 
 
 def _decode_header(value):
@@ -458,17 +515,38 @@ def _decode_header(value):
     return ' '.join(parts)
 
 
+def _riga_preview(dati, apparecchio_id, importata, nota=None):
+    """Descrive l'esito di un singolo elemento estratto dal documento.
+
+    'imported' e' definitivo, 'pending' significa che l'elemento aspetta la
+    revisione manuale: e' il motivo per cui la nota accompagna sempre la riga.
+    """
+    return {
+        'dati': dati,
+        'apparecchio_id': apparecchio_id,
+        'confidenza': 1.0 if apparecchio_id else None,
+        'stato': 'imported' if importata else 'pending',
+        'nota': nota
+    }
+
+
 def _save_email_import(db_path, divisione_id, filename, filepath, email_from, email_subject,
                        tipo_import_value='verbale_email', stato='pending', ai_prompt=None,
                        ai_response=None, parsed_data=None, apparecchio_id=None, errori=None,
-                       totale_righe=1, righe_importate=None, struttura_id=None):
-    """Save an email import record to the database."""
+                       totale_righe=1, righe_importate=None, struttura_id=None, righe=None):
+    """Salva il record di import e una riga import_preview per ogni elemento.
+
+    Le righe sono l'unico posto in cui un elemento non importato resta
+    raggiungibile: senza di esse la revisione manuale vedeva solo il primo
+    intervento del PDF e gli altri erano leggibili solo nel JSON grezzo.
+    Restituisce l'id del record creato.
+    """
     if righe_importate is None:
         righe_importate = 1 if stato == 'completed' else 0
     import sqlite3
     conn = sqlite3.connect(db_path, timeout=10)
     try:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO import_history
                (tipo_import, filename, filepath, divisione_id, struttura_id,
                 email_from, email_subject,
@@ -482,7 +560,24 @@ def _save_email_import(db_path, divisione_id, filename, filepath, email_from, em
                 errori
             )
         )
+        import_id = cur.lastrowid
+        for numero, riga in enumerate(righe or [], start=1):
+            conn.execute(
+                """INSERT INTO import_preview
+                   (import_id, riga_numero, dati_estratti, apparecchio_match_id,
+                    match_confidence, stato, note_revisione)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    import_id, numero,
+                    json.dumps(riga.get('dati') or {}),
+                    riga.get('apparecchio_id'),
+                    riga.get('confidenza'),
+                    riga.get('stato') or 'pending',
+                    riga.get('nota')
+                )
+            )
         conn.commit()
+        return import_id
     finally:
         conn.close()
 

@@ -183,7 +183,11 @@ def _installazione_singola_struttura():
     garantire fra tenant diversi)."""
     if current_app.config.get('APP_CONFIG', {}).get('single_struttura', False):
         return True
-    row = query_one("SELECT COUNT(*) AS cnt FROM strutture WHERE attiva = 1")
+    # Si contano tutte le strutture, non solo le attive: disattivarne una non
+    # ne cancella i dati, e backup, ripristino, reset e configurazione globale
+    # li toccano comunque. Fino alla 2.8.0 bastava disattivare le altre
+    # strutture perche' l'admin della rimanente ereditasse i poteri globali.
+    row = query_one("SELECT COUNT(*) AS cnt FROM strutture")
     return bool(row) and row['cnt'] <= 1
 
 
@@ -662,9 +666,10 @@ def password_dimenticata():
     return redirect(url_for('auth.login'))
 
 
-@auth_bp.route('/logout')
+@auth_bp.route('/logout', methods=['POST'])
 def logout():
-    """Logout and clear session."""
+    """Chiude la sessione. Solo POST: in GET bastava un <img> su una pagina
+    esterna per sloggare chi la apriva."""
     token = session.get('token')
     if token:
         # Get user info for logging before clearing
@@ -762,10 +767,12 @@ def cambio_password():
     return redirect(url_for('auth.login'))
 
 
-@auth_bp.route('/divisione/<divisione_id>')
+@auth_bp.route('/divisione/<divisione_id>', methods=['POST'])
 @login_required
 def cambia_divisione(divisione_id):
-    """Switch the active division."""
+    """Cambia la divisione attiva. Solo POST con CSRF: cambiare l'ambito di
+    lavoro altrui con un link e' un CSRF a tutti gli effetti, e qui sposta
+    quello che l'utente vede e dove scrive."""
     if divisione_id == 'tutte' and g.user['ruolo'] in ('admin', 'superadmin', 'tecnico'):
         session['divisione_attiva_id'] = 'tutte'
     else:
@@ -788,10 +795,13 @@ def cambia_divisione(divisione_id):
     return redirect(ref or url_for('index'))
 
 
-@auth_bp.route('/impersona/<int:struttura_id>')
+@auth_bp.route('/impersona/<int:struttura_id>', methods=['POST'])
 @superadmin_required
 def impersona_struttura(struttura_id):
-    """Superadmin entra nel contesto di una struttura specifica."""
+    """Superadmin entra nel contesto di una struttura specifica.
+
+    Solo POST con CSRF: e' l'operazione che decide su quale tenant scriveranno
+    tutte le richieste successive del superadmin."""
     struttura = query_one(
         "SELECT id, nome FROM strutture WHERE id = ? AND attiva = 1", (struttura_id,)
     )
@@ -809,7 +819,7 @@ def impersona_struttura(struttura_id):
     return redirect(url_for('index'))
 
 
-@auth_bp.route('/esci-impersonazione')
+@auth_bp.route('/esci-impersonazione', methods=['POST'])
 @superadmin_required
 def esci_impersonazione():
     """Superadmin torna alla vista globale."""
@@ -833,7 +843,7 @@ def tecnico_seleziona_struttura_page():
     return render_template('auth/seleziona_struttura_tecnico.html', strutture=strutture)
 
 
-@auth_bp.route('/tecnico/struttura/<int:struttura_id>')
+@auth_bp.route('/tecnico/struttura/<int:struttura_id>', methods=['POST'])
 @login_required
 def tecnico_seleziona_struttura(struttura_id):
     """Tecnico imposta la struttura attiva (verifica accesso)."""

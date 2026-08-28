@@ -7,6 +7,26 @@ import io
 from datetime import datetime, timedelta
 
 
+# I caratteri con cui Excel e LibreOffice riconoscono l'inizio di una formula.
+_PREFISSI_FORMULA = ('=', '+', '-', '@', chr(9), chr(13))
+
+
+def cella_sicura(valore):
+    """Il valore da scrivere in un foglio, senza che diventi una formula.
+
+    Excel e LibreOffice eseguono il contenuto di ogni cella di testo che
+    inizia per ``=``, ``+``, ``-`` o ``@``: la descrizione di un apparecchio o
+    il nome di una ditta — testo che l'utente scrive e che noi riesportiamo —
+    puo' cosi' diventare codice che parte sul computer di chi apre il report
+    (CSV injection). L'apostrofo davanti forza il testo e non viene mostrato.
+
+    Numeri e date passano intatti: vanno scritti come tali, non come stringhe.
+    """
+    if isinstance(valore, str) and valore[:1] in _PREFISSI_FORMULA:
+        return "'" + valore
+    return valore
+
+
 def export_apparecchi_excel(apparecchi, divisione_nome=''):
     """Export apparecchi list to Excel (xlsx) using openpyxl."""
     from openpyxl import Workbook
@@ -71,7 +91,7 @@ def export_apparecchi_excel(apparecchi, divisione_nome=''):
             app.get('divisione_nome', ''),
         ]
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
 
@@ -146,7 +166,7 @@ def export_manutenzioni_excel(manutenzioni, title_extra=''):
             m.get('divisione_nome', ''),
         ]
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
 
@@ -226,7 +246,7 @@ def export_scadenzario_excel(scadenze, title_extra=''):
         ]
         fill = priority_fills.get(priorita, PatternFill())
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
             cell.fill = fill
@@ -305,7 +325,7 @@ def export_verifiche_excel(verifiche, title_extra=''):
         ]
         fill = esito_fills.get(esito, PatternFill())
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
             if col == 4:
@@ -327,20 +347,21 @@ def export_verifiche_excel(verifiche, title_extra=''):
 def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export verifiche to PDF."""
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     class PDF(FPDF):
         def header(self):
             self.set_font('Helvetica', 'B', 14)
-            self.cell(0, 8, app_name, ln=True, align='C')
+            self.cell(0, 8, app_name, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', '', 9)
             subtitle = 'Registro Verifiche di Sicurezza Elettrica'
             if divisione_nome:
                 subtitle += f' - {divisione_nome}'
             if structure_name:
                 subtitle = f'{structure_name} - {subtitle}'
-            self.cell(0, 5, subtitle, ln=True, align='C')
+            self.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', 'I', 8)
-            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.ln(3)
 
         def footer(self):
@@ -398,7 +419,7 @@ def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_na
     pdf.set_font('Helvetica', 'I', 9)
     positivi = sum(1 for v in verifiche if v.get('esito') == 'positivo')
     negativi = sum(1 for v in verifiche if v.get('esito') == 'negativo')
-    pdf.cell(0, 5, f"Totale verifiche: {len(verifiche)} | Positive: {positivi} | Negative: {negativi}", ln=True)
+    pdf.cell(0, 5, f"Totale verifiche: {len(verifiche)} | Positive: {positivi} | Negative: {negativi}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     buffer = io.BytesIO()
     pdf.output(buffer)
@@ -430,7 +451,7 @@ def _foglio_semplice(titolo, intestazioni, righe_valori):
 
     for indice, valori in enumerate(righe_valori, start=4):
         for colonna, valore in enumerate(valori, start=1):
-            ws.cell(row=indice, column=colonna, value=valore)
+            ws.cell(row=indice, column=colonna, value=cella_sicura(valore))
 
     for colonna, etichetta in enumerate(intestazioni, start=1):
         larghezza = max([len(str(etichetta))] +
@@ -637,20 +658,21 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
 def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export apparecchi list to PDF using fpdf2."""
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     class PDF(FPDF):
         def header(self):
             self.set_font('Helvetica', 'B', 14)
-            self.cell(0, 8, app_name, ln=True, align='C')
+            self.cell(0, 8, app_name, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', '', 9)
             subtitle = 'Inventario Apparecchi Elettromedicali'
             if divisione_nome:
                 subtitle += f' - {divisione_nome}'
             if structure_name:
                 subtitle = f'{structure_name} - {subtitle}'
-            self.cell(0, 5, subtitle, ln=True, align='C')
+            self.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', 'I', 8)
-            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.ln(3)
 
         def footer(self):
@@ -703,7 +725,7 @@ def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_
     # Summary
     pdf.ln(5)
     pdf.set_font('Helvetica', 'I', 9)
-    pdf.cell(0, 5, f"Totale apparecchi: {len(apparecchi)}", ln=True)
+    pdf.cell(0, 5, f"Totale apparecchi: {len(apparecchi)}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     buffer = io.BytesIO()
     pdf.output(buffer)
@@ -714,20 +736,21 @@ def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_
 def export_scadenzario_pdf(scadenze, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export scadenzario to PDF."""
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     class PDF(FPDF):
         def header(self):
             self.set_font('Helvetica', 'B', 14)
-            self.cell(0, 8, app_name, ln=True, align='C')
+            self.cell(0, 8, app_name, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', '', 9)
             subtitle = 'Scadenzario Manutenzioni'
             if divisione_nome:
                 subtitle += f' - {divisione_nome}'
             if structure_name:
                 subtitle = f'{structure_name} - {subtitle}'
-            self.cell(0, 5, subtitle, ln=True, align='C')
+            self.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', 'I', 8)
-            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.ln(3)
 
         def footer(self):
@@ -791,7 +814,7 @@ def export_scadenzario_pdf(scadenze, divisione_nome='', structure_name='', app_n
     pdf.set_font('Helvetica', 'I', 9)
     scaduti = sum(1 for s in scadenze if s.get('priorita') == 'scaduto')
     urgenti = sum(1 for s in scadenze if s.get('priorita') == 'urgente')
-    pdf.cell(0, 5, f"Totale scadenze: {len(scadenze)} | Scadute: {scaduti} | Urgenti: {urgenti}", ln=True)
+    pdf.cell(0, 5, f"Totale scadenze: {len(scadenze)} | Scadute: {scaduti} | Urgenti: {urgenti}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     buffer = io.BytesIO()
     pdf.output(buffer)

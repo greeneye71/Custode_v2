@@ -203,10 +203,20 @@ class BackgroundScheduler:
                 formato = get_struttura_config(sid, 'avvisi_scadenza_formato', 'testo')
                 try:
                     if formato == 'pdf':
-                        self._invia_report_pdf(struttura)
+                        esito = self._invia_report_pdf(struttura)
                     else:
-                        self._invia_digest(struttura)
-                    set_struttura_config(sid, 'ultimo_avviso_scadenze', periodo)
+                        esito = self._invia_digest(struttura)
+                    # Il periodo si segna solo se l'avviso e' davvero partito
+                    # (o se non c'era nulla da mandare). Fino alla 2.8.0 lo si
+                    # segnava comunque: un SMTP irraggiungibile per un'ora
+                    # bruciava silenziosamente l'avviso di tutto il periodo,
+                    # senza che nessuno se ne accorgesse.
+                    if esito in ('inviato', 'niente_da_inviare'):
+                        set_struttura_config(sid, 'ultimo_avviso_scadenze', periodo)
+                    else:
+                        logger.error(
+                            f"Avviso scadenze non partito per {struttura['nome']}: "
+                            f"il periodo {periodo} resta da inviare.")
                 except Exception as e:
                     # Gira in un thread di fondo: un'eccezione qui fermerebbe
                     # gli avvisi di tutte le strutture successive, e nessuno la
@@ -327,7 +337,11 @@ class BackgroundScheduler:
         return False
 
     def _invia_report_pdf(self, struttura):
-        """Genera il report PDF delle scadenze e lo allega."""
+        """Genera il report PDF delle scadenze e lo allega.
+
+        Restituisce 'inviato' o 'fallito': chi chiama segna il periodo come
+        gia' avvisato solo nel primo caso.
+        """
         import os
         import tempfile
         from email.mime.application import MIMEApplication
@@ -353,7 +367,7 @@ class BackgroundScheduler:
             allegato.add_header('Content-Disposition', 'attachment',
                                 filename=f"scadenze_{struttura['codice']}.pdf")
             msg.attach(allegato)
-            self._invia(struttura, msg)
+            return 'inviato' if self._invia(struttura, msg) else 'fallito'
         finally:
             if os.path.exists(percorso):
                 os.remove(percorso)
@@ -395,6 +409,8 @@ class BackgroundScheduler:
         avviso di scadenza attraversa piu' divisioni, quindi nominarne una sola
         nell'oggetto sarebbe falso, ma il destinatario deve comunque poter
         capire di chi si parla — il mittente non glielo dice piu'.
+
+        Restituisce 'inviato', 'niente_da_inviare' oppure 'fallito'.
         """
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
@@ -427,7 +443,7 @@ class BackgroundScheduler:
             """, (struttura['id'],))
 
         if not scadenze and not impianti:
-            return
+            return 'niente_da_inviare'
 
         priorita_labels = {
             'scaduto':    'SCADUTO',
@@ -461,7 +477,7 @@ class BackgroundScheduler:
         msg['Subject'] = (f"Scadenzario {struttura['nome']} — "
                           f"{datetime.now().strftime('%d/%m/%Y')}")
         msg.attach(MIMEText("\n".join(righe), 'plain', 'utf-8'))
-        self._invia(struttura, msg)
+        return 'inviato' if self._invia(struttura, msg) else 'fallito'
 
     def _eta_ultimo_backup(self, backups_path):
         """Giorni trascorsi dal backup piu' recente, o None se non ce ne sono."""

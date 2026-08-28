@@ -6,6 +6,7 @@ Creates SQLite database backups and manages retention policy.
 import os
 import shutil
 import glob
+import uuid
 import logging
 from datetime import datetime
 
@@ -29,9 +30,11 @@ def create_backup(db_path, backups_path, retention=4):
     if not os.path.exists(db_path):
         raise FileNotFoundError(f"Database non trovato: {db_path}")
 
-    # Create backup filename with timestamp
+    # Nome con timestamp piu' un token casuale: due backup avviati nello
+    # stesso secondo (backup automatico e backup manuale, o due operatori)
+    # avevano lo stesso nome e il secondo sovrascriveva il primo.
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_filename = f"medinventory_backup_{timestamp}.sqlite"
+    backup_filename = f"medinventory_backup_{timestamp}_{uuid.uuid4().hex[:8]}.sqlite"
     backup_path = os.path.join(backups_path, backup_filename)
 
     # Use SQLite backup API via sqlite3
@@ -98,6 +101,9 @@ def list_backups(backups_path):
         # Parse timestamp from filename
         try:
             ts_str = filename.replace('medinventory_backup_', '').replace('.sqlite', '')
+            # Dopo il timestamp puo' esserci il token anticollisione: si legge
+            # solo la parte data_ora, i backup piu' vecchi non ce l'hanno.
+            ts_str = '_'.join(ts_str.split('_')[:2])
             created = datetime.strptime(ts_str, '%Y%m%d_%H%M%S')
             created_str = created.strftime('%d/%m/%Y %H:%M:%S')
         except ValueError:

@@ -45,5 +45,6 @@
   "smtp_use_tls": true,
 
   "cloudflare_mode": false,
-  "force_https": false
+  "force_https": false,
+  "behind_proxy": false
 }
