@@ -6,6 +6,86 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.8.2] - 2026-08-28
+
+Quattro difetti rimasti aperti dopo l'audit del 28/08: l'indirizzo del server AI
+locale che portava il server a bussare dove voleva chi lo configurava, uno
+scheduler che girava due volte, l'API che scriveva sul database a ogni lettura,
+e gli allegati degli impianti senza il controllo di contenimento che le altre
+sezioni hanno gia'. Nessun cambio di schema — `PRAGMA user_version` resta 271.
+
+### Sicurezza
+- **Richieste in uscita verso l'indirizzo scelto dall'admin di struttura (SSRF).**
+  Il `base_url` del server AI locale (Ollama, LM Studio, endpoint
+  OpenAI-compatibile) lo compila l'admin di una struttura, ma la richiesta parte
+  dal server: senza controlli era una sonda verso localhost, verso la LAN e verso
+  gli indirizzi di metadata di un'installazione in cloud
+  (`169.254.169.254`), con il risultato visibile nella pagina di prova. Il nuovo
+  modulo `sicurezza_url.valida_url_ai_locale()` impone tre regole: solo `http` e
+  `https` e nessuna credenziale nell'URL; nessun indirizzo su una rete di sistema
+  — link-local (IPv4 e IPv6, anche mascherata da `::ffff:169.254.169.254`),
+  multicast, riservata, broadcast — controllata **dopo** la risoluzione DNS e
+  su tutti gli indirizzi restituiti, non solo sul primo; nessuna porta sotto la
+  1024 tranne la 80 e la 443, perche' li' stanno SSH, SMTP e SMB, non un server
+  AI. Loopback e reti private restano raggiungibili: e' li' che vive il server AI
+  di un'installazione in LAN.
+  Chi vuole stringere ancora ha la chiave `ai_local_url_allowlist` in
+  `config.local.json` — lista di `host`, `host:porta`, `CIDR` o `CIDR:porta`
+  (anche come stringa separata da virgole): se e' compilata passa solo quello che
+  vi compare, ed e' l'unica deroga per una porta di sistema. L'allowlist e'
+  politica di sistema: si legge sempre dalla configurazione globale, mai da
+  `strutture_config`, cosi' l'admin di struttura non puo' allargarla.
+  Il controllo scatta due volte, sul salvataggio e sull'uso: le rotte di prova
+  (`/strutture/<id>/config/test-ai` e `/admin/configurazione/test-ai`) rispondono
+  400 e registrano il rifiuto in `log_attivita` senza scrivere nulla in
+  configurazione, mentre `_fetch_local_models()`, `_call_openai_compatible()` e
+  `check_ai_configured()` rivalidano al momento della chiamata — un indirizzo
+  arrivato per altre vie, per esempio da un ripristino, non diventa comunque una
+  richiesta in uscita.
+
+### Correzioni
+- **Scheduler duplicato in sviluppo.** Con `debug=True` il reloader di Werkzeug
+  tiene vivi due processi, e `init_scheduler()` viene chiamato prima di
+  `app.run()`: lo scheduler partiva in tutti e due. Ogni ciclo — posta, backup,
+  avvisi di scadenza — girava due volte, con lo stesso messaggio importato due
+  volte e due email allo stesso destinatario. Ora `scheduler.deve_avviare_scheduler()`
+  decide: fuori dal debug parte sempre, in debug solo nel processo che esegue
+  davvero l'applicazione (`WERKZEUG_RUN_MAIN`). `run_production.py`, che non usa
+  il reloader, non cambia; il messaggio di avvio dice quale dei due processi ha
+  lo scheduler invece di dichiararlo attivo in entrambi.
+- **L'API scriveva sul database a ogni chiamata.** Ogni richiesta autenticata
+  aggiornava `api_tokens.ultimo_utilizzo`, anche le GET di sola lettura. SQLite
+  serializza gli scrittori: un client che interroga `/api/v1/apparecchi` ogni
+  pochi secondi apriva una transazione in scrittura altrettanto spesso, mettendo
+  in coda l'importazione, lo scheduler e gli utenti del gestionale. Il timestamp
+  serve a riconoscere i token abbandonati, non a contare le chiamate: ora si
+  riscrive al massimo ogni cinque minuti, e il controllo si fa in memoria perche'
+  anche un `UPDATE` che non aggiorna nessuna riga prende comunque il lock.
+- **Allegati degli impianti fuori dalla cartella uploads.** Le rotte di scarico
+  ed eliminazione dei documenti e dei verbali componevano il percorso unendo
+  `UPLOADS_PATH` al valore del database senza verificare dove finisse, mentre
+  apparecchi, manutenzioni e verifiche lo fanno da tempo. Un `filepath` che
+  risale portava `send_file` a servire, e `os.remove` a cancellare, un file
+  qualsiasi del server. Oggi quel valore lo scrive il programma, ma le stesse
+  righe vengono ripercorse dopo un ripristino o un'importazione da un'altra
+  installazione, dove il valore non l'abbiamo scritto noi. Ora tutte e tre le
+  rotte passano da `impianti._percorso_allegato()`, che risolve il percorso e
+  rifiuta quello che esce da `uploads`.
+
+### Test
+- Nuovo `tests/test_ssrf_ai_locale.py` (67 test): gli schemi diversi da HTTP(S),
+  le credenziali nell'URL, ognuna delle reti vietate compresa quella mascherata
+  da IPv6, il nome che risolve sui metadata, il nome con piu' record A di cui uno
+  solo vietato, le porte di sistema, tutte le forme dell'allowlist e le due rotte
+  di prova che rifiutano con 400 senza lasciare nulla in `strutture_config`.
+- Nuovo `tests/test_audit_residui.py` (30 test): la tabella di verita' della
+  guardia sul reloader, la soglia dei cinque minuti sul timestamp del token con
+  la verifica sul database vero attraverso l'API, e i percorsi che escono da
+  `uploads` respinti sia dalla funzione sia dalle rotte — compreso il file
+  esterno che l'eliminazione non deve toccare.
+
+---
+
 ## [2.8.1] - 2026-08-28
 
 Seguito della 2.8.0: le correzioni dell'audit ora hanno i test di regressione

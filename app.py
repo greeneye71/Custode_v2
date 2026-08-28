@@ -31,7 +31,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.8.1"
+APP_VERSION = "2.8.2"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -82,6 +82,7 @@ LOCAL_CONFIG_KEYS = frozenset({
     'default_ai_provider',
     'default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key',
     'default_ai_local_base_url', 'default_ai_local_model',
+    'ai_local_url_allowlist',
     'default_ai_import_model', 'default_ai_email_model',
     'email_check_interval_minutes',
     'imap_enabled', 'imap_account', 'imap_password', 'imap_server', 'imap_port', 'imap_ssl',
@@ -722,19 +723,27 @@ if __name__ == '__main__':
     config = app.config['APP_CONFIG']
 
     # Start background scheduler (email monitoring, session cleanup, backups)
-    from scheduler import init_scheduler
-    scheduler = init_scheduler(app)
+    # In debug il reloader di Werkzeug tiene vivi due processi: lo scheduler va
+    # solo in quello che esegue davvero l'applicazione, altrimenti ogni ciclo
+    # (posta, backup, avvisi) parte due volte.
+    from scheduler import init_scheduler, deve_avviare_scheduler
+    debug = config.get('debug', False)
+    scheduler = init_scheduler(app) if deve_avviare_scheduler(debug) else None
 
     print(f"\n  {config.get('app_name', 'MedInventory')} avviato")
     print(f"  http://{config.get('host', '0.0.0.0')}:{config.get('port', 5000)}")
     print(f"  by {config.get('organization', 'Studio Bergamaschi')}")
-    print(f"  Scheduler attivo (email check ogni {config.get('email_check_interval_minutes', 15)} min)\n")
+    if scheduler:
+        print(f"  Scheduler attivo (email check ogni {config.get('email_check_interval_minutes', 15)} min)\n")
+    else:
+        print("  Scheduler affidato al processo ricaricato dal debugger")
+        print()
 
     try:
         app.run(
             host=config.get('host', '0.0.0.0'),
             port=config.get('port', 5000),
-            debug=config.get('debug', False)
+            debug=debug
         )
     finally:
         from scheduler import stop_scheduler

@@ -37,6 +37,28 @@ PER_PAGINA = 25
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _percorso_allegato(relativo):
+    """Percorso assoluto di un allegato, o None se esce da UPLOADS_PATH.
+
+    Il percorso arriva dal database e viene composto con os.path.join: un
+    valore che risale ('..' o un percorso assoluto) porterebbe send_file e
+    os.remove fuori dalla cartella degli allegati. Oggi lo scrive il server,
+    ma le stesse righe vengono ripercorse dopo un ripristino o un import da
+    un'altra installazione, dove il valore non l'abbiamo scritto noi. Stesso
+    controllo che apparecchi, manutenzioni e verifiche fanno gia'.
+    """
+    if not relativo:
+        return None
+    from flask import current_app
+    base = current_app.config['UPLOADS_PATH']
+    percorso = os.path.join(base, relativo)
+    radice = os.path.realpath(base)
+    risolto = os.path.realpath(percorso)
+    if risolto != radice and not risolto.startswith(radice + os.sep):
+        return None
+    return risolto
+
+
 def _valida_impianto(form, edit_id=None):
     """Valida i campi del form impianto. Restituisce (dati, errori)."""
     errori = []
@@ -451,9 +473,8 @@ def scarica_documento(documento_id):
                     (documento_id,))
     if not doc or not impianto_accessibile(doc['impianto_id']):
         abort(404)
-    from flask import current_app
-    percorso = os.path.join(current_app.config['UPLOADS_PATH'], doc['filepath'])
-    if not os.path.exists(percorso):
+    percorso = _percorso_allegato(doc['filepath'])
+    if not percorso or not os.path.exists(percorso):
         flash('File non presente sul server.', 'danger')
         return redirect(url_for('impianti.dettaglio',
                                 impianto_id=doc['impianto_id']))
@@ -469,9 +490,8 @@ def elimina_documento(documento_id):
                     (documento_id,))
     if not doc or not impianto_accessibile(doc['impianto_id']):
         abort(404)
-    from flask import current_app
-    percorso = os.path.join(current_app.config['UPLOADS_PATH'], doc['filepath'])
-    if os.path.exists(percorso):
+    percorso = _percorso_allegato(doc['filepath'])
+    if percorso and os.path.exists(percorso):
         try:
             os.remove(percorso)
         except OSError:
@@ -742,10 +762,8 @@ def scarica_verbale(intervento_id):
     if (not intervento or not intervento['verbale_path']
             or not impianto_accessibile(intervento['impianto_id'])):
         abort(404)
-    from flask import current_app
-    percorso = os.path.join(current_app.config['UPLOADS_PATH'],
-                            intervento['verbale_path'])
-    if not os.path.exists(percorso):
+    percorso = _percorso_allegato(intervento['verbale_path'])
+    if not percorso or not os.path.exists(percorso):
         flash('Verbale non presente sul server.', 'danger')
         return redirect(url_for('impianti.dettaglio',
                                 impianto_id=intervento['impianto_id']))

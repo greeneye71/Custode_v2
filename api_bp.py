@@ -5,12 +5,37 @@ Tutti gli endpoint sono scoped alla struttura del token.
 """
 
 import hashlib
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import Blueprint, request, jsonify, g
 from models import query_one, query_all, execute, log_attivita
 
 api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+
+# Ogni quanto si riscrive api_tokens.ultimo_utilizzo. Il campo serve a capire
+# se un token e' ancora in uso, non a contare le chiamate: al minuto esatto non
+# lo guarda nessuno.
+INTERVALLO_ULTIMO_UTILIZZO = timedelta(minutes=5)
+
+
+def _ultimo_utilizzo_da_aggiornare(ultimo_utilizzo, adesso=None):
+    """Dice se ultimo_utilizzo e' abbastanza vecchio da valere una scrittura.
+
+    SQLite serializza gli scrittori: fino alla 2.8.1 ogni GET dell'API apriva
+    una transazione in scrittura su api_tokens, mettendo in coda l'importazione,
+    lo scheduler e gli utenti del gestionale. Un client che interroga
+    /apparecchi ogni pochi secondi bloccava il database per il solo gusto di
+    aggiornare un timestamp che nessuno legge cosi' spesso.
+
+    CURRENT_TIMESTAMP di SQLite e' UTC nel formato 'YYYY-MM-DD HH:MM:SS', quindi
+    il confronto fra stringhe segue l'ordine cronologico.
+    """
+    if not ultimo_utilizzo:
+        return True
+    adesso = adesso or datetime.now(timezone.utc)
+    soglia = (adesso - INTERVALLO_ULTIMO_UTILIZZO).strftime('%Y-%m-%d %H:%M:%S')
+    return str(ultimo_utilizzo)[:19] <= soglia
 
 
 def _token_auth(scope='read'):
@@ -40,13 +65,14 @@ def _token_auth(scope='read'):
             if scope == 'write' and 'write' not in scopes_list:
                 return jsonify({'errore': 'Permessi insufficienti'}), 403
 
-            try:
-                execute(
-                    "UPDATE api_tokens SET ultimo_utilizzo=CURRENT_TIMESTAMP WHERE id=?",
-                    (token['id'],)
-                )
-            except Exception:
-                pass
+            if _ultimo_utilizzo_da_aggiornare(token['ultimo_utilizzo']):
+                try:
+                    execute(
+                        "UPDATE api_tokens SET ultimo_utilizzo=CURRENT_TIMESTAMP WHERE id=?",
+                        (token['id'],)
+                    )
+                except Exception:
+                    pass
 
             g.api_struttura_id = token['sid']
             g.api_struttura_nome = token['struttura_nome']

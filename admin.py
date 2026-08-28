@@ -17,7 +17,8 @@ from werkzeug.security import generate_password_hash
 from auth import (admin_required, superadmin_required,
                   tecnico_o_admin_required, operazione_globale_required)
 from models import query_one, query_all, execute, log_attivita, get_db
-from ai_service import AI_PROVIDERS
+from ai_service import AI_PROVIDERS, AI_PROVIDER_DEFAULTS
+from sicurezza_url import valida_url_ai_locale
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -807,11 +808,23 @@ def test_default_ai():
     # Salva provider
     config['default_ai_provider'] = provider
 
+    # L'URL del server AI locale si valida prima di salvarlo, come nella rotta
+    # per struttura. L'allowlist e' quella gia' presente in config: si cambia
+    # solo modificando config.local.json, non da questa pagina.
+    base_url_richiesto = (data.get('local_base_url') or '').strip()
+    if provider in AI_PROVIDER_DEFAULTS and base_url_richiesto:
+        try:
+            base_url_richiesto = valida_url_ai_locale(base_url_richiesto, config)
+        except ValueError as e:
+            log_attivita(g.user['id'], 'modifica', 'configurazione', None,
+                         f'Test AI default {provider}: URL locale rifiutato ({str(e)[:120]})',
+                         request.remote_addr)
+            return jsonify({'ok': False, 'models': [], 'message': str(e)}), 400
+
     # Modelli e URL locale
     for cfg_key, payload_field in (
         ('default_ai_import_model',   'ai_import_model'),
         ('default_ai_email_model',    'ai_email_model'),
-        ('default_ai_local_base_url', 'local_base_url'),
         ('default_ai_local_model',    'local_model'),
     ):
         val = (data.get(payload_field) or '').strip()
@@ -819,6 +832,10 @@ def test_default_ai():
             config[cfg_key] = val
         else:
             config.pop(cfg_key, None)
+    if base_url_richiesto:
+        config['default_ai_local_base_url'] = base_url_richiesto
+    else:
+        config.pop('default_ai_local_base_url', None)
 
     # Chiavi API (solo se fornite — non sovrascrivere se vuote)
     for cfg_key, payload_field in (
@@ -854,7 +871,7 @@ def test_default_ai():
         else:
             if not base_url:
                 return jsonify({'ok': False, 'message': 'URL server AI non configurato.', 'models': []})
-            models = _fetch_local_models(base_url)
+            models = _fetch_local_models(base_url, config)
 
         log_attivita(g.user['id'], 'modifica', 'configurazione', None,
                      f'Test AI default {provider}: OK, {len(models)} modelli', request.remote_addr)

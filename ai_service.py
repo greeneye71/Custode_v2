@@ -19,6 +19,8 @@ import io
 import os
 import logging
 
+from sicurezza_url import valida_url_ai_locale, leggi_allowlist
+
 logger = logging.getLogger('medinventory.ai')
 
 INVENTORY_SYSTEM_PROMPT = """Sei un assistente specializzato nell'analisi di inventari di apparecchi elettromedicali.
@@ -197,6 +199,10 @@ def _get_ai_config(config=None, struttura_id=None):
         'model_email':    _sc('ai_email_model', 'claude-haiku-4-5-20251001'),
         'local_base_url': _sc('ai_local_base_url', 'http://localhost:11434'),
         'local_model':    _sc('ai_local_model', ''),
+        # L'allowlist degli URL locali e' politica di sistema: si legge sempre
+        # dalla configurazione globale, mai da strutture_config, perche' e' il
+        # limite che vincola l'admin di struttura e non deve poterlo allargare.
+        'local_url_allowlist': leggi_allowlist(config),
     }
 
 
@@ -249,12 +255,18 @@ def _call_anthropic_with_pdf(system_prompt, user_text, pdf_path, api_key, model,
     return message.content[0].text.strip()
 
 
-def _call_openai_compatible(system_prompt, user_message, base_url, model, max_tokens=4096):
-    """Call an OpenAI-compatible API (Ollama, LM Studio, etc.)."""
+def _call_openai_compatible(system_prompt, user_message, base_url, model, max_tokens=4096,
+                            allowlist=None):
+    """Call an OpenAI-compatible API (Ollama, LM Studio, etc.).
+
+    L'URL arriva dalla configurazione di una struttura, cioe' da un utente: va
+    rivalidato qui e non solo al salvataggio, perche' fra i due momenti il nome
+    puo' essere stato ripuntato altrove (vedi sicurezza_url).
+    """
     import httpx
 
     # Normalize base URL
-    base_url = base_url.rstrip('/')
+    base_url = valida_url_ai_locale(base_url, allowlist)
     if not base_url.endswith('/v1'):
         base_url += '/v1'
 
@@ -441,7 +453,8 @@ def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, confi
         # ollama, lmstudio, openai_compatible
         base_url = ai_cfg['local_base_url']
         local_model = ai_cfg['local_model'] or model
-        return _call_openai_compatible(system_prompt, user_message, base_url, local_model, max_tokens)
+        return _call_openai_compatible(system_prompt, user_message, base_url, local_model,
+                                       max_tokens, ai_cfg['local_url_allowlist'])
 
 
 def _call_ai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096, config=None, struttura_id=None):
@@ -495,6 +508,10 @@ def check_ai_configured(config=None, struttura_id=None):
             return False, 'URL del server AI locale non configurato. Configura l\'AI nella pagina della struttura.'
         if not ai_cfg['local_model']:
             return False, 'Modello AI locale non configurato. Configura l\'AI nella pagina della struttura.'
+        try:
+            valida_url_ai_locale(ai_cfg['local_base_url'], ai_cfg['local_url_allowlist'])
+        except ValueError as e:
+            return False, str(e)
         return True, None
 
 

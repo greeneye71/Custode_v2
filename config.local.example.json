@@ -27,6 +27,7 @@
 
   "ai_local_base_url": "",
   "ai_local_model": "",
+  "ai_local_url_allowlist": [],
 
   "email_check_interval_minutes": 15,
   "imap_enabled": false,

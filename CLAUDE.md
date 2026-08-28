@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v2.8.1** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.8.2** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -91,6 +91,7 @@ Key fields (all in `config.local.json`):
 - `default_ai_provider` — `anthropic`, `gemini`, `openai`, `ollama`, `lmstudio`, or `openai_compatible`
 - `default_anthropic_api_key` / `default_gemini_api_key` / `default_openai_api_key` — global fallback keys
 - `default_ai_import_model`, `default_ai_email_model`, `default_ai_local_base_url`, `default_ai_local_model`
+- `ai_local_url_allowlist` — system policy for the local-AI `base_url` (SSRF containment, `sicurezza_url.py`). Empty by default: http/https only, no credentials in the URL, no link-local / multicast / reserved / broadcast address (checked after DNS resolution, on every resolved address), no port below 1024 except 80 and 443. Loopback and RFC1918 stay reachable — it is a LAN product. Fill it with `host`, `host:port`, `CIDR` or `CIDR:port` entries (list or comma-separated string) to allow only those, which is also the only way to permit a system port. Always read from the global config, never from `strutture_config`, so a facility admin cannot widen it.
 - `imap_*`, `smtp_*` — global mail settings
 - `encryption_key` — derives the Fernet key for IMAP/SMTP password encryption (auto-generated)
 - `force_https`, `cloudflare_mode` — deployment behind a tunnel/reverse proxy
@@ -125,6 +126,7 @@ Key fields (all in `config.local.json`):
 | `backup_service.py` | SQLite backup/restore lifecycle |
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
 | `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
+| `sicurezza_url.py` | URL validation for the local AI server: scheme, blocked networks after DNS resolution, ports, optional `ai_local_url_allowlist`. Flask-free |
 | `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
 | `posta.py` | The only place mail leaves from: system-wide SMTP resolution and sending |
 | `reset_password.py` | Forgotten-password flow: temporary password valid *alongside* the current one |

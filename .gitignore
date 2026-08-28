@@ -34,3 +34,6 @@ NDH6SA~M
 # Git worktrees
 .worktrees/
 .superpowers/
+
+# Audit interni: mappano difetti non ancora chiusi, il repo e pubblico
+AUDIT_*.md

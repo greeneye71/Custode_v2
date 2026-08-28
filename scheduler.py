@@ -6,6 +6,7 @@ Runs periodic tasks in a background thread:
 - Automatic backup (weekly, Sunday 03:00)
 """
 
+import os
 import threading
 import time
 import logging
@@ -530,6 +531,25 @@ class BackgroundScheduler:
 
 # Global scheduler instance
 _scheduler = None
+
+
+def deve_avviare_scheduler(debug=False, env=None):
+    """Dice se questo processo e' quello che deve tenere lo scheduler.
+
+    Con debug=True Werkzeug ricarica il codice in un processo figlio e il
+    padre resta vivo a sorvegliarlo. init_scheduler() viene chiamato prima di
+    app.run(), quindi girerebbe in tutti e due: ogni ciclo (posta, backup,
+    avvisi di scadenza) partirebbe due volte, con due verbali importati dallo
+    stesso messaggio e due email di avviso allo stesso destinatario.
+
+    Il figlio ha WERKZEUG_RUN_MAIN='true', il padre no. Fuori dal reloader la
+    variabile non c'e' comunque: senza il controllo su debug, in produzione lo
+    scheduler non partirebbe piu' affatto.
+    """
+    if not debug:
+        return True
+    ambiente = os.environ if env is None else env
+    return ambiente.get('WERKZEUG_RUN_MAIN') == 'true'
 
 
 def init_scheduler(app):

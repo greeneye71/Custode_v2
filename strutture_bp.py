@@ -17,6 +17,7 @@ from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config, \
     upload_subdir, nome_file_unico, percorso_logo_struttura
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
+from sicurezza_url import valida_url_ai_locale
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
 
@@ -685,10 +686,17 @@ def _fetch_openai_models(api_key):
         return [m[0] for m in OPENAI_MODELS]
 
 
-def _fetch_local_models(base_url):
-    """Fetch models from local OpenAI-compatible server. Raises ValueError on failure."""
+def _fetch_local_models(base_url, allowlist=None):
+    """Fetch models from local OpenAI-compatible server. Raises ValueError on failure.
+
+    L'indirizzo lo sceglie l'admin della struttura e la richiesta parte dal
+    server: valida_url_ai_locale() tiene fuori le reti di sistema e, se
+    l'operatore l'ha compilata, applica ai_local_url_allowlist. La validazione
+    sta qui e non solo nella rotta perche' e' questa la funzione che apre la
+    connessione.
+    """
     import httpx
-    base_url = base_url.rstrip('/')
+    base_url = valida_url_ai_locale(base_url, allowlist)
     try:
         with httpx.Client(timeout=10.0) as client:
             r = client.get(f"{base_url}/v1/models")
@@ -807,11 +815,25 @@ def test_ai_config(struttura_id):
     if provider not in valid_providers:
         return jsonify({'ok': False, 'message': f'Provider non valido: {provider}', 'models': []}), 400
 
+    # L'URL del server AI locale si valida prima di salvarlo: cosi' non resta in
+    # strutture_config un indirizzo che nessuna chiamata potrebbe poi usare, e
+    # l'admin vede subito perche' e' stato rifiutato.
+    allowlist = current_app.config.get('APP_CONFIG', {})
+    base_url_richiesto = (data.get('local_base_url') or '').strip()
+    if provider in AI_PROVIDER_DEFAULTS and base_url_richiesto:
+        try:
+            base_url_richiesto = valida_url_ai_locale(base_url_richiesto, allowlist)
+        except ValueError as e:
+            log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
+                         f'Test AI {provider}: URL locale rifiutato ({str(e)[:120]})',
+                         request.remote_addr, struttura_id=struttura_id)
+            return jsonify({'ok': False, 'models': [], 'message': str(e)}), 400
+
     fields_to_save = {
         'ai_provider':       provider,
         'ai_import_model':   (data.get('ai_import_model') or '').strip(),
         'ai_email_model':    (data.get('ai_email_model') or '').strip(),
-        'ai_local_base_url': (data.get('local_base_url') or '').strip(),
+        'ai_local_base_url': base_url_richiesto,
         'ai_local_model':    (data.get('local_model') or '').strip(),
     }
     for chiave, valore in fields_to_save.items():
@@ -853,7 +875,7 @@ def test_ai_config(struttura_id):
         else:
             if not active_base_url:
                 return jsonify({'ok': False, 'message': 'URL server AI non configurato.', 'models': []})
-            models = _fetch_local_models(active_base_url)
+            models = _fetch_local_models(active_base_url, allowlist)
 
         log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
                      f'Test AI {provider}: OK, {len(models)} modelli', request.remote_addr,
