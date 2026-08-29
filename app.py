@@ -20,10 +20,11 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from flask import (Flask, g, session, redirect, url_for, render_template,
-                   request, current_app)
+                   request, current_app, jsonify)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf.csrf import CSRFProtect
 
+import manutenzione_globale
 from models import close_db, init_db, get_db, query_all
 from auth import login_required as auth_login_required
 
@@ -378,6 +379,26 @@ def create_app():
                 'max-age=31536000; includeSubDomains'
             )
         return response
+
+    # ---------------------------------------------------------------------------
+    # Modo manutenzione (ripristino backup, azzeramento database)
+    # ---------------------------------------------------------------------------
+    # Ogni richiesta si registra fra i lavori in corso e si toglie alla fine.
+    # Chi sostituisce il file del database aspetta che il conteggio torni a
+    # zero prima di procedere, e nel frattempo le richieste nuove ricevono 503
+    # invece di leggere un database che sta sparendo sotto di loro.
+    @app.before_request
+    def blocca_durante_manutenzione():
+        if manutenzione_globale.entra():
+            return None
+        if request.path.startswith('/api/'):
+            return jsonify({'errore': manutenzione_globale.MESSAGGIO}), 503,                 {'Retry-After': '30'}
+        return render_template('manutenzione.html',
+                               messaggio=manutenzione_globale.MESSAGGIO), 503,             {'Retry-After': '30'}
+
+    @app.teardown_request
+    def fine_richiesta(exc=None):
+        manutenzione_globale.esci()
 
     # ---------------------------------------------------------------------------
     # HTTPS redirect (opzionale — attivo solo con force_https=true in config)

@@ -10,6 +10,8 @@ import uuid
 import logging
 from datetime import datetime
 
+from schema_impianti import SCHEMA_VERSION_IMPIANTI
+
 logger = logging.getLogger('medinventory.backup')
 
 
@@ -122,24 +124,108 @@ def list_backups(backups_path):
     return backups
 
 
-def restore_backup(backup_path, db_path):
-    """
-    Restore a database from a backup file.
+# Tabelle senza le quali il file non e' un database di MedInventory: se manca
+# una di queste, il ripristino sostituirebbe l'installazione con qualcos'altro.
+TABELLE_RICHIESTE = ('strutture', 'utenti', 'divisioni', 'apparecchi',
+                     'manutenzioni', 'verifiche', 'log_attivita')
 
-    Args:
-        backup_path: Path to the backup file
-        db_path: Path to the current database (will be overwritten)
+
+def verifica_database(percorso):
+    """Controlla che il file sia un database di MedInventory ripristinabile.
+
+    Ritorna la lista dei problemi trovati, vuota se il file va bene. Il file
+    viene aperto in sola lettura (URI `mode=ro`) e non viene mai modificato:
+    e' quello che permette di validare un backup *prima* di sovrascrivere il
+    database vivo, invece di scoprire il problema dopo.
+    """
+    import sqlite3
+
+    problemi = []
+    if not os.path.exists(percorso):
+        return [f"File non trovato: {percorso}"]
+
+    uri = 'file:' + percorso.replace('?', '%3f').replace('#', '%23') + '?mode=ro'
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as e:
+        return [f"File non apribile come database SQLite: {e}"]
+
+    try:
+        try:
+            esito = conn.execute('PRAGMA quick_check').fetchone()
+        except sqlite3.DatabaseError as e:
+            return [f"File non leggibile come database SQLite: {e}"]
+        if not esito or esito[0] != 'ok':
+            problemi.append(f"Controllo di integrita' fallito: {esito[0] if esito else 'nessun esito'}")
+
+        presenti = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        mancanti = [t for t in TABELLE_RICHIESTE if t not in presenti]
+        if mancanti:
+            problemi.append("Non sembra un database MedInventory, mancano le "
+                            "tabelle: " + ', '.join(mancanti))
+
+        # Uno schema piu' recente di quello che questo codice conosce non si
+        # puo' migrare all'indietro: meglio rifiutarlo che ritrovarsi con
+        # tabelle e colonne che l'applicazione non sa gestire.
+        try:
+            versione = conn.execute('PRAGMA user_version').fetchone()[0]
+        except sqlite3.DatabaseError:
+            versione = 0
+        if versione > SCHEMA_VERSION_IMPIANTI:
+            problemi.append(
+                f"Lo schema del backup (versione {versione}) e' piu' recente di "
+                f"quello supportato da questa installazione ({SCHEMA_VERSION_IMPIANTI}): "
+                "aggiorna il programma prima di ripristinarlo.")
+    finally:
+        conn.close()
+
+    return problemi
+
+
+def _rimuovi_laterali(db_path):
+    """Toglie i file -wal e -shm accanto al database."""
+    for estensione in ('-wal', '-shm'):
+        laterale = db_path + estensione
+        if os.path.exists(laterale):
+            try:
+                os.remove(laterale)
+            except OSError:
+                logger.warning("Impossibile rimuovere %s", laterale)
+
+
+def restore_backup(backup_path, db_path):
+    """Ripristina il database da un backup, validandolo prima e dopo.
+
+    Il chiamante deve gia' avere fermato il traffico (vedi
+    `manutenzione_globale.operazione_esclusiva`): qui si riscrive il file
+    SQLite vivo, e finche' altri thread ci scrivono dentro il risultato non e'
+    prevedibile.
+
+    Ordine delle operazioni:
+
+    1. il backup viene validato *prima* di toccare qualsiasi cosa;
+    2. il database corrente viene copiato in `<db>.pre_restore`;
+    3. il ripristino usa l'API `backup()` di SQLite (e non `os.replace`, che
+       su Windows fallisce se qualche handle e' ancora aperto);
+    4. il risultato viene rivalidato; se non passa, si torna indietro dalla
+       copia di sicurezza.
+
+    La copia `.pre_restore` **non** viene cancellata: resta finche' l'operatore
+    non ha riavviato e verificato. Ritorna il suo percorso.
     """
     if not os.path.exists(backup_path):
         raise FileNotFoundError(f"Backup non trovato: {backup_path}")
 
-    # Create a safety copy of the current database before restoring
+    problemi = verifica_database(backup_path)
+    if problemi:
+        raise ValueError("Backup non ripristinabile. " + ' '.join(problemi))
+
     safety_path = db_path + '.pre_restore'
     if os.path.exists(db_path):
         shutil.copy2(db_path, safety_path)
 
     try:
-        # Restore using SQLite backup API
         import sqlite3
         source = sqlite3.connect(backup_path)
         dest = sqlite3.connect(db_path)
@@ -149,17 +235,30 @@ def restore_backup(backup_path, db_path):
             dest.close()
             source.close()
 
-        logger.info(f"Database ripristinato da: {os.path.basename(backup_path)}")
+        # I file laterali appartengono al database appena sostituito: lasciarli
+        # significa lasciare in giro transazioni del database precedente.
+        _rimuovi_laterali(db_path)
 
-        # Remove safety copy on success
-        if os.path.exists(safety_path):
-            os.remove(safety_path)
+        problemi = verifica_database(db_path)
+        if problemi:
+            raise ValueError("Il database ripristinato non supera i controlli. "
+                             + ' '.join(problemi))
+
+        # Aprire il database, anche in sola lettura, ricrea -wal e -shm: la
+        # verifica appena fatta ne ha lasciato una coppia vuota. Si tolgono,
+        # cosi' il file resta solo come e' stato scritto.
+        _rimuovi_laterali(db_path)
+
+        logger.warning("Database ripristinato da %s. Copia di sicurezza: %s",
+                       os.path.basename(backup_path), safety_path)
+        return safety_path
 
     except Exception as e:
-        # Restore safety copy if something went wrong
+        # Si torna indietro dalla copia di sicurezza, che resta sul disco.
         if os.path.exists(safety_path):
             shutil.copy2(safety_path, db_path)
-            os.remove(safety_path)
+        logger.error("Ripristino fallito da %s: %s",
+                     os.path.basename(backup_path), e)
         raise e
 
 

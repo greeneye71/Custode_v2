@@ -21,6 +21,8 @@ from auth import (admin_required, superadmin_required,
 from models import query_one, query_all, execute, log_attivita, get_db
 from ai_service import AI_PROVIDERS, AI_PROVIDER_DEFAULTS
 from sicurezza_url import valida_url_ai_locale
+import manutenzione_globale
+from manutenzione_globale import ManutenzioneInCorso
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -1042,6 +1044,7 @@ def backup_scarica(filename):
 def backup_ripristina(filename):
     """Restore database from a backup."""
     from backup_service import create_backup, restore_backup
+    from models import close_db
 
     backups_path = current_app.config['BACKUPS_PATH']
     db_path = current_app.config['DATABASE_PATH']
@@ -1060,20 +1063,54 @@ def backup_ripristina(filename):
         flash('Percorso backup non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
+    # Chi ha chiesto il ripristino va letto adesso: dopo la sostituzione del
+    # file, l'utente della sessione potrebbe non esistere piu' nel database.
+    autore_id = g.user['id']
+    autore_email = g.user['email']
+
     try:
-        # Create a safety backup of the current DB before overwriting it
-        retention = current_app.config['APP_CONFIG'].get('backup_retention', 4)
-        create_backup(db_path, backups_path, retention=retention + 1)
+        # Il traffico si ferma prima di toccare il file: senza questo, gli
+        # altri thread di Waitress e lo scheduler continuerebbero a leggere e
+        # scrivere il database mentre viene sostituito.
+        with manutenzione_globale.operazione_esclusiva(
+                f"ripristino del backup {filename}"):
+            # La connessione di questa richiesta punta al file che stiamo per
+            # sostituire: va chiusa anche lei.
+            close_db()
 
-        restore_backup(backup_path, db_path)
+            retention = current_app.config['APP_CONFIG'].get('backup_retention', 4)
+            create_backup(db_path, backups_path, retention=retention + 1)
 
-        log_attivita(g.user['id'], 'backup_ripristino', 'backup', None,
-                     f"Ripristinato da: {filename}", request.remote_addr,
-                     struttura_id=None)
-
-        flash(f"Database ripristinato da {filename}. Riavvia l'applicazione per applicare le modifiche.", 'warning')
+            copia_sicurezza = restore_backup(backup_path, db_path)
+            close_db()
+    except ManutenzioneInCorso as e:
+        flash(str(e), 'warning')
+        return redirect(url_for('admin.backup'))
     except Exception as e:
         flash(f"Errore durante il ripristino: {str(e)}", 'danger')
+        return redirect(url_for('admin.backup'))
+
+    # Traccia dell'operazione fuori dal database: il file appena ripristinato
+    # non e' un posto affidabile dove annotare la propria sostituzione.
+    current_app.logger.warning(
+        "Ripristino database da %s eseguito da %s (id %s, IP %s). "
+        "Copia di sicurezza del database precedente: %s",
+        filename, autore_email, autore_id, request.remote_addr, copia_sicurezza)
+
+    # Il log applicativo finisce nel database ripristinato, dove l'autore
+    # potrebbe non esistere: la foreign key rifiuterebbe la riga. Il ripristino
+    # e' comunque riuscito, e non deve essere presentato come un errore.
+    try:
+        log_attivita(autore_id, 'backup_ripristino', 'backup', None,
+                     f"Ripristinato da: {filename}", request.remote_addr,
+                     struttura_id=None)
+    except Exception as e:
+        current_app.logger.warning(
+            "Ripristino riuscito ma non registrato nel log attivita': %s", e)
+
+    flash(f"Database ripristinato da {filename}. Copia di sicurezza del "
+          f"database precedente: {os.path.basename(copia_sicurezza)}. "
+          f"Riavvia l'applicazione per applicare le modifiche.", 'warning')
 
     return redirect(url_for('admin.backup'))
 
@@ -1116,64 +1153,77 @@ def reset_database():
     config = current_app.config['APP_CONFIG']
     retention = config.get('backup_retention', 4)
 
+    # Letti prima: dopo l'azzeramento questo utente non esiste piu'.
+    autore_id = g.user['id']
+    autore_email = g.user['email']
+
     try:
-        # 1. Backup automatico prima di qualsiasi modifica
-        backup_result = create_backup(db_path, backups_path, retention)
+        # Il traffico si ferma prima di cancellare il file: la sola
+        # close_db() della richiesta corrente lasciava gli altri thread di
+        # Waitress e lo scheduler dentro un database che spariva.
+        with manutenzione_globale.operazione_esclusiva('azzeramento del database'):
+            # 1. Backup automatico prima di qualsiasi modifica
+            backup_result = create_backup(db_path, backups_path, retention)
 
-        # 2. Chiudi la connessione corrente al DB
-        close_db()
+            # 2. Chiudi la connessione corrente al DB
+            close_db()
 
-        # 3. Elimina il file DB e i journal WAL/SHM
-        for suffix in ('', '-wal', '-shm'):
-            fpath = db_path + suffix
-            if os.path.exists(fpath):
-                os.remove(fpath)
+            # 3. Elimina il file DB e i journal WAL/SHM
+            for suffix in ('', '-wal', '-shm'):
+                fpath = db_path + suffix
+                if os.path.exists(fpath):
+                    os.remove(fpath)
 
-        # 4. Reinizializza lo schema da schema.sql
-        init_db()
-        apply_schema_updates()
+            # 4. Reinizializza lo schema da schema.sql
+            init_db()
+            apply_schema_updates()
 
-        # 5. Seed: struttura di default + 2 divisioni + utente admin predefinito
-        c = db_execute(
-            """INSERT INTO strutture (nome, codice, descrizione, modalita, attiva)
-               VALUES (?,?,?,?,?)""",
-            ('Struttura Principale', 'DEFAULT',
-             'Struttura predefinita (rinominare da Amministrazione → Strutture)',
-             'avanzata', 1)
-        )
-        struttura_id = c.lastrowid
-
-        c = db_execute(
-            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
-               VALUES (?,?,?,?,?)""",
-            ('Divisione 1', 'DIV1', '#0ea5e9',
-             'Prima divisione (rinominare da pannello admin)', struttura_id)
-        )
-        div1_id = c.lastrowid
-        c = db_execute(
-            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
-               VALUES (?,?,?,?,?)""",
-            ('Divisione 2', 'DIV2', '#10b981',
-             'Seconda divisione (rinominare da pannello admin)', struttura_id)
-        )
-        div2_id = c.lastrowid
-
-        password_hash = generate_password_hash('admin123')
-        c = db_execute(
-            """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
-               VALUES (?,?,?,?,?,?,1)""",
-            ('admin@medinventory.local', password_hash, 'Amministratore', 'Sistema', 'admin',
-             struttura_id)
-        )
-        admin_id = c.lastrowid
-
-        for div_id in (div1_id, div2_id):
-            db_execute(
-                "INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione) VALUES (?,?,?)",
-                (admin_id, div_id, 'admin')
+            # 5. Seed: struttura di default + 2 divisioni + utente admin predefinito
+            c = db_execute(
+                """INSERT INTO strutture (nome, codice, descrizione, modalita, attiva)
+                   VALUES (?,?,?,?,?)""",
+                ('Struttura Principale', 'DEFAULT',
+                 'Struttura predefinita (rinominare da Amministrazione → Strutture)',
+                 'avanzata', 1)
             )
+            struttura_id = c.lastrowid
 
-        # 6. Invalida la sessione corrente e reindirizza al login
+            c = db_execute(
+                """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+                   VALUES (?,?,?,?,?)""",
+                ('Divisione 1', 'DIV1', '#0ea5e9',
+                 'Prima divisione (rinominare da pannello admin)', struttura_id)
+            )
+            div1_id = c.lastrowid
+            c = db_execute(
+                """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+                   VALUES (?,?,?,?,?)""",
+                ('Divisione 2', 'DIV2', '#10b981',
+                 'Seconda divisione (rinominare da pannello admin)', struttura_id)
+            )
+            div2_id = c.lastrowid
+
+            password_hash = generate_password_hash('admin123')
+            c = db_execute(
+                """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
+                   VALUES (?,?,?,?,?,?,1)""",
+                ('admin@medinventory.local', password_hash, 'Amministratore', 'Sistema', 'admin',
+                 struttura_id)
+            )
+            admin_id = c.lastrowid
+
+            for div_id in (div1_id, div2_id):
+                db_execute(
+                    "INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione) VALUES (?,?,?)",
+                    (admin_id, div_id, 'admin')
+                )
+
+        # 6. Traccia fuori dal database (che e' appena stato ricreato) e
+        #    invalida la sessione corrente, reindirizzando al login.
+        current_app.logger.warning(
+            "Database azzerato da %s (id %s, IP %s). Backup precedente: %s",
+            autore_email, autore_id, request.remote_addr,
+            backup_result['filename'])
         flask_session.clear()
 
         flash(
@@ -1183,6 +1233,9 @@ def reset_database():
         )
         return redirect(url_for('auth.login'))
 
+    except ManutenzioneInCorso as e:
+        flash(str(e), 'warning')
+        return redirect(url_for('admin.configurazione'))
     except Exception as e:
         flash(f'Errore durante il reset del database: {str(e)}', 'danger')
         return redirect(url_for('admin.configurazione'))

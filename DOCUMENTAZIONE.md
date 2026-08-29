@@ -805,10 +805,32 @@ Da *Amministrazione > Backup*:
 
 ### Ripristino
 
-**ATTENZIONE:** Il ripristino sovrascrive il database corrente. Prima del ripristino:
-- Viene creata una copia di sicurezza automatica (`database.sqlite.pre_restore`)
-- Se il ripristino fallisce, la copia di sicurezza viene automaticamente ripristinata
-- Dopo il ripristino, è consigliato **riavviare l'applicazione**
+**ATTENZIONE:** Il ripristino sovrascrive il database corrente. Cosa succede, nell'ordine:
+
+- L'applicazione entra in **modo manutenzione**: le richieste già in corso vengono
+  attese, quelle nuove ricevono una pagina di cortesia con codice 503 (e un JSON
+  con `Retry-After` sulle rotte `/api/`), e i task in background dello scheduler
+  restano fermi finché l'operazione non è conclusa. Se dopo qualche secondo ci
+  sono ancora operazioni in corso il ripristino viene rifiutato: si riprova.
+- Il file di backup viene **validato prima di essere usato**: deve essere un
+  database SQLite integro (`PRAGMA quick_check`), contenere le tabelle di
+  MedInventory e non dichiarare uno schema più recente di quello che il programma
+  sa gestire. Un backup che non passa i controlli viene rifiutato **senza
+  toccare** il database in servizio.
+- Viene creato un backup ordinario del database attuale, e poi una copia di
+  sicurezza accanto al database (`database.sqlite.pre_restore`).
+- Dopo la scrittura il database ripristinato viene rivalidato: se non passa i
+  controlli si torna automaticamente alla copia di sicurezza.
+- La copia `database.sqlite.pre_restore` **resta sul disco anche quando il
+  ripristino riesce**, e il suo nome viene mostrato a schermo: è la via di
+  ritorno finché non si è verificato che i dati ripristinati siano quelli attesi.
+  Va rimossa a mano quando non serve più.
+- Il ripristino viene tracciato nel log applicativo (file, non database: quello
+  appena ripristinato non contiene l'operazione) con utente, IP e nome del file.
+- Dopo il ripristino è necessario **riavviare l'applicazione**.
+
+Lo stesso vale per l'azzeramento del database dalla configurazione globale, che
+usa il medesimo modo manutenzione.
 
 ### Politica di retention
 

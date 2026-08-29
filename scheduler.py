@@ -18,6 +18,7 @@ from datetime import datetime
 # facendo scheduler.invia = ... invece di rimettere mano a posta.py, che e'
 # codice di invio condiviso con altri flussi.
 from posta import invia
+import manutenzione_globale
 
 logger = logging.getLogger('medinventory.scheduler')
 
@@ -108,17 +109,28 @@ class BackgroundScheduler:
 
             for task in self._tasks:
                 if now - task['last_run'] >= task['interval']:
-                    # last_run si aggiorna comunque: fino alla 2.7.1 stava
-                    # dentro il try, dopo la chiamata, quindi un task che
-                    # sollevava veniva ritentato ogni 30 secondi per sempre —
-                    # riempiendo il log e, per il controllo email, ribussando
-                    # all'IMAP di continuo.
-                    task['last_run'] = now
-                    try:
-                        logger.debug(f"Esecuzione task: {task['name']}")
-                        task['func']()
-                    except Exception as e:
-                        logger.error(f"Errore nel task {task['name']}: {e}")
+                    # Il task si registra fra i lavori in corso: un ripristino
+                    # o un azzeramento aspetta che finisca prima di sostituire
+                    # il file del database, e i task che devono ancora partire
+                    # restano fermi finche' la manutenzione non e' conclusa.
+                    # Il turno non viene consumato, cosi' ripartono subito dopo.
+                    with manutenzione_globale.lavoro() as ammesso:
+                        if not ammesso:
+                            logger.info(
+                                "Manutenzione in corso (%s): task rinviati.",
+                                manutenzione_globale.descrizione())
+                            break
+                        # last_run si aggiorna comunque: fino alla 2.7.1 stava
+                        # dentro il try, dopo la chiamata, quindi un task che
+                        # sollevava veniva ritentato ogni 30 secondi per sempre —
+                        # riempiendo il log e, per il controllo email, ribussando
+                        # all'IMAP di continuo.
+                        task['last_run'] = now
+                        try:
+                            logger.debug(f"Esecuzione task: {task['name']}")
+                            task['func']()
+                        except Exception as e:
+                            logger.error(f"Errore nel task {task['name']}: {e}")
 
             # Sleep for 30 seconds between checks
             self._stop_event.wait(30)
