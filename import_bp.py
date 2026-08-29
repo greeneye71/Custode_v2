@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import shutil
-import threading
 import time
 import uuid
 
@@ -18,11 +17,12 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import coda_import
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
                     nome_file_unico, apparecchio_accessibile,
                     divisione_accessibile, filtro_divisione,
-                    scegli_apparecchio)
+                    scegli_apparecchio, transazione)
 from validazione_dominio import (valida_apparecchio, valida_manutenzione,
                                  valida_verifica, messaggio_errori)
 
@@ -248,56 +248,75 @@ def analizza():
     _div_row = query_one("SELECT struttura_id FROM divisioni WHERE id = ?", (divisione_id,))
     _struttura_import = _div_row['struttura_id'] if _div_row else _struttura_id_check
 
-    # Save uploaded file (in cartella scoped per struttura: i sorgenti di import
-    # sono serviti da /uploads/<path>, che isola solo i percorsi strutture/<id>/)
-    uploads_dir, _import_rel_prefix = upload_subdir('import', _struttura_import)
-    # Identifica la cartella pages_<...> in cui viene spezzato il PDF: con il
-    # solo secondo, due import avviati insieme scrivevano le proprie pagine
-    # nella stessa cartella e si mescolavano.
-    timestamp = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    filename = nome_file_unico(file.filename)
-    filepath = os.path.join(uploads_dir, filename)
-    file.save(filepath)
+    # M07: uno slot di analisi si prenota prima di salvare il file. Senza tetto
+    # ogni upload faceva partire un thread in piu', e bastavano pochi documenti
+    # per saturare processo e quota AI. Si rifiuta prima di scrivere su disco:
+    # un file salvato e un import 'processing' che non parte sarebbero peggio
+    # del rifiuto.
+    if not coda_import.prenota(_struttura_import, config):
+        flash("Ci sono gia' troppe analisi AI in corso. "
+              'Attendi che una finisca e riprova.', 'warning')
+        return redirect(url_for('import.upload'))
 
-    # Create import_history record in 'processing' state.
-    # tipo_import is set to 'inventario' as placeholder; the background thread
-    # will update it once the document is classified.
-    cursor = execute(
-        """INSERT INTO import_history
-           (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            struttura_id, stato, imported_by)
-           VALUES ('inventario', ?, ?, ?, ?, ?, 'processing', ?)""",
-        (file.filename, f"{_import_rel_prefix}/{filename}", ext, divisione_id,
-         _struttura_import, g.user['id'])
-    )
-    import_id = cursor.lastrowid
+    # Da qui allo start del lavoro lo slot e' prenotato ma nessuno lo
+    # rilascera': se il salvataggio o l'INSERT falliscono va restituito a mano,
+    # altrimenti dopo qualche errore il deployment non accetta piu' import.
+    try:
+        # Save uploaded file (in cartella scoped per struttura: i sorgenti di import
+        # sono serviti da /uploads/<path>, che isola solo i percorsi strutture/<id>/)
+        uploads_dir, _import_rel_prefix = upload_subdir('import', _struttura_import)
+        # Identifica la cartella pages_<...> in cui viene spezzato il PDF: con il
+        # solo secondo, due import avviati insieme scrivevano le proprie pagine
+        # nella stessa cartella e si mescolavano.
+        timestamp = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        filename = nome_file_unico(file.filename)
+        filepath = os.path.join(uploads_dir, filename)
+        file.save(filepath)
 
-    # Capture request-context values before leaving the request
-    app_obj = current_app._get_current_object()
-    uploads_path = current_app.config['UPLOADS_PATH']
-    from ai_service import get_ai_config as _gac
-    # _struttura_import (non g.struttura_id) e' il valore autoritativo: e' lo
-    # stesso gia' usato sopra per l'INSERT in import_history. g.struttura_id
-    # puo' essere None (superadmin che non impersona, admin la cui struttura
-    # e' stata disattivata) mentre l'import ha comunque una struttura precisa,
-    # derivata dalla divisione scelta: passare g.struttura_id al thread
-    # faceva perdere il filtro di struttura al match automatico degli
-    # apparecchi (_match_apparecchi), che allora cercava su tutte le strutture.
-    _struttura_id = _struttura_import
-    _ai_cfg = _gac(struttura_id=_struttura_id, config=config)
-    api_key = _ai_cfg['api_key']
-    user_id = g.user['id']
-    remote_addr = request.remote_addr
+        # Create import_history record in 'processing' state.
+        # tipo_import is set to 'inventario' as placeholder; the background thread
+        # will update it once the document is classified.
+        cursor = execute(
+            """INSERT INTO import_history
+               (tipo_import, filename, filepath, tipo_documento, divisione_id,
+                struttura_id, stato, imported_by)
+               VALUES ('inventario', ?, ?, ?, ?, ?, 'processing', ?)""",
+            (file.filename, f"{_import_rel_prefix}/{filename}", ext, divisione_id,
+             _struttura_import, g.user['id'])
+        )
+        import_id = cursor.lastrowid
 
-    t = threading.Thread(
-        target=_run_import_async,
-        args=(app_obj, import_id, filepath, ext, file.filename, filename,
-              divisione_id, config, api_key, timestamp,
-              user_id, remote_addr, uploads_path, _struttura_id),
-        daemon=True,
-        name=f'import-{import_id}',
-    )
-    t.start()
+        # Capture request-context values before leaving the request
+        app_obj = current_app._get_current_object()
+        uploads_path = current_app.config['UPLOADS_PATH']
+        from ai_service import get_ai_config as _gac
+        # _struttura_import (non g.struttura_id) e' il valore autoritativo: e'
+        # lo stesso gia' usato sopra per l'INSERT in import_history.
+        # g.struttura_id puo' essere None (superadmin che non impersona, admin
+        # la cui struttura e' stata disattivata) mentre l'import ha comunque una
+        # struttura precisa, derivata dalla divisione scelta: passare
+        # g.struttura_id al thread faceva perdere il filtro di struttura al
+        # match automatico degli apparecchi (_match_apparecchi), che allora
+        # cercava su tutte le strutture.
+        _struttura_id = _struttura_import
+        _ai_cfg = _gac(struttura_id=_struttura_id, config=config)
+        api_key = _ai_cfg['api_key']
+        user_id = g.user['id']
+        remote_addr = request.remote_addr
+
+        # Lo slot prenotato sopra viene rilasciato da coda_import.avvia() quando
+        # il lavoro finisce, riuscito o fallito che sia.
+        coda_import.avvia(
+            _struttura_id,
+            _run_import_async,
+            args=(app_obj, import_id, filepath, ext, file.filename, filename,
+                  divisione_id, config, api_key, timestamp,
+                  user_id, remote_addr, uploads_path, _struttura_id),
+            nome=f'import-{import_id}',
+        )
+    except Exception:
+        coda_import.rilascia(_struttura_import)
+        raise
 
     return redirect(url_for('import.attendi', id=import_id))
 
@@ -808,17 +827,21 @@ def esegui(id):
         flash(f'Tipo import non riconosciuto: {tipo}', 'danger')
         return redirect(url_for('import.preview', id=id))
 
-    execute(
-        """UPDATE import_history SET
+    # M03: chiusura dell'import e riga di registro insieme. Un import segnato
+    # 'completed' di cui il registro non sa nulla e' l'unica traccia che resta
+    # all'operatore quando qualcosa va storto.
+    with transazione():
+        execute(
+            """UPDATE import_history SET
            stato = 'completed', righe_importate = ?, righe_errori = ?,
            completed_at = datetime('now')
            WHERE id = ?""",
-        (imported, errors, id)
-    )
+            (imported, errors, id)
+        )
 
-    log_attivita(g.user['id'], 'import_esecuzione', 'import_history', id,
-                 f"{DOC_TYPE_LABELS.get(tipo, tipo)}: {imported} importati, {errors} errori",
-                 request.remote_addr)
+        log_attivita(g.user['id'], 'import_esecuzione', 'import_history', id,
+                     f"{DOC_TYPE_LABELS.get(tipo, tipo)}: {imported} importati, {errors} errori",
+                     request.remote_addr)
 
     flash(f'Import completato: {imported} importati, {errors} errori.', 'success')
 
@@ -828,6 +851,20 @@ def esegui(id):
         return redirect(url_for('manutenzioni.lista'))
     else:
         return redirect(url_for('verifiche.lista'))
+
+
+def _rimuovi_file_copiati(percorsi):
+    """M03: il rollback annulla le righe, non i file gia' copiati su disco.
+
+    Ripulisce gli allegati della riga fallita: senza questo la cartella dei
+    verbali si riempirebbe di documenti che nessun record cita piu'.
+    """
+    for percorso in percorsi:
+        try:
+            os.remove(percorso)
+        except OSError:
+            current_app.logger.warning(
+                "Allegato di import non rimosso dopo il rollback: %s", percorso)
 
 
 def _execute_inventario(import_id, selected_ids, import_rec):
@@ -841,81 +878,86 @@ def _execute_inventario(import_id, selected_ids, import_rec):
         if not row:
             continue
         try:
-            data = json.loads(row['dati_estratti'])
-            if row['apparecchio_match_id']:
-                # Il match nasce nel thread di analisi: prima di riscrivere la
-                # scheda va riverificato nello scope di chi esegue l'import,
-                # struttura e divisione comprese.
-                if not apparecchio_accessibile(row['apparecchio_match_id']):
-                    raise ValueError("Apparecchio abbinato non accessibile")
-                # M14: stessi controlli del form anche qui. Marca, modello e
-                # matricola non vengono riscritti su una scheda esistente,
-                # quindi in questo ramo non sono obbligatori.
-                data, errori = valida_apparecchio(data, richiedi_identificativi=False)
-                if errori:
-                    raise ValueError(messaggio_errori(errori))
-                execute(
-                    """UPDATE apparecchi SET
-                       descrizione = COALESCE(descrizione, ?),
-                       anno_fabbricazione = COALESCE(anno_fabbricazione, ?),
-                       classificazione = COALESCE(classificazione, ?),
-                       ubicazione = COALESCE(?, ubicazione),
-                       fornitore = COALESCE(?, fornitore),
-                       codice_fornitore = COALESCE(codice_fornitore, ?),
-                       garanzia_scadenza = COALESCE(garanzia_scadenza, ?),
-                       contratto_manutenzione = COALESCE(contratto_manutenzione, ?),
-                       note = COALESCE(?, note),
-                       updated_by = ?, updated_at = datetime('now')
-                       WHERE id = ?""",
-                    (data.get('descrizione'), data.get('anno_fabbricazione'),
-                     data.get('classificazione'),
-                     data.get('ubicazione'), data.get('fornitore'),
-                     data.get('codice_fornitore'), data.get('garanzia_scadenza'),
-                     data.get('contratto_manutenzione'),
-                     data.get('note'), g.user['id'], row['apparecchio_match_id'])
-                )
-            else:
-                # La divisione di destinazione e' quella dichiarata nell'import:
-                # va convalidata contro lo scope di chi esegue, non contro la
-                # sola struttura, altrimenti si crea una scheda in un reparto
-                # non assegnato.
-                div_row = divisione_accessibile(import_rec['divisione_id'])
-                if not div_row:
-                    raise ValueError("Divisione di destinazione non accessibile")
-                # M14: marca, modello e matricola obbligatori come nel form;
-                # date e anno passano dalla stessa normalizzazione.
-                data, errori = valida_apparecchio(data)
-                if errori:
-                    raise ValueError(messaggio_errori(errori))
-                # struttura_id dalla sessione (authoritative); fallback alla
-                # divisione solo per il superadmin che non impersona nessuno.
-                imp_struttura_id = getattr(g, 'struttura_id', None) or div_row['struttura_id']
-                execute(
-                    """INSERT INTO apparecchi
-                       (divisione_id, struttura_id, matricola, descrizione, numero_inventario,
-                        marca, modello, anno_fabbricazione, classificazione,
-                        ubicazione, fornitore, codice_fornitore, garanzia_scadenza,
-                        contratto_manutenzione, ip_address, note, created_by)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (import_rec['divisione_id'],
-                     imp_struttura_id,
-                     data.get('matricola'),
-                     data.get('descrizione'),
-                     data.get('numero_inventario'),
-                     data.get('marca'),
-                     data.get('modello'),
-                     data.get('anno_fabbricazione'),
-                     data.get('classificazione'),
-                     data.get('ubicazione'),
-                     data.get('fornitore'),
-                     data.get('codice_fornitore'),
-                     data.get('garanzia_scadenza'),
-                     data.get('contratto_manutenzione'),
-                     data.get('ip_address'),
-                     data.get('note'),
-                     g.user['id'])
-                )
-            execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
+            # M03: la scheda e lo stato della riga di anteprima si scrivono
+            # insieme. Fuori transazione un errore lascerebbe l'apparecchio
+            # inserito e la riga ancora "da importare", pronta a duplicarlo
+            # al tentativo successivo.
+            with transazione():
+                data = json.loads(row['dati_estratti'])
+                if row['apparecchio_match_id']:
+                    # Il match nasce nel thread di analisi: prima di riscrivere la
+                    # scheda va riverificato nello scope di chi esegue l'import,
+                    # struttura e divisione comprese.
+                    if not apparecchio_accessibile(row['apparecchio_match_id']):
+                        raise ValueError("Apparecchio abbinato non accessibile")
+                    # M14: stessi controlli del form anche qui. Marca, modello e
+                    # matricola non vengono riscritti su una scheda esistente,
+                    # quindi in questo ramo non sono obbligatori.
+                    data, errori = valida_apparecchio(data, richiedi_identificativi=False)
+                    if errori:
+                        raise ValueError(messaggio_errori(errori))
+                    execute(
+                        """UPDATE apparecchi SET
+                           descrizione = COALESCE(descrizione, ?),
+                           anno_fabbricazione = COALESCE(anno_fabbricazione, ?),
+                           classificazione = COALESCE(classificazione, ?),
+                           ubicazione = COALESCE(?, ubicazione),
+                           fornitore = COALESCE(?, fornitore),
+                           codice_fornitore = COALESCE(codice_fornitore, ?),
+                           garanzia_scadenza = COALESCE(garanzia_scadenza, ?),
+                           contratto_manutenzione = COALESCE(contratto_manutenzione, ?),
+                           note = COALESCE(?, note),
+                           updated_by = ?, updated_at = datetime('now')
+                           WHERE id = ?""",
+                        (data.get('descrizione'), data.get('anno_fabbricazione'),
+                         data.get('classificazione'),
+                         data.get('ubicazione'), data.get('fornitore'),
+                         data.get('codice_fornitore'), data.get('garanzia_scadenza'),
+                         data.get('contratto_manutenzione'),
+                         data.get('note'), g.user['id'], row['apparecchio_match_id'])
+                    )
+                else:
+                    # La divisione di destinazione e' quella dichiarata nell'import:
+                    # va convalidata contro lo scope di chi esegue, non contro la
+                    # sola struttura, altrimenti si crea una scheda in un reparto
+                    # non assegnato.
+                    div_row = divisione_accessibile(import_rec['divisione_id'])
+                    if not div_row:
+                        raise ValueError("Divisione di destinazione non accessibile")
+                    # M14: marca, modello e matricola obbligatori come nel form;
+                    # date e anno passano dalla stessa normalizzazione.
+                    data, errori = valida_apparecchio(data)
+                    if errori:
+                        raise ValueError(messaggio_errori(errori))
+                    # struttura_id dalla sessione (authoritative); fallback alla
+                    # divisione solo per il superadmin che non impersona nessuno.
+                    imp_struttura_id = getattr(g, 'struttura_id', None) or div_row['struttura_id']
+                    execute(
+                        """INSERT INTO apparecchi
+                           (divisione_id, struttura_id, matricola, descrizione, numero_inventario,
+                            marca, modello, anno_fabbricazione, classificazione,
+                            ubicazione, fornitore, codice_fornitore, garanzia_scadenza,
+                            contratto_manutenzione, ip_address, note, created_by)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (import_rec['divisione_id'],
+                         imp_struttura_id,
+                         data.get('matricola'),
+                         data.get('descrizione'),
+                         data.get('numero_inventario'),
+                         data.get('marca'),
+                         data.get('modello'),
+                         data.get('anno_fabbricazione'),
+                         data.get('classificazione'),
+                         data.get('ubicazione'),
+                         data.get('fornitore'),
+                         data.get('codice_fornitore'),
+                         data.get('garanzia_scadenza'),
+                         data.get('contratto_manutenzione'),
+                         data.get('ip_address'),
+                         data.get('note'),
+                         g.user['id'])
+                    )
+                execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
             imported += 1
         except Exception as e:
             execute("UPDATE import_preview SET stato = 'rejected', note_revisione = ? WHERE id = ?",
@@ -936,94 +978,101 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                         (int(row_id), import_id))
         if not row:
             continue
+        copiati = []
         try:
-            data = json.loads(row['dati_estratti'])
+            # M03: manutenzione e stato della riga in una sola transazione;
+            # gli allegati gia' copiati vengono rimossi a mano nel except,
+            # perche' il rollback non tocca il disco.
+            with transazione():
+                data = json.loads(row['dati_estratti'])
 
-            # Bug K: skip error items produced during page analysis
-            if data.get('_errore'):
-                execute("UPDATE import_preview SET stato = 'rejected', "
-                        "note_revisione = 'Errore analisi pagina' WHERE id = ?",
-                        (int(row_id),))
-                errors += 1
-                continue
+                # Bug K: skip error items produced during page analysis
+                if data.get('_errore'):
+                    execute("UPDATE import_preview SET stato = 'rejected', "
+                            "note_revisione = 'Errore analisi pagina' WHERE id = ?",
+                            (int(row_id),))
+                    errors += 1
+                    continue
 
-            # M14: validazione di dominio condivisa con il form, prima di
-            # copiare allegati o di toccare il database.
-            data, errori = valida_manutenzione(data)
-            if errori:
-                raise ValueError(messaggio_errori(errori))
+                # M14: validazione di dominio condivisa con il form, prima di
+                # copiare allegati o di toccare il database.
+                data, errori = valida_manutenzione(data)
+                if errori:
+                    raise ValueError(messaggio_errori(errori))
 
-            # Determine apparecchio: user override or AI match
-            app_override = request.form.get(f'apparecchio_id_{row_id}')
-            if app_override:
-                try:
-                    apparecchio_id = int(app_override)
-                except (ValueError, TypeError):
-                    apparecchio_id = None
-                # L'override arriva dal form: verifica struttura e divisione
-                # per ogni ruolo (prima l'admin non veniva controllato affatto).
-                if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
-                    apparecchio_id = None
-            else:
-                apparecchio_id = row['apparecchio_match_id']
-                # Il match arriva dall'analisi in background: va riverificato
-                # nello scope di chi esegue l'import, esattamente come
-                # l'override manuale sopra. Senza questo controllo un
-                # apparecchio_match_id di un'altra struttura (es. perche' il
-                # thread di analisi aveva perso il filtro di struttura)
-                # passerebbe senza che nessuno lo controlli.
-                if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
-                    apparecchio_id = None
+                # Determine apparecchio: user override or AI match
+                app_override = request.form.get(f'apparecchio_id_{row_id}')
+                if app_override:
+                    try:
+                        apparecchio_id = int(app_override)
+                    except (ValueError, TypeError):
+                        apparecchio_id = None
+                    # L'override arriva dal form: verifica struttura e divisione
+                    # per ogni ruolo (prima l'admin non veniva controllato affatto).
+                    if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                        apparecchio_id = None
+                else:
+                    apparecchio_id = row['apparecchio_match_id']
+                    # Il match arriva dall'analisi in background: va riverificato
+                    # nello scope di chi esegue l'import, esattamente come
+                    # l'override manuale sopra. Senza questo controllo un
+                    # apparecchio_match_id di un'altra struttura (es. perche' il
+                    # thread di analisi aveva perso il filtro di struttura)
+                    # passerebbe senza che nessuno lo controlli.
+                    if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                        apparecchio_id = None
 
-            if not apparecchio_id:
-                execute("UPDATE import_preview SET stato = 'rejected', "
-                        "note_revisione = 'Nessun apparecchio associato' WHERE id = ?",
-                        (int(row_id),))
-                errors += 1
-                continue
+                if not apparecchio_id:
+                    execute("UPDATE import_preview SET stato = 'rejected', "
+                            "note_revisione = 'Nessun apparecchio associato' WHERE id = ?",
+                            (int(row_id),))
+                    errors += 1
+                    continue
 
-            data_intervento = data['data_intervento']
-            tipo = data['tipo']
+                data_intervento = data['data_intervento']
+                tipo = data['tipo']
 
-            # Copy page PDF to verbali folder if available
-            verbale_path = None
-            page_file = data.get('_page_file')
-            if page_file:
-                src = os.path.join(current_app.config['UPLOADS_PATH'], page_file)
-                if os.path.exists(src):
-                    verbali_dir, verbali_prefix = upload_subdir(
-                        'verbali', import_rec.get('struttura_id'))
-                    dest_name = f"{batch_ts}_{idx}_{os.path.basename(page_file)}"
-                    dest = os.path.join(verbali_dir, dest_name)
-                    shutil.copy2(src, dest)
-                    verbale_path = f"{verbali_prefix}/{dest_name}"
+                # Copy page PDF to verbali folder if available
+                verbale_path = None
+                page_file = data.get('_page_file')
+                if page_file:
+                    src = os.path.join(current_app.config['UPLOADS_PATH'], page_file)
+                    if os.path.exists(src):
+                        verbali_dir, verbali_prefix = upload_subdir(
+                            'verbali', import_rec.get('struttura_id'))
+                        dest_name = f"{batch_ts}_{idx}_{os.path.basename(page_file)}"
+                        dest = os.path.join(verbali_dir, dest_name)
+                        shutil.copy2(src, dest)
+                        copiati.append(dest)
+                        verbale_path = f"{verbali_prefix}/{dest_name}"
 
-            periodicita_giorni = data['periodicita_giorni']
-            costo = data['costo']
+                periodicita_giorni = data['periodicita_giorni']
+                costo = data['costo']
 
-            cursor = execute(
-                """INSERT INTO manutenzioni
-                   (apparecchio_id, tipo, data_intervento, prossima_scadenza,
-                    periodicita_giorni, tecnico_ditta, descrizione, esito,
-                    costo, verbale_path, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    apparecchio_id,
-                    tipo,
-                    data_intervento,
-                    data['prossima_scadenza'],
-                    periodicita_giorni,
-                    data.get('tecnico_ditta'),
-                    data.get('descrizione'),
-                    data.get('esito'),
-                    costo,
-                    verbale_path,
-                    g.user['id']
+                cursor = execute(
+                    """INSERT INTO manutenzioni
+                       (apparecchio_id, tipo, data_intervento, prossima_scadenza,
+                        periodicita_giorni, tecnico_ditta, descrizione, esito,
+                        costo, verbale_path, created_by)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        apparecchio_id,
+                        tipo,
+                        data_intervento,
+                        data['prossima_scadenza'],
+                        periodicita_giorni,
+                        data.get('tecnico_ditta'),
+                        data.get('descrizione'),
+                        data.get('esito'),
+                        costo,
+                        verbale_path,
+                        g.user['id']
+                    )
                 )
-            )
-            execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
+                execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
             imported += 1
         except Exception as e:
+            _rimuovi_file_copiati(copiati)
             execute("UPDATE import_preview SET stato = 'rejected', note_revisione = ? WHERE id = ?",
                     (str(e), int(row_id)))
             errors += 1
@@ -1043,132 +1092,139 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                         (int(row_id), import_id))
         if not row:
             continue
+        copiati = []
         try:
-            data = json.loads(row['dati_estratti'])
+            # M03: verifica, eventuale apparecchio creato al volo e stato
+            # della riga sono un'unica scrittura. Prima un errore a meta'
+            # poteva lasciare la scheda nuova senza la sua verifica.
+            with transazione():
+                data = json.loads(row['dati_estratti'])
 
-            # Bug K: skip error items produced during page analysis
-            if data.get('_errore'):
-                execute("UPDATE import_preview SET stato = 'rejected', "
-                        "note_revisione = 'Errore analisi pagina' WHERE id = ?",
-                        (int(row_id),))
-                errors += 1
-                continue
+                # Bug K: skip error items produced during page analysis
+                if data.get('_errore'):
+                    execute("UPDATE import_preview SET stato = 'rejected', "
+                            "note_revisione = 'Errore analisi pagina' WHERE id = ?",
+                            (int(row_id),))
+                    errors += 1
+                    continue
 
-            # M14: validazione di dominio condivisa con il form, prima di
-            # creare apparecchi o copiare allegati per una riga da scartare.
-            # Un esito assente o incomprensibile non diventa piu' 'positivo'.
-            data, errori = valida_verifica(data)
-            if errori:
-                raise ValueError(messaggio_errori(errori))
+                # M14: validazione di dominio condivisa con il form, prima di
+                # creare apparecchi o copiare allegati per una riga da scartare.
+                # Un esito assente o incomprensibile non diventa piu' 'positivo'.
+                data, errori = valida_verifica(data)
+                if errori:
+                    raise ValueError(messaggio_errori(errori))
 
-            # Risoluzione apparecchio: crea nuovo, override manuale, o match AI
-            crea_nuovo = request.form.get(f'crea_nuovo_{row_id}') == '1'
+                # Risoluzione apparecchio: crea nuovo, override manuale, o match AI
+                crea_nuovo = request.form.get(f'crea_nuovo_{row_id}') == '1'
 
-            if crea_nuovo:
-                n_marca = request.form.get(f'nuovo_marca_{row_id}', '').strip()
-                n_modello = request.form.get(f'nuovo_modello_{row_id}', '').strip()
-                n_matricola = request.form.get(f'nuovo_matricola_{row_id}', '').strip()
-                n_descrizione = request.form.get(f'nuovo_descrizione_{row_id}', '').strip()
-                n_divisione_id = request.form.get(f'nuovo_divisione_id_{row_id}', type=int)
+                if crea_nuovo:
+                    n_marca = request.form.get(f'nuovo_marca_{row_id}', '').strip()
+                    n_modello = request.form.get(f'nuovo_modello_{row_id}', '').strip()
+                    n_matricola = request.form.get(f'nuovo_matricola_{row_id}', '').strip()
+                    n_descrizione = request.form.get(f'nuovo_descrizione_{row_id}', '').strip()
+                    n_divisione_id = request.form.get(f'nuovo_divisione_id_{row_id}', type=int)
 
-                if not (n_marca and n_modello and n_matricola and n_divisione_id):
-                    raise ValueError(
-                        "Marca, modello, matricola e divisione sono obbligatori "
-                        "per creare un nuovo apparecchio"
+                    if not (n_marca and n_modello and n_matricola and n_divisione_id):
+                        raise ValueError(
+                            "Marca, modello, matricola e divisione sono obbligatori "
+                            "per creare un nuovo apparecchio"
+                        )
+
+                    # La divisione arriva dal form: struttura *e* assegnazione.
+                    # Il controllo precedente si fermava alla struttura, cosi' un
+                    # ruolo 'utente' creava schede in qualunque reparto del tenant.
+                    div_check = divisione_accessibile(n_divisione_id)
+                    if not div_check or not div_check['attiva']:
+                        raise ValueError("Divisione non accessibile")
+
+                    cur = execute(
+                        """INSERT INTO apparecchi
+                           (divisione_id, struttura_id, matricola, marca, modello, descrizione, created_by)
+                           VALUES (?,?,?,?,?,?,?)""",
+                        (n_divisione_id, div_check['struttura_id'],
+                         n_matricola, n_marca, n_modello, n_descrizione or None, g.user['id'])
                     )
-
-                # La divisione arriva dal form: struttura *e* assegnazione.
-                # Il controllo precedente si fermava alla struttura, cosi' un
-                # ruolo 'utente' creava schede in qualunque reparto del tenant.
-                div_check = divisione_accessibile(n_divisione_id)
-                if not div_check or not div_check['attiva']:
-                    raise ValueError("Divisione non accessibile")
-
-                cur = execute(
-                    """INSERT INTO apparecchi
-                       (divisione_id, struttura_id, matricola, marca, modello, descrizione, created_by)
-                       VALUES (?,?,?,?,?,?,?)""",
-                    (n_divisione_id, div_check['struttura_id'],
-                     n_matricola, n_marca, n_modello, n_descrizione or None, g.user['id'])
-                )
-                apparecchio_id = cur.lastrowid
-                log_attivita(g.user['id'], 'creazione', 'apparecchi', apparecchio_id,
-                             f"Creato da import verifica: {n_marca} {n_modello} ({n_matricola})",
-                             request.remote_addr,
-                             struttura_id=div_check['struttura_id'])
-            else:
-                app_override = request.form.get(f'apparecchio_id_{row_id}')
-                if app_override:
-                    try:
-                        apparecchio_id = int(app_override)
-                    except (ValueError, TypeError):
-                        apparecchio_id = None
-                    # L'override arriva dal form: verifica struttura e divisione
-                    # per ogni ruolo (prima admin/superadmin non erano controllati).
-                    if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
-                        apparecchio_id = None
+                    apparecchio_id = cur.lastrowid
+                    log_attivita(g.user['id'], 'creazione', 'apparecchi', apparecchio_id,
+                                 f"Creato da import verifica: {n_marca} {n_modello} ({n_matricola})",
+                                 request.remote_addr,
+                                 struttura_id=div_check['struttura_id'])
                 else:
-                    apparecchio_id = row['apparecchio_match_id']
-                    # Stesso motivo di _execute_verbali: il match automatico
-                    # non e' gia' verificato nello scope di chi esegue
-                    # l'import, va controllato qui come l'override manuale.
-                    if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
-                        apparecchio_id = None
+                    app_override = request.form.get(f'apparecchio_id_{row_id}')
+                    if app_override:
+                        try:
+                            apparecchio_id = int(app_override)
+                        except (ValueError, TypeError):
+                            apparecchio_id = None
+                        # L'override arriva dal form: verifica struttura e divisione
+                        # per ogni ruolo (prima admin/superadmin non erano controllati).
+                        if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                            apparecchio_id = None
+                    else:
+                        apparecchio_id = row['apparecchio_match_id']
+                        # Stesso motivo di _execute_verbali: il match automatico
+                        # non e' gia' verificato nello scope di chi esegue
+                        # l'import, va controllato qui come l'override manuale.
+                        if apparecchio_id and not apparecchio_accessibile(apparecchio_id):
+                            apparecchio_id = None
 
-            if not apparecchio_id:
-                execute("UPDATE import_preview SET stato = 'rejected', "
-                        "note_revisione = 'Nessun apparecchio associato' WHERE id = ?",
-                        (int(row_id),))
-                errors += 1
-                continue
+                if not apparecchio_id:
+                    execute("UPDATE import_preview SET stato = 'rejected', "
+                            "note_revisione = 'Nessun apparecchio associato' WHERE id = ?",
+                            (int(row_id),))
+                    errors += 1
+                    continue
 
-            data_verifica = data['data_verifica']
-            esito = data['esito']
+                data_verifica = data['data_verifica']
+                esito = data['esito']
 
-            # Copy page PDF to verifiche folder if available
-            documento_path = None
-            page_file = data.get('_page_file')
-            if page_file:
-                src = os.path.join(current_app.config['UPLOADS_PATH'], page_file)
-                if os.path.exists(src):
-                    verifiche_dir, verifiche_prefix = upload_subdir(
-                        'verifiche', import_rec.get('struttura_id'))
-                    dest_name = f"{batch_ts}_{idx}_{os.path.basename(page_file)}"
-                    dest = os.path.join(verifiche_dir, dest_name)
-                    shutil.copy2(src, dest)
-                    documento_path = f"{verifiche_prefix}/{dest_name}"
+                # Copy page PDF to verifiche folder if available
+                documento_path = None
+                page_file = data.get('_page_file')
+                if page_file:
+                    src = os.path.join(current_app.config['UPLOADS_PATH'], page_file)
+                    if os.path.exists(src):
+                        verifiche_dir, verifiche_prefix = upload_subdir(
+                            'verifiche', import_rec.get('struttura_id'))
+                        dest_name = f"{batch_ts}_{idx}_{os.path.basename(page_file)}"
+                        dest = os.path.join(verifiche_dir, dest_name)
+                        shutil.copy2(src, dest)
+                        copiati.append(dest)
+                        documento_path = f"{verifiche_prefix}/{dest_name}"
 
-            periodicita = data['periodicita_giorni']
-            prossima = data['prossima_scadenza']
-            if not prossima:
-                try:
-                    d = datetime.strptime(data_verifica, '%Y-%m-%d')
-                    d += timedelta(days=periodicita)
-                    prossima = d.strftime('%Y-%m-%d')
-                except ValueError:
-                    pass
+                periodicita = data['periodicita_giorni']
+                prossima = data['prossima_scadenza']
+                if not prossima:
+                    try:
+                        d = datetime.strptime(data_verifica, '%Y-%m-%d')
+                        d += timedelta(days=periodicita)
+                        prossima = d.strftime('%Y-%m-%d')
+                    except ValueError:
+                        pass
 
-            cursor = execute(
-                """INSERT INTO verifiche
-                   (apparecchio_id, data_verifica, prossima_scadenza,
-                    periodicita_giorni, esito, tecnico_ditta, note,
-                    documento_path, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    apparecchio_id,
-                    data_verifica,
-                    prossima,
-                    periodicita,
-                    esito,
-                    data.get('tecnico_ditta'),
-                    data.get('note'),
-                    documento_path,
-                    g.user['id']
+                cursor = execute(
+                    """INSERT INTO verifiche
+                       (apparecchio_id, data_verifica, prossima_scadenza,
+                        periodicita_giorni, esito, tecnico_ditta, note,
+                        documento_path, created_by)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        apparecchio_id,
+                        data_verifica,
+                        prossima,
+                        periodicita,
+                        esito,
+                        data.get('tecnico_ditta'),
+                        data.get('note'),
+                        documento_path,
+                        g.user['id']
+                    )
                 )
-            )
-            execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
+                execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
             imported += 1
         except Exception as e:
+            _rimuovi_file_copiati(copiati)
             execute("UPDATE import_preview SET stato = 'rejected', note_revisione = ? WHERE id = ?",
                     (str(e), int(row_id)))
             errors += 1

@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 from auth import login_required, tecnico_o_admin_required
 from models import (query_one, query_all, execute, log_attivita,
                     upload_subdir, nome_file_unico, filtro_divisione,
-                    impianto_accessibile)
+                    impianto_accessibile, transazione)
 import impianti_service
 from impianti_catalogo import voci_per_tipo, voci_mancanti
 
@@ -714,6 +714,7 @@ def nuovo_intervento(impianto_id):
         manutentore_id = None
 
     verbale_path = None
+    percorso_verbale = None
     file = request.files.get('verbale')
     if file and file.filename:
         ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
@@ -724,25 +725,40 @@ def nuovo_intervento(impianto_id):
         uploads_dir, rel_prefix = upload_subdir('impianti',
                                                 impianto['struttura_id'])
         filename = nome_file_unico(file.filename)
-        file.save(os.path.join(uploads_dir, filename))
+        percorso_verbale = os.path.join(uploads_dir, filename)
+        file.save(percorso_verbale)
         verbale_path = f"{rel_prefix}/{filename}"
 
-    _, nuova = impianti_service.registra_intervento(impianto_id, {
-        'scadenza_id': scadenza_id,
-        'componente_id': componente_id,
-        'tipo': tipo,
-        'data_intervento': data_intervento,
-        'esito': esito,
-        'manutentore_id': manutentore_id,
-        'tecnico_ditta': (request.form.get('tecnico_ditta') or '').strip() or None,
-        'descrizione': (request.form.get('descrizione') or '').strip() or None,
-        'costo': request.form.get('costo', type=float),
-        'verbale_path': verbale_path,
-        'note': (request.form.get('note') or '').strip() or None,
-    }, utente_id=g.user['id'])
+    # M03: intervento, avanzamento della scadenza e riga di registro in una
+    # sola transazione (quella aperta qui ingloba quella di registra_intervento).
+    # Il verbale e' gia' su disco e il rollback non lo tocca: va rimosso a mano,
+    # altrimenti la cartella si riempie di allegati che nessun record cita.
+    try:
+        with transazione():
+            _, nuova = impianti_service.registra_intervento(impianto_id, {
+                'scadenza_id': scadenza_id,
+                'componente_id': componente_id,
+                'tipo': tipo,
+                'data_intervento': data_intervento,
+                'esito': esito,
+                'manutentore_id': manutentore_id,
+                'tecnico_ditta': (request.form.get('tecnico_ditta') or '').strip() or None,
+                'descrizione': (request.form.get('descrizione') or '').strip() or None,
+                'costo': request.form.get('costo', type=float),
+                'verbale_path': verbale_path,
+                'note': (request.form.get('note') or '').strip() or None,
+            }, utente_id=g.user['id'])
 
-    log_attivita(g.user['id'], 'creazione', 'impianto_intervento', impianto_id,
-                 f"Intervento {tipo} del {data_intervento} su {impianto['nome']}")
+            log_attivita(g.user['id'], 'creazione', 'impianto_intervento', impianto_id,
+                         f"Intervento {tipo} del {data_intervento} su {impianto['nome']}")
+    except Exception:
+        if percorso_verbale:
+            try:
+                os.remove(percorso_verbale)
+            except OSError:
+                pass
+        raise
+
     if nuova:
         flash(f'Intervento registrato. Prossima scadenza: {nuova}.', 'success')
     elif esito == 'negativo':

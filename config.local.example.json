@@ -29,6 +29,9 @@
   "default_ai_local_model": "",
   "ai_local_url_allowlist": [],
 
+  "import_max_analisi": 4,
+  "import_max_analisi_struttura": 3,
+
   "email_check_interval_minutes": 15,
   "imap_enabled": false,
   "imap_account": "",

@@ -85,6 +85,7 @@ LOCAL_CONFIG_KEYS = frozenset({
     'default_ai_local_base_url', 'default_ai_local_model',
     'ai_local_url_allowlist',
     'default_ai_import_model', 'default_ai_email_model',
+    'import_max_analisi', 'import_max_analisi_struttura',
     'email_check_interval_minutes',
     'imap_enabled', 'imap_account', 'imap_password', 'imap_server', 'imap_port', 'imap_ssl',
     'alert_email_enabled', 'alert_email_to',

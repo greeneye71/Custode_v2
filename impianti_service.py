@@ -9,7 +9,7 @@ import calendar
 import logging
 from datetime import date, datetime
 
-from models import execute, query_all, query_one
+from models import execute, query_all, query_one, transazione
 from impianti_catalogo import voci_per_tipo
 
 logger = logging.getLogger('medinventory.impianti')
@@ -45,48 +45,53 @@ def registra_intervento(impianto_id, dati, utente_id=None):
     verifica e' stata fatta in ritardo, il ciclo riparte da quando e' stata
     fatta davvero.
     """
-    intervento_id = execute(
-        """INSERT INTO impianti_interventi
-           (impianto_id, scadenza_id, componente_id, tipo, data_intervento,
-            esito, manutentore_id, tecnico_ditta, descrizione, costo,
-            verbale_path, note, created_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (impianto_id, dati.get('scadenza_id'), dati.get('componente_id'),
-         dati.get('tipo', 'ordinaria'), dati['data_intervento'],
-         dati.get('esito'), dati.get('manutentore_id'),
-         dati.get('tecnico_ditta'), dati.get('descrizione'), dati.get('costo'),
-         dati.get('verbale_path'), dati.get('note'), utente_id)
-    ).lastrowid
+    # M03: intervento e avanzamento del piano sono una cosa sola. Committarli
+    # separatamente lascerebbe, se la seconda scrittura fallisce, un intervento
+    # registrato su una scadenza ferma: la verifica risulta fatta e insieme
+    # ancora dovuta, e nessuno se ne accorge finche' l'avviso non riparte.
+    with transazione():
+        intervento_id = execute(
+            """INSERT INTO impianti_interventi
+               (impianto_id, scadenza_id, componente_id, tipo, data_intervento,
+                esito, manutentore_id, tecnico_ditta, descrizione, costo,
+                verbale_path, note, created_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (impianto_id, dati.get('scadenza_id'), dati.get('componente_id'),
+             dati.get('tipo', 'ordinaria'), dati['data_intervento'],
+             dati.get('esito'), dati.get('manutentore_id'),
+             dati.get('tecnico_ditta'), dati.get('descrizione'), dati.get('costo'),
+             dati.get('verbale_path'), dati.get('note'), utente_id)
+        ).lastrowid
 
-    scadenza_id = dati.get('scadenza_id')
-    if not scadenza_id:
-        return intervento_id, None
+        scadenza_id = dati.get('scadenza_id')
+        if not scadenza_id:
+            return intervento_id, None
 
-    riga = query_one(
-        "SELECT * FROM impianti_scadenze WHERE id = ? AND impianto_id = ?",
-        (scadenza_id, impianto_id)
-    )
-    if not riga:
-        return intervento_id, None
-
-    if dati.get('esito') not in ESITI_CHE_RINNOVANO:
-        return intervento_id, None
-
-    if riga['periodicita_mesi']:
-        nuova = aggiungi_mesi(dati['data_intervento'], riga['periodicita_mesi'])
-        execute(
-            "UPDATE impianti_scadenze SET prossima_scadenza = ?,"
-            " updated_at = datetime('now') WHERE id = ?",
-            (nuova, scadenza_id)
+        riga = query_one(
+            "SELECT * FROM impianti_scadenze WHERE id = ? AND impianto_id = ?",
+            (scadenza_id, impianto_id)
         )
-        return intervento_id, nuova
+        if not riga:
+            return intervento_id, None
 
-    # Una tantum: eseguita, esce dal piano. Resta nello storico interventi.
-    execute(
-        "UPDATE impianti_scadenze SET attiva = 0, updated_at = datetime('now')"
-        " WHERE id = ?", (scadenza_id,)
-    )
-    return intervento_id, None
+        if dati.get('esito') not in ESITI_CHE_RINNOVANO:
+            return intervento_id, None
+
+        if riga['periodicita_mesi']:
+            nuova = aggiungi_mesi(dati['data_intervento'], riga['periodicita_mesi'])
+            execute(
+                "UPDATE impianti_scadenze SET prossima_scadenza = ?,"
+                " updated_at = datetime('now') WHERE id = ?",
+                (nuova, scadenza_id)
+            )
+            return intervento_id, nuova
+
+        # Una tantum: eseguita, esce dal piano. Resta nello storico interventi.
+        execute(
+            "UPDATE impianti_scadenze SET attiva = 0, updated_at = datetime('now')"
+            " WHERE id = ?", (scadenza_id,)
+        )
+        return intervento_id, None
 
 
 #: Soglie in ordine di gravita' crescente. Sono cumulative: una scadenza a 3

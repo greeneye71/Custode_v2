@@ -6,6 +6,7 @@ Provides connection management and query helpers for SQLite.
 import sqlite3
 import os
 import logging
+from contextlib import contextmanager
 from flask import g, current_app
 from werkzeug.utils import secure_filename
 
@@ -217,14 +218,61 @@ def query_all(sql, params=()):
         raise
 
 
+def in_transazione():
+    """True se il chiamante sta dentro un blocco transazione()."""
+    return bool(getattr(g, '_transazione_livello', 0))
+
+
+@contextmanager
+def transazione():
+    """Raggruppa piu' scritture in una sola transazione (M03).
+
+    execute() fa commit a ogni istruzione: giusto per la scrittura singola,
+    sbagliato per un'operazione composta. Un intervento registrato senza che
+    la sua scadenza avanzi, o una scheda salvata con la vecchia lista di
+    accessori gia' cancellata, sono stati che nessuno ha mai voluto e che
+    l'operatore non ha modo di riconoscere.
+
+    Dentro il blocco i commit di execute() sono sospesi: si esce con un solo
+    commit, o con un rollback se il blocco solleva. Il blocco e' rientrante -
+    quello annidato si aggancia al piu' esterno, che e' l'unico a decidere -
+    cosi' una funzione di servizio puo' proteggere la propria sequenza senza
+    sapere se chi la chiama ne ha gia' aperta una.
+
+    I file su disco non partecipano: chi copia un allegato dentro il blocco
+    deve rimuoverlo da se' se la transazione fallisce.
+    """
+    db = get_db()
+    if in_transazione():
+        g._transazione_livello += 1
+        try:
+            yield db
+        finally:
+            g._transazione_livello -= 1
+        return
+
+    g._transazione_livello = 1
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        g._transazione_livello = 0
+
+
 def execute(sql, params=()):
     """Execute an INSERT/UPDATE/DELETE and return the cursor.
     Use cursor.lastrowid for inserts, cursor.rowcount for updates/deletes.
+
+    Fa commit da solo, a meno che il chiamante non sia dentro transazione().
     """
     try:
         db = get_db()
         cursor = db.execute(sql, params)
-        db.commit()
+        if not in_transazione():
+            db.commit()
         return cursor
     except Exception as e:
         logger.error(f"execute failed: {e} | SQL: {sql[:100]!r}")

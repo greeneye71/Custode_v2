@@ -19,7 +19,7 @@ from werkzeug.utils import secure_filename
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
                     nome_file_unico, apparecchio_accessibile, filtro_divisione,
-                    get_db)
+                    get_db, transazione)
 
 apparecchi_bp = Blueprint('apparecchi', __name__)
 
@@ -641,8 +641,12 @@ def nuovo():
     div_row = query_one("SELECT struttura_id FROM divisioni WHERE id=?", (data['divisione_id'],))
     struttura_id = div_row['struttura_id'] if div_row else getattr(g, 'struttura_id', None)
 
-    cursor = execute(
-        """INSERT INTO apparecchi
+    # M03: scheda, accessori e riga di log sono una registrazione sola. Un
+    # commit per istruzione lascerebbe, al primo errore, un apparecchio senza i
+    # suoi accessori e senza traccia nel registro attivita'.
+    with transazione():
+        cursor = execute(
+            """INSERT INTO apparecchi
            (divisione_id, struttura_id, descrizione, matricola, numero_inventario,
             marca, modello, anno_fabbricazione, classificazione,
             ubicazione, stato, soggetto_verifica, connesso_rete, ip_address, mac_address,
@@ -650,21 +654,21 @@ def nuovo():
             fornitore, codice_fornitore, garanzia_scadenza,
             contratto_manutenzione, note, created_by)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (data['divisione_id'], struttura_id, data['descrizione'], data['matricola'],
-         data['numero_inventario'], data['marca'], data['modello'],
-         data['anno_fabbricazione'], data['classificazione'],
-         data['ubicazione'], data['stato'], data['soggetto_verifica'],
-         data['connesso_rete'], data['ip_address'], data['mac_address'], data['hostname'],
-         data['porta'], data['protocollo'], data['url_interfaccia'],
-         data['fornitore'], data['codice_fornitore'], data['garanzia_scadenza'],
-         data['contratto_manutenzione'], data['note'], g.user['id'])
-    )
+            (data['divisione_id'], struttura_id, data['descrizione'], data['matricola'],
+             data['numero_inventario'], data['marca'], data['modello'],
+             data['anno_fabbricazione'], data['classificazione'],
+             data['ubicazione'], data['stato'], data['soggetto_verifica'],
+             data['connesso_rete'], data['ip_address'], data['mac_address'], data['hostname'],
+             data['porta'], data['protocollo'], data['url_interfaccia'],
+             data['fornitore'], data['codice_fornitore'], data['garanzia_scadenza'],
+             data['contratto_manutenzione'], data['note'], g.user['id'])
+        )
 
-    _save_accessori(cursor.lastrowid, request.form, g.user['id'])
+        _save_accessori(cursor.lastrowid, request.form, g.user['id'])
 
-    log_attivita(g.user['id'], 'creazione', 'apparecchi', cursor.lastrowid,
-                 f"Creato: {data['marca']} {data['modello']} ({data['matricola']})",
-                 request.remote_addr)
+        log_attivita(g.user['id'], 'creazione', 'apparecchi', cursor.lastrowid,
+                     f"Creato: {data['marca']} {data['modello']} ({data['matricola']})",
+                     request.remote_addr)
 
     flash(f"Apparecchio {data['marca']} {data['modello']} creato con successo.", 'success')
     return redirect(url_for('apparecchi.dettaglio', id=cursor.lastrowid))
@@ -829,8 +833,12 @@ def modifica(id):
                                divisioni=g.divisioni, form_data=request.form,
                                accessori=_parse_accessori_from_form(request.form))
 
-    execute(
-        """UPDATE apparecchi SET
+    # M03: la lista accessori viene cancellata e riscritta; senza transazione
+    # un errore a meta' la lascerebbe vuota o dimezzata su una scheda gia'
+    # aggiornata.
+    with transazione():
+        execute(
+            """UPDATE apparecchi SET
            divisione_id=?, descrizione=?, matricola=?, numero_inventario=?,
            marca=?, modello=?, anno_fabbricazione=?, classificazione=?,
            ubicazione=?, stato=?, soggetto_verifica=?, connesso_rete=?, ip_address=?, mac_address=?,
@@ -838,21 +846,21 @@ def modifica(id):
            fornitore=?, codice_fornitore=?, garanzia_scadenza=?,
            contratto_manutenzione=?, note=?, updated_by=?, updated_at=datetime('now')
            WHERE id=?""",
-        (data['divisione_id'], data['descrizione'], data['matricola'],
-         data['numero_inventario'], data['marca'], data['modello'],
-         data['anno_fabbricazione'], data['classificazione'],
-         data['ubicazione'], data['stato'], data['soggetto_verifica'],
-         data['connesso_rete'], data['ip_address'], data['mac_address'], data['hostname'],
-         data['porta'], data['protocollo'], data['url_interfaccia'],
-         data['fornitore'], data['codice_fornitore'], data['garanzia_scadenza'],
-         data['contratto_manutenzione'], data['note'], g.user['id'], id)
-    )
+            (data['divisione_id'], data['descrizione'], data['matricola'],
+             data['numero_inventario'], data['marca'], data['modello'],
+             data['anno_fabbricazione'], data['classificazione'],
+             data['ubicazione'], data['stato'], data['soggetto_verifica'],
+             data['connesso_rete'], data['ip_address'], data['mac_address'], data['hostname'],
+             data['porta'], data['protocollo'], data['url_interfaccia'],
+             data['fornitore'], data['codice_fornitore'], data['garanzia_scadenza'],
+             data['contratto_manutenzione'], data['note'], g.user['id'], id)
+        )
 
-    _save_accessori(id, request.form, g.user['id'])
+        _save_accessori(id, request.form, g.user['id'])
 
-    log_attivita(g.user['id'], 'modifica', 'apparecchi', id,
-                 f"Modificato: {data['marca']} {data['modello']}",
-                 request.remote_addr)
+        log_attivita(g.user['id'], 'modifica', 'apparecchi', id,
+                     f"Modificato: {data['marca']} {data['modello']}",
+                     request.remote_addr)
 
     flash('Apparecchio aggiornato con successo.', 'success')
     return redirect(url_for('apparecchi.dettaglio', id=id))
