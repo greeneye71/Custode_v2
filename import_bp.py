@@ -17,6 +17,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import allegati
 import coda_import
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
@@ -230,10 +231,13 @@ def analizza():
         flash('Divisione non accessibile.', 'danger')
         return redirect(url_for('import.upload'))
 
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if ext not in ALLOWED_IMPORT_EXT:
-        flash(f'Formato non supportato. Usa: {", ".join(ALLOWED_IMPORT_EXT)}', 'danger')
+    rifiuto = allegati.verifica(
+        file, ALLOWED_IMPORT_EXT,
+        f'Formato non supportato. Usa: {", ".join(ALLOWED_IMPORT_EXT)}')
+    if rifiuto:
+        flash(rifiuto, 'danger')
         return redirect(url_for('import.upload'))
+    ext = allegati.estensione(file.filename)
 
     # Check AI config before saving file
     config = current_app.config['APP_CONFIG']

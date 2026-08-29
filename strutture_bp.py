@@ -12,6 +12,7 @@ from flask import (
     flash, g, current_app, jsonify
 )
 from werkzeug.utils import secure_filename
+import allegati
 import ai_chiavi
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
@@ -1054,9 +1055,10 @@ def carica_logo(struttura_id):
         flash('Nessun file selezionato.', 'warning')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
-    estensione = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if estensione not in ESTENSIONI_LOGO:
-        flash('Formato non supportato. Usa PNG o JPG.', 'danger')
+    rifiuto = allegati.verifica(file, ESTENSIONI_LOGO,
+                                'Formato non supportato. Usa PNG o JPG.')
+    if rifiuto:
+        flash(rifiuto, 'danger')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
     precedente = query_one("SELECT logo_path FROM strutture WHERE id = ?", (struttura_id,))

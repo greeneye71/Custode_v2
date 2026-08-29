@@ -17,6 +17,7 @@ import uuid
 import traceback
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
+import allegati
 from validazione_dominio import (valida_manutenzione, valida_verifica,
                                  messaggio_errori, TIPO_NON_CLASSIFICATO)
 
@@ -208,6 +209,13 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
         if content_type == 'application/pdf' or (filename and filename.lower().endswith('.pdf')):
             pdf_data = part.get_payload(decode=True)
             if pdf_data:
+                # M05: il mittente sceglie nome e content-type dell'allegato.
+                # Un file che si dichiara PDF ma non lo e' finiva comunque in
+                # uploads/ e restava scaricabile dalla coda import.
+                if not allegati.contenuto_coerente(pdf_data[:4096], 'pdf'):
+                    logger.warning(
+                        f"Allegato scartato, non e' un PDF: {filename}")
+                    continue
                 pdf_attachments.append({
                     'filename': filename or 'allegato.pdf',
                     'data': pdf_data

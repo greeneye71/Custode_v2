@@ -13,6 +13,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import allegati
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
                     nome_file_unico, apparecchio_accessibile, filtro_divisione)
@@ -102,8 +103,9 @@ def _save_verbale(file_obj, manutenzione_id, struttura_id=None):
     """Save uploaded PDF verbale for a manutenzione. Returns relative path or None."""
     if not file_obj or not file_obj.filename:
         return None
-    ext = file_obj.filename.rsplit('.', 1)[-1].lower()
-    if ext not in ALLOWED_VERBALE_EXT:
+    # M05: estensione e contenuto. Il chiamante non mostra messaggi qui: un
+    # verbale rifiutato lascia la manutenzione senza allegato, come prima.
+    if allegati.verifica(file_obj, ALLOWED_VERBALE_EXT):
         return None
     uploads_dir, rel_prefix = upload_subdir('verbali', struttura_id)
     safe_name = nome_file_unico(file_obj.filename)

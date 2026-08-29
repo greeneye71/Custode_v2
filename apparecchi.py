@@ -16,6 +16,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import allegati
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
                     nome_file_unico, apparecchio_accessibile, filtro_divisione,
@@ -906,9 +907,11 @@ def upload_foto(id):
         flash('Nessun file selezionato.', 'warning')
         return redirect(url_for('apparecchi.dettaglio', id=id))
 
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if ext not in ALLOWED_IMAGE_EXT:
-        flash('Formato immagine non supportato. Usa JPG, PNG, GIF o WebP.', 'danger')
+    rifiuto = allegati.verifica(
+        file, ALLOWED_IMAGE_EXT,
+        'Formato immagine non supportato. Usa JPG, PNG, GIF o WebP.')
+    if rifiuto:
+        flash(rifiuto, 'danger')
         return redirect(url_for('apparecchi.dettaglio', id=id))
 
     # Save file
@@ -945,9 +948,9 @@ def upload_documento(id):
         flash('Nessun file selezionato.', 'warning')
         return redirect(url_for('apparecchi.dettaglio', id=id))
 
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if ext not in ALLOWED_DOC_EXT:
-        flash('Formato file non supportato.', 'danger')
+    rifiuto = allegati.verifica(file, ALLOWED_DOC_EXT)
+    if rifiuto:
+        flash(rifiuto, 'danger')
         return redirect(url_for('apparecchi.dettaglio', id=id))
 
     if tipo not in ('manuale', 'certificato', 'foto', 'report'):

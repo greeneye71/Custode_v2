@@ -13,6 +13,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import allegati
 from auth import login_required, tecnico_o_admin_required
 from models import (query_one, query_all, execute, log_attivita,
                     upload_subdir, nome_file_unico, filtro_divisione,
@@ -429,9 +430,9 @@ def carica_documento(impianto_id):
         flash('Nessun file selezionato.', 'warning')
         return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
 
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if ext not in ESTENSIONI_DOCUMENTO:
-        flash('Formato file non supportato.', 'danger')
+    rifiuto = allegati.verifica(file, ESTENSIONI_DOCUMENTO)
+    if rifiuto:
+        flash(rifiuto, 'danger')
         return redirect(url_for('impianti.dettaglio', impianto_id=impianto_id))
 
     tipo = request.form.get('tipo', 'altro')
@@ -717,9 +718,10 @@ def nuovo_intervento(impianto_id):
     percorso_verbale = None
     file = request.files.get('verbale')
     if file and file.filename:
-        ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-        if ext not in ESTENSIONI_DOCUMENTO:
-            flash('Formato del verbale non supportato.', 'danger')
+        rifiuto = allegati.verifica(file, ESTENSIONI_DOCUMENTO,
+                                    'Formato del verbale non supportato.')
+        if rifiuto:
+            flash(rifiuto, 'danger')
             return redirect(url_for('impianti.dettaglio',
                                     impianto_id=impianto_id))
         uploads_dir, rel_prefix = upload_subdir('impianti',
