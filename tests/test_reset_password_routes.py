@@ -127,7 +127,7 @@ def test_entrando_con_la_propria_password_il_reset_sparisce(client, app, posta, 
     chiedi(client)
     temporanea = temporanea_spedita()
     client.post('/login', data={'email': 'mario@a.it', 'password': 'Passw0rd!'})
-    client.get('/logout')
+    client.post('/logout')
 
     with app.app_context():
         riga = query_one("SELECT reset_hash, reset_scadenza FROM utenti WHERE id=?",
@@ -145,7 +145,7 @@ def test_la_temporanea_non_entra_due_volte(client, app, posta, dati):
     chiedi(client)
     temporanea = temporanea_spedita()
     client.post('/login', data={'email': 'mario@a.it', 'password': temporanea})
-    client.get('/logout')
+    client.post('/logout')
 
     risposta = client.post('/login', data={'email': 'mario@a.it',
                                            'password': temporanea})
@@ -358,7 +358,7 @@ def test_il_reset_dell_amministratore_annulla_quello_in_sospeso(client, app, pos
     with app.app_context():
         assert query_one("SELECT reset_hash FROM utenti WHERE id=?",
                          (dati['mario'],))['reset_hash'] is None
-    client.get('/logout')
+    client.post('/logout')
     risposta = client.post('/login', data={'email': 'mario@a.it', 'password': temporanea})
     assert risposta.status_code == 200
     with client.session_transaction() as sessione:

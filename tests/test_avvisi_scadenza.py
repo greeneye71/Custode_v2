@@ -93,7 +93,7 @@ def posta(app, monkeypatch):
         'smtp_use_tls': True,
     })
     scheduler = BackgroundScheduler(app)
-    monkeypatch.setattr(scheduler, '_is_digest_due', lambda frequenza: True)
+    monkeypatch.setattr(scheduler, '_periodo_digest', lambda frequenza, now=None: 'test')
     return scheduler
 
 

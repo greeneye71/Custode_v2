@@ -5,12 +5,37 @@ Tutti gli endpoint sono scoped alla struttura del token.
 """
 
 import hashlib
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import Blueprint, request, jsonify, g
 from models import query_one, query_all, execute, log_attivita
 
 api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
+
+# Ogni quanto si riscrive api_tokens.ultimo_utilizzo. Il campo serve a capire
+# se un token e' ancora in uso, non a contare le chiamate: al minuto esatto non
+# lo guarda nessuno.
+INTERVALLO_ULTIMO_UTILIZZO = timedelta(minutes=5)
+
+
+def _ultimo_utilizzo_da_aggiornare(ultimo_utilizzo, adesso=None):
+    """Dice se ultimo_utilizzo e' abbastanza vecchio da valere una scrittura.
+
+    SQLite serializza gli scrittori: fino alla 2.8.1 ogni GET dell'API apriva
+    una transazione in scrittura su api_tokens, mettendo in coda l'importazione,
+    lo scheduler e gli utenti del gestionale. Un client che interroga
+    /apparecchi ogni pochi secondi bloccava il database per il solo gusto di
+    aggiornare un timestamp che nessuno legge cosi' spesso.
+
+    CURRENT_TIMESTAMP di SQLite e' UTC nel formato 'YYYY-MM-DD HH:MM:SS', quindi
+    il confronto fra stringhe segue l'ordine cronologico.
+    """
+    if not ultimo_utilizzo:
+        return True
+    adesso = adesso or datetime.now(timezone.utc)
+    soglia = (adesso - INTERVALLO_ULTIMO_UTILIZZO).strftime('%Y-%m-%d %H:%M:%S')
+    return str(ultimo_utilizzo)[:19] <= soglia
 
 
 def _token_auth(scope='read'):
@@ -40,13 +65,14 @@ def _token_auth(scope='read'):
             if scope == 'write' and 'write' not in scopes_list:
                 return jsonify({'errore': 'Permessi insufficienti'}), 403
 
-            try:
-                execute(
-                    "UPDATE api_tokens SET ultimo_utilizzo=CURRENT_TIMESTAMP WHERE id=?",
-                    (token['id'],)
-                )
-            except Exception:
-                pass
+            if _ultimo_utilizzo_da_aggiornare(token['ultimo_utilizzo']):
+                try:
+                    execute(
+                        "UPDATE api_tokens SET ultimo_utilizzo=CURRENT_TIMESTAMP WHERE id=?",
+                        (token['id'],)
+                    )
+                except Exception:
+                    pass
 
             g.api_struttura_id = token['sid']
             g.api_struttura_nome = token['struttura_nome']
@@ -54,6 +80,21 @@ def _token_auth(scope='read'):
             return f(*args, **kwargs)
         return decorated
     return decorator
+
+
+def _paginazione():
+    """Pagina e dimensione richieste, riportate dentro limiti sensati.
+
+    request.args.get(type=int) restituisce None su un valore non numerico e
+    non ha limite inferiore: fino alla 2.7.1 ?per_page=-1 arrivava a SQLite
+    come LIMIT -1, che significa 'nessun limite', e ?page=0 dava un OFFSET
+    negativo.
+    """
+    page = request.args.get('page', 1, type=int) or 1
+    per_page = request.args.get('per_page', 50, type=int) or 50
+    page = max(1, page)
+    per_page = max(1, min(per_page, 200))
+    return page, per_page, (page - 1) * per_page
 
 
 def _pagina(query_result, page, per_page, total):
@@ -66,9 +107,7 @@ def _pagina(query_result, page, per_page, total):
 @api_bp.route('/apparecchi')
 @_token_auth('read')
 def lista_apparecchi():
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-    offset = (page - 1) * per_page
+    page, per_page, offset = _paginazione()
 
     total = query_one(
         "SELECT COUNT(*) as c FROM apparecchi WHERE struttura_id=? AND stato!='dismesso'",
@@ -106,9 +145,7 @@ def dettaglio_apparecchio(apparecchio_id):
 @api_bp.route('/scadenze')
 @_token_auth('read')
 def scadenze():
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-    offset = (page - 1) * per_page
+    page, per_page, offset = _paginazione()
 
     total = query_one("""
         SELECT COUNT(*) as c FROM prossime_scadenze ps
@@ -132,9 +169,7 @@ def scadenze():
 @api_bp.route('/manutenzioni')
 @_token_auth('read')
 def lista_manutenzioni():
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-    offset = (page - 1) * per_page
+    page, per_page, offset = _paginazione()
 
     total = query_one("""
         SELECT COUNT(*) as c FROM manutenzioni m
@@ -177,6 +212,21 @@ def crea_manutenzione():
                 _dt.strptime(val, '%Y-%m-%d')
             except ValueError:
                 return jsonify({'errore': f'{campo_data} deve essere nel formato YYYY-MM-DD'}), 400
+
+    # manutenzioni.esito e' testo libero (nessun CHECK): non si valida.
+    # Questi due invece finivano in colonne numeriche e un valore non numerico
+    # o negativo usciva come 500 invece che come 400.
+    for campo_num, tipo_num in (('costo', float), ('periodicita_giorni', int)):
+        val = data.get(campo_num)
+        if val is None or val == '':
+            continue
+        try:
+            num = tipo_num(val)
+        except (TypeError, ValueError):
+            return jsonify({'errore': f'{campo_num} deve essere numerico'}), 400
+        if num < 0:
+            return jsonify({'errore': f'{campo_num} non puo essere negativo'}), 400
+        data[campo_num] = num
 
     app_ = query_one(
         "SELECT id FROM apparecchi WHERE id=? AND struttura_id=?",

@@ -93,6 +93,13 @@ ROTTE = [
     ('/verifiche', _testo_html),
     ('/export/apparecchi/excel', _testo_excel),
     ('/export/apparecchi/pdf', _testo_pdf),
+    # Le due export dello scadenzario non passavano da filtro_divisione(): al
+    # posto suo avevano tre rami scritti a mano, e quello per il ruolo 'admin'
+    # interrogava prossime_scadenze senza filtro. Un admin della struttura A
+    # scaricava lo scadenzario di tutte le strutture. Le altre export non ne
+    # soffrivano perche' chiamavano gia' il filtro condiviso.
+    ('/export/scadenzario/excel', _testo_excel),
+    ('/export/scadenzario/pdf', _testo_pdf),
 ]
 
 
@@ -124,6 +131,15 @@ def test_admin_con_struttura_vede_i_propri(client, due_strutture):
     risposta = client.get('/apparecchi')
     assert b'OCU-1' in risposta.data
     assert b'SEGRETO-B' not in risposta.data
+
+
+def test_admin_con_struttura_esporta_il_proprio_scadenzario(client, due_strutture):
+    """Controprova sull'export appena messo sotto filtro: senza di questa,
+    un 'AND 1=0' incondizionato passerebbe entrambi i test negativi."""
+    entra(client, 'admin@a.it')
+    testo = _testo_excel(client.get('/export/scadenzario/excel').data)
+    assert 'OCU-1' in testo
+    assert 'SEGRETO-B' not in testo
 
 
 def test_apparecchio_accessibile_rifiuta_senza_struttura(app, due_strutture):

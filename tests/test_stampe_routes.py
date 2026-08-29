@@ -7,6 +7,10 @@ from openpyxl import load_workbook
 from pypdf import PdfReader
 from werkzeug.security import generate_password_hash
 
+# Vedi test_strutture_routes.py: il logo di prova deve avere l'intestazione
+# PNG, l'upload ne controlla il contenuto (M05).
+PNG = b'\x89PNG\r\n\x1a\n'
+
 
 def testo_di(pdf_bytes):
     """Estrae il testo di tutte le pagine di un PDF (vedi test_report_service.py)."""
@@ -435,7 +439,7 @@ def test_admin_carica_il_logo_della_propria_struttura(client, dati, app):
     entra(client, 'admin@a.it')
     risposta = client.post(
         f"/strutture/{dati['s1']}/logo",
-        data={'logo': (io.BytesIO(b'contenuto-finto-png'), 'logo.png')},
+        data={'logo': (io.BytesIO(PNG + b'contenuto-finto'), 'logo.png')},
         content_type='multipart/form-data')
     assert risposta.status_code == 302
     with app.app_context():
@@ -454,7 +458,7 @@ def test_admin_non_puo_caricare_il_logo_di_un_altra_struttura(client, dati, app)
     entra(client, 'admin@a.it')  # admin della struttura s1
     risposta = client.post(
         f"/strutture/{dati['s2']}/logo",
-        data={'logo': (io.BytesIO(b'contenuto-finto-png'), 'logo.png')},
+        data={'logo': (io.BytesIO(PNG + b'contenuto-finto'), 'logo.png')},
         content_type='multipart/form-data')
     assert risposta.status_code == 302
     with app.app_context():

@@ -74,7 +74,7 @@
                             <td>
                                 <input type="checkbox" class="form-check-input row-check"
                                        name="selected" value="{{ row.id }}"
-                                       {% if has_error %}disabled{% elif import_rec.tipo_import == 'inventario' and not row.apparecchio_match_id %}checked{% elif import_rec.tipo_import != 'inventario' and row.apparecchio_match_id %}checked{% endif %}>
+                                       {% if has_error %}disabled{% elif import_rec.tipo_import == 'inventario' and not row.apparecchio_match_id and not d.get('_match_ambiguo') %}checked{% elif import_rec.tipo_import != 'inventario' and row.apparecchio_match_id %}checked{% endif %}>
                             </td>
                             <td class="text-muted">
                                 {{ row.riga_numero }}
@@ -97,7 +97,13 @@
                             </td>
                             <td><small>{{ d.get('ubicazione', '-') }}</small></td>
                             <td>
-                                {% if not row.apparecchio_match_id %}
+                                {% if d.get('_match_ambiguo') %}
+                                <span class="badge bg-danger"
+                                      title="{% for c in d._match_ambiguo %}{{ c.marca }} {{ c.modello }}{% if not loop.last %}, {% endif %}{% endfor %}">
+                                    Matricola ambigua
+                                </span>
+                                <br><small class="text-muted">{{ d._match_ambiguo|length }} apparecchi con questa matricola</small>
+                                {% elif not row.apparecchio_match_id %}
                                 <span class="badge bg-success">Nuovo</span>
                                 {% elif row.match_confidence >= 1.0 %}
                                 <span class="badge bg-warning text-dark" title="{{ row.match_marca }} {{ row.match_modello }}">
@@ -130,6 +136,13 @@
                                 </span>
                                 <br><small class="text-muted">{{ row.match_matricola }}</small>
                                 {% else %}
+                                {% if d.get('_match_ambiguo') %}
+                                <div class="small text-danger mb-1">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>Matricola su
+                                    {{ d._match_ambiguo|length }} apparecchi:
+                                    {% for c in d._match_ambiguo %}{{ c.marca }} {{ c.modello }}{% if not loop.last %}, {% endif %}{% endfor %}
+                                </div>
+                                {% endif %}
                                 <select class="form-select form-select-sm" name="apparecchio_id_{{ row.id }}"
                                         style="min-width: 200px; font-size: 0.75rem;">
                                     <option value="">-- Seleziona --</option>
@@ -162,6 +175,13 @@
                                 </span>
                                 <br><small class="text-muted">{{ row.match_matricola }}</small>
                                 {% else %}
+                                {% if d.get('_match_ambiguo') %}
+                                <div class="small text-danger mb-1">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>Matricola su
+                                    {{ d._match_ambiguo|length }} apparecchi:
+                                    {% for c in d._match_ambiguo %}{{ c.marca }} {{ c.modello }}{% if not loop.last %}, {% endif %}{% endfor %}
+                                </div>
+                                {% endif %}
                                 <div class="mb-1">
                                     <div class="form-check form-check-inline">
                                         <input class="form-check-input apparecchio-mode"

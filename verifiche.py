@@ -14,9 +14,10 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import allegati
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile, filtro_divisione)
+                    nome_file_unico, apparecchio_accessibile, filtro_divisione)
 
 verifiche_bp = Blueprint('verifiche', __name__)
 
@@ -99,11 +100,11 @@ def _save_documento(file_obj, verifica_id, struttura_id=None):
     """Save uploaded PDF document for a verifica. Returns relative path or None."""
     if not file_obj or not file_obj.filename:
         return None
-    ext = file_obj.filename.rsplit('.', 1)[-1].lower()
-    if ext not in ALLOWED_DOC_EXT:
+    # M05: estensione e contenuto, prima di scrivere su disco.
+    if allegati.verifica(file_obj, ALLOWED_DOC_EXT):
         return None
     uploads_dir, rel_prefix = upload_subdir('verifiche', struttura_id)
-    safe_name = secure_filename(f"{int(datetime.now().timestamp())}_{file_obj.filename}")
+    safe_name = nome_file_unico(file_obj.filename)
     full_path = os.path.join(uploads_dir, safe_name)
     file_obj.save(full_path)
     return f"{rel_prefix}/{safe_name}"
@@ -357,235 +358,41 @@ def scarica_documento(id):
 
 
 # ---------------------------------------------------------------------------
-# Import massivo AI
+# Import massivo AI (percorso storico, ora reindirizzato)
 # ---------------------------------------------------------------------------
+#
+# Fino alla 2.8.0 le verifiche avevano un proprio import AI, parallelo a quello
+# unificato di /import. Convalidava la divisione solo contro la struttura,
+# riverificava apparecchio_accessibile() per il solo override manuale e non per
+# il match automatico, e non aveva test. Due percorsi autorizzativi per la
+# stessa scrittura sono uno di troppo: queste rotte restano solo per non
+# rompere i vecchi segnalibri e reindirizzano all'import unificato.
+
 
 @verifiche_bp.route('/verifiche/import')
 @login_required
 def import_upload():
-    """Pagina upload per import massivo verifiche."""
-    return render_template('verifiche/import_upload.html', divisioni=g.divisioni)
+    """Reindirizza all'import unificato."""
+    return redirect(url_for('import.upload'))
 
 
 @verifiche_bp.route('/verifiche/import/analizza', methods=['POST'])
 @login_required
 def import_analizza():
-    """Receive file, extract text, call AI, save preview."""
-    from ai_service import extract_text_from_file, analyze_verifiche_with_ai
-
-    file = request.files.get('file')
-    divisione_id = request.form.get('divisione_id') or None
-
-    if not file or not file.filename:
-        flash('Seleziona un file da importare.', 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    ext = file.filename.rsplit('.', 1)[-1].lower()
-    if ext not in ('pdf', 'xlsx', 'xls', 'csv'):
-        flash('Formato file non supportato. Usa PDF, Excel o CSV.', 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    struttura_id = getattr(g, 'struttura_id', None)
-    uploads_dir, rel_prefix = upload_subdir('import', struttura_id)
-    safe_name = f"{int(datetime.now().timestamp())}_{secure_filename(file.filename)}"
-    filepath = os.path.join(uploads_dir, safe_name)
-    file.save(filepath)
-
-    try:
-        text = extract_text_from_file(filepath, ext)
-    except Exception as e:
-        flash(f'Errore estrazione testo: {e}', 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    config = current_app.config['APP_CONFIG']
-
-    from ai_service import check_ai_configured, get_ai_config
-    ai_ok, ai_error = check_ai_configured(config=config, struttura_id=struttura_id)
-    if not ai_ok:
-        flash(ai_error, 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    ai_cfg = get_ai_config(struttura_id=struttura_id, config=config)
-    api_key = ai_cfg['api_key']
-    model = ai_cfg['model_email']
-
-    try:
-        items, ai_response = analyze_verifiche_with_ai(
-            text, api_key, model, config=config, struttura_id=struttura_id)
-    except Exception as e:
-        flash(f'Errore analisi AI: {e}', 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    # Save import_history
-    cursor = execute(
-        """INSERT INTO import_history
-           (tipo_import, filename, filepath, tipo_documento, divisione_id,
-            struttura_id, totale_righe, stato, ai_prompt, ai_response, imported_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
-        ('verifica_elettrica', file.filename, f"{rel_prefix}/{safe_name}", ext,
-         int(divisione_id) if divisione_id else None, struttura_id,
-         len(items),
-         f"[VERIFICA_BATCH_SYSTEM_PROMPT + testo ({len(text)} chars)]",
-         ai_response, g.user['id'])
-    )
-    import_id = cursor.lastrowid
-
-    # Match matricola → apparecchio for preview
-    for i, item in enumerate(items):
-        matricola = item.get('matricola', '').strip()
-        match_id = None
-        match_confidence = 0.0
-        if matricola:
-            if struttura_id:
-                app_row = query_one(
-                    "SELECT id FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'"
-                    " AND struttura_id = ?",
-                    (matricola, struttura_id)
-                )
-            else:
-                app_row = query_one(
-                    "SELECT id FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
-                    (matricola,)
-                )
-            if app_row:
-                match_id = app_row['id']
-                match_confidence = 1.0
-
-        execute(
-            """INSERT INTO import_preview
-               (import_id, riga_numero, dati_estratti, apparecchio_match_id,
-                match_confidence, stato)
-               VALUES (?, ?, ?, ?, ?, 'pending')""",
-            (import_id, i + 1, json.dumps(item), match_id, match_confidence)
-        )
-
-    log_attivita(g.user['id'], 'import_analisi', 'verifiche', import_id,
-                 f"Analisi AI: {len(items)} verifiche estratte da {file.filename}",
-                 request.remote_addr)
-
-    return redirect(url_for('verifiche.import_preview', id=import_id))
+    """Reindirizza all'import unificato."""
+    flash("L'import delle verifiche passa dalla pagina di import unificata.", 'info')
+    return redirect(url_for('import.upload'))
 
 
 @verifiche_bp.route('/verifiche/import/<int:id>/preview')
 @login_required
 def import_preview(id):
-    """Show AI preview for import review."""
-    from import_bp import get_import_in_scope
-    record = get_import_in_scope(id)
-    if not record or record['tipo_import'] != 'verifica_elettrica':
-        flash('Import non trovato.', 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    righe = query_all(
-        """SELECT ip.*, a.marca, a.modello, a.matricola as app_matricola,
-                  d.nome as divisione_nome
-           FROM import_preview ip
-           LEFT JOIN apparecchi a ON ip.apparecchio_match_id = a.id
-           LEFT JOIN divisioni d ON a.divisione_id = d.id
-           WHERE ip.import_id = ?
-           ORDER BY ip.riga_numero""",
-        (id,)
-    )
-
-    # Deserialize JSON data for template
-    for r in righe:
-        try:
-            r['dati'] = json.loads(r['dati_estratti'])
-        except Exception:
-            r['dati'] = {}
-
-    apparecchi_list = _get_accessible_apparecchi()
-
-    return render_template('verifiche/import_preview.html',
-                           record=record, righe=righe,
-                           divisioni=g.divisioni,
-                           apparecchi_list=apparecchi_list)
+    """Reindirizza alla preview dell'import unificato."""
+    return redirect(url_for('import.preview', id=id))
 
 
 @verifiche_bp.route('/verifiche/import/<int:id>/esegui', methods=['POST'])
 @login_required
 def import_esegui(id):
-    """Execute import of selected verifiche rows."""
-    from import_bp import get_import_in_scope
-    record = get_import_in_scope(id)
-    if not record or record['tipo_import'] != 'verifica_elettrica':
-        flash('Import non trovato.', 'danger')
-        return redirect(url_for('verifiche.import_upload'))
-
-    selected_rows = request.form.getlist('righe_selezionate')
-    divisione_id_default = request.form.get('divisione_id') or None
-
-    imported = 0
-    errors = 0
-
-    for row_id in selected_rows:
-        riga = query_one("SELECT * FROM import_preview WHERE id = ? AND import_id = ?",
-                         (int(row_id), id))
-        if not riga:
-            continue
-
-        try:
-            dati = json.loads(riga['dati_estratti'])
-        except Exception:
-            errors += 1
-            continue
-
-        # Determina apparecchio_id: match o override dall'utente
-        app_id_override = request.form.get(f'apparecchio_id_{row_id}')
-        apparecchio_id = int(app_id_override) if app_id_override else riga['apparecchio_match_id']
-
-        if not apparecchio_id:
-            errors += 1
-            continue
-
-        # L'override arriva dal form: va verificato contro lo scope dell'utente,
-        # altrimenti si potrebbe scrivere una verifica su un apparecchio altrui.
-        if app_id_override and not apparecchio_accessibile(apparecchio_id):
-            errors += 1
-            continue
-
-        # Auto-calcola prossima_scadenza se mancante
-        prossima = dati.get('prossima_scadenza')
-        if not prossima and dati.get('data_verifica') and dati.get('periodicita_giorni'):
-            try:
-                d = datetime.strptime(dati['data_verifica'], '%Y-%m-%d')
-                d += timedelta(days=int(dati['periodicita_giorni']))
-                prossima = d.strftime('%Y-%m-%d')
-            except Exception:
-                pass
-
-        try:
-            cursor = execute(
-                """INSERT INTO verifiche
-                   (apparecchio_id, data_verifica, prossima_scadenza,
-                    periodicita_giorni, esito, tecnico_ditta, note, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    apparecchio_id,
-                    dati.get('data_verifica'),
-                    prossima,
-                    dati.get('periodicita_giorni', 365),
-                    dati.get('esito', 'positivo'),
-                    dati.get('tecnico_ditta'),
-                    dati.get('note'),
-                    g.user['id']
-                )
-            )
-            execute("UPDATE import_preview SET stato = 'imported' WHERE id = ?", (int(row_id),))
-            imported += 1
-        except Exception:
-            errors += 1
-
-    # Update import_history
-    execute(
-        """UPDATE import_history SET stato = 'completed', righe_importate = ?,
-                  righe_errori = ?, completed_at = datetime('now') WHERE id = ?""",
-        (imported, errors, id)
-    )
-
-    log_attivita(g.user['id'], 'import_esecuzione', 'verifiche', id,
-                 f"Importate {imported} verifiche, {errors} errori",
-                 request.remote_addr)
-
-    flash(f'Import completato: {imported} verifiche importate, {errors} errori.', 'success')
-    return redirect(url_for('verifiche.lista'))
+    """Reindirizza all'esecuzione dell'import unificato."""
+    return redirect(url_for('import.preview', id=id))

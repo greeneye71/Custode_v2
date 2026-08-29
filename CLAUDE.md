@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v2.6.4** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.8.4** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -91,11 +91,24 @@ Key fields (all in `config.local.json`):
 - `default_ai_provider` — `anthropic`, `gemini`, `openai`, `ollama`, `lmstudio`, or `openai_compatible`
 - `default_anthropic_api_key` / `default_gemini_api_key` / `default_openai_api_key` — global fallback keys
 - `default_ai_import_model`, `default_ai_email_model`, `default_ai_local_base_url`, `default_ai_local_model`
+- `ai_local_url_allowlist` — system policy for the local-AI `base_url` (SSRF containment, `sicurezza_url.py`). Empty by default: http/https only, no credentials in the URL, no link-local / multicast / reserved / broadcast address (checked after DNS resolution, on every resolved address), no port below 1024 except 80 and 443. Loopback and RFC1918 stay reachable — it is a LAN product. Fill it with `host`, `host:port`, `CIDR` or `CIDR:port` entries (list or comma-separated string) to allow only those, which is also the only way to permit a system port. Always read from the global config, never from `strutture_config`, so a facility admin cannot widen it.
+- `import_max_analisi` / `import_max_analisi_struttura` — concurrent AI import analyses allowed on the whole deployment and per facility (`coda_import.py`, defaults 4 and 3). Like the allowlist above these are system policy: read from the global config only, never from `strutture_config`, so a facility admin cannot raise their own quota. A value below 1 or non-numeric falls back to the default — a typo must not disable the cap.
 - `imap_*`, `smtp_*` — global mail settings
 - `encryption_key` — derives the Fernet key for IMAP/SMTP password encryption (auto-generated)
 - `force_https`, `cloudflare_mode` — deployment behind a tunnel/reverse proxy
 
 **Per-struttura config** lives in the `strutture_config` table (`get_struttura_config()` / `set_struttura_config()` in `models.py`), and falls back to the global values above. AI keys and models can be overridden per facility. **The mail server cannot**: since 2.6.2 SMTP is system-wide only, and each facility keeps just the deadline-alert preferences (`avvisi_scadenza_attivi`, `avvisi_scadenza_formato`, `report_frequenza`). All alerts therefore leave from the same sender, and name their facility in the subject and body.
+
+**AI key naming** — the same setting has two names: `ai_provider` on the facility
+side, `default_ai_provider` in the system config. The map and the resolution
+order live in one Flask-free module, `ai_chiavi.py`, and nowhere else:
+*facility override -> `default_*` global -> legacy unprefixed key -> built-in
+default*. An override stored as an empty string counts as absent, so clearing a
+field in the UI returns the facility to the global value. Creating a struttura
+writes no AI row at all: a copied row would be an override, and would pin the
+facility to the defaults of the day it was created. `ai_local_url_allowlist` is
+deliberately *not* in that map — it is system policy, and a facility admin must
+not be able to widen it.
 
 ## Architecture
 
@@ -114,6 +127,7 @@ Key fields (all in `config.local.json`):
 | `import_bp.py` | `/import` | AI-powered unified document import + email queue review |
 | `export_bp.py` | `/export` | Excel/PDF report generation |
 | `api_bp.py` | `/api/v1` | REST API, Bearer-token auth, scoped to the token's struttura (CSRF-exempt) |
+| `impianti.py` | `/impianti` | Impianti delle divisioni: anagrafica, componenti, documentazione, piano di manutenzione, interventi |
 
 ### Services
 | File | Responsibility |
@@ -122,22 +136,28 @@ Key fields (all in `config.local.json`):
 | `email_monitor.py` | IMAP polling, PDF extraction, AI parsing of maintenance reports |
 | `scheduler.py` | Background daemon: email checks, session cleanup, auto-backups, deadline digests, scheduled PDF reports |
 | `backup_service.py` | SQLite backup/restore lifecycle |
+| `archivio_recupero.py` | Disaster-recovery archive: one ZIP with database, `uploads/`, config, SHA-256 manifest and restore instructions, plus the verify step that doubles as the documented restore drill. Flask-free |
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
 | `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
+| `sicurezza_url.py` | URL validation for the local AI server: scheme, blocked networks after DNS resolution, ports, optional `ai_local_url_allowlist`. Flask-free |
+| `allegati.py` | Upload validation: magic bytes against the declared extension, empty files, zip-bomb ratio. Every upload route calls `allegati.verifica()`. Flask-free |
+| `coda_import.py` | Admission limit for background AI import analyses: global and per-facility caps, slot reserved before the upload is written. Not a durable queue. Flask-free |
 | `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
 | `posta.py` | The only place mail leaves from: system-wide SMTP resolution and sending |
 | `reset_password.py` | Forgotten-password flow: temporary password valid *alongside* the current one |
 | `utente_service.py` | User deletion (tombstone rows), last-admin refusals |
 | `fusione_service.py` | Duplicate-device detection and merge |
 | `struttura_service.py` | Facility export/deletion, attachment perimeter |
+| `impianti_service.py` | Impianti domain rules: deadline maths, intervention closing, catalogue application, alert recipients |
+| `impianti_catalogo.py` | `CATALOGO`: the standard periodicities proposed when an impianto is created (a constant, not a table) |
 | `manutenzione_lib/stato.py` | Installation snapshot: paths, schema version, counts. Never includes secrets |
 | `manutenzione_lib/diagnosi.py` | Checks, each a function returning an `Esito` whose remedy is the command to run |
 | `manutenzione_lib/utenti.py` | Account operations outside Flask: hash inspection, password reset, wipe |
 
 ### Database
-SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts.
+SQLite with WAL mode and foreign keys enabled. Schema in `schema.sql`; seed data in `seed.py`. `models.apply_schema_updates()` applies idempotent incremental migrations at every startup — put new schema changes there, not only in standalone `migrate_*.py` scripts. The declared schema version (`PRAGMA user_version`, `major*100 + minor*10 + patch`) is raised there too — upward only, and only once the tables of that release actually exist. The impianti DDL lives in `schema_impianti.py`, imported by both `models.apply_schema_updates()` and `migrate.py`; that module must stay Flask-free, which is what keeps `migrate.py --db` able to point at another installation.
 
-Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok).
+Key tables: `strutture`, `strutture_config`, `api_tokens`, `divisioni`, `utenti`, `utenti_divisioni`, `tecnici_strutture`, `sessioni`, `login_attempts`, `apparecchi`, `accessori`, `manutenzioni`, `verifiche`, `documenti`, `import_history`, `import_preview`, `email_config`, `log_attivita`, plus the impianti side: `manutentori`, `impianti`, `impianti_componenti`, `impianti_documenti`, `impianti_scadenze`, `impianti_interventi`, `impianti_avvisi_inviati`. The view `prossime_scadenze` merges maintenance and electrical-check deadlines, keeping only the latest record per (apparecchio, tipo), with a 5-priority classification (scaduto / urgente / attenzione / avviso / ok). The view `prossime_scadenze_impianti` does the same for impianti — one row per active `impianti_scadenze` of a non-dismissed impianto, with the same 5 priorities — and `/scadenzario` merges the two behind the `origine` filter (tutto / apparecchi / impianti).
 
 `import_history.struttura_id` is the authoritative tenant column for imports — `divisione_id` is NULL for email imports and must not be used for isolation.
 
@@ -193,13 +213,13 @@ refuses to leave a database nobody can log into.
 ## Key Conventions
 
 - **Language:** All UI text, comments, variable names, and database values are in Italian.
-- **Tenant isolation:** Every query touching `apparecchi`, `manutenzioni`, `verifiche`, `documenti` or `import_history` must be scoped to the caller's struttura. Use `models.apparecchio_accessibile()` before serving or writing anything tied to a device (it checks struttura *and* division), and `import_bp.get_import_in_scope()` for import records. Reaching a row by id alone is never sufficient.
+- **Tenant isolation:** Every query touching `apparecchi`, `manutenzioni`, `verifiche`, `documenti`, `import_history` or the `impianti*` tables must be scoped to the caller's struttura. Use `models.apparecchio_accessibile()` before serving or writing anything tied to a device (it checks struttura *and* division), `models.impianto_accessibile()` for an impianto, and `import_bp.get_import_in_scope()` for import records. The impianti child tables (`impianti_componenti`, `impianti_documenti`, `impianti_scadenze`, `impianti_interventi`) carry no `struttura_id`: reach them through a JOIN on `impianti`, never by id alone. Reaching a row by id alone is never sufficient.
 - **Global vs per-facility operations:** Anything acting on the whole database (backup, restore, reset, global config) goes behind `@operazione_globale_required`, not `@admin_required` — a facility admin must not be able to dump or wipe other tenants' data.
 - **Soft delete:** Devices are never physically deleted — `stato='dismesso'` marks them retired. Stati validi: `funzionante`, `in_manutenzione`, `da_sostituire`, `dismesso`.
 - **Parameterized SQL:** All queries use `?` placeholders; never f-string user input. When a query *is* built with an f-string (division filters), remember Python does not consume `%%` — write `strftime('%Y-%m', ...)`, not the doubled form.
 - **CSRF:** `CSRFProtect` is global. Every POST form needs a hidden `csrf_token` field rendered with `{{ csrf_token() }}` — including empty JS-driven forms. `fetch()` and HTMX get the header automatically from the wrapper in `base.html`.
 - **Activity logging:** Every significant action must call `log_attivita()` from `models.py`.
-- **Division filter:** Always apply `_get_divisione_filter()` when querying `apparecchi`, `manutenzioni` or `verifiche` to respect the user's active division scope.
+- **Division filter:** Always apply `models.filtro_divisione(table_alias)` when querying `apparecchi`, `manutenzioni`, `verifiche` or `impianti` to respect the user's active division scope.
 - **File uploads:** Go through `models.upload_subdir()`, which places files under `uploads/strutture/<id>/<tipo>/` in multi-tenant mode — the only path prefix `/uploads/<path>` knows how to isolate. Always `secure_filename()`; extensions are whitelisted per type.
 
 ## Context discipline

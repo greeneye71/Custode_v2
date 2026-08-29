@@ -6,6 +6,391 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.8.4] - 2026-08-29
+
+Dieci rilievi dell'audit del 28/08 lavorati in sequenza: la semantica delle
+chiavi AI, il traffico durante ripristino e azzeramento, il backup che non era
+un backup, la validazione dei dati che arrivano dall'AI, le scritture
+multi-tabella, i thread di analisi senza tetto, gli asset da CDN senza CSP, gli
+allegati controllati solo per estensione, le dipendenze non riproducibili e un
+database che non dichiara la propria versione. Nessun cambio di schema —
+`PRAGMA user_version` resta 271.
+
+### Sicurezza
+- **Allegati accettati per estensione (M05).** Ogni rotta di upload guardava
+  solo il nome del file: `.pdf` bastava, qualunque cosa ci fosse dentro. Un file
+  eseguibile rinominato finiva in `uploads/` e restava scaricabile dalla scheda
+  che lo referenziava. Il nuovo modulo `allegati.py` (senza Flask) controlla i
+  primi 4 KB — firme di pdf, jpg, png, gif, webp, docx, xlsx, doc, xls, testo
+  per csv e txt — rifiuta i file vuoti e gli archivi con un rapporto di
+  espansione da zip bomb (oltre 200x, o piu' di 512 MB espansi). Passa per
+  `allegati.verifica()` ogni upload: foto e documenti degli apparecchi, verbali
+  di manutenzione, documenti delle verifiche, documenti e verbali degli
+  impianti, file dell'import e logo della struttura, ognuno con il proprio
+  messaggio di rifiuto. Anche gli allegati che arrivano dalla posta: il mittente
+  sceglie nome e content-type, e un allegato che si dichiarava PDF senza esserlo
+  entrava comunque in `uploads/` restando scaricabile dalla coda import; ora
+  viene scartato con una riga di log. La meta' `realpath` del rilievo era gia'
+  chiusa da `impianti.py::_percorso_allegato()` nella 2.8.2.
+- **Asset da CDN e nessuna Content-Security-Policy (M13).** Bootstrap, HTMX,
+  Bootstrap Icons e Chart.js arrivavano da tre CDN diversi senza SRI: chi
+  controlla quei domini — o la risoluzione DNS di una LAN ospedaliera — poteva
+  servire altro codice a ogni pagina, e un'installazione senza uscita verso
+  Internet restava senza interfaccia. Gli asset sono ora locali sotto
+  `static/vendor/` e le pagine non caricano piu' nulla da fuori. In piu'
+  `add_security_headers` invia una `Content-Security-Policy` con `default-src
+  'self'`, `frame-ancestors 'self'`, `object-src 'none'`, `base-uri 'self'` e
+  `form-action 'self'`, applicata anche a redirect e pagine di errore. Residuo
+  dichiarato: `'unsafe-inline'` resta per script e stili, i template ne fanno
+  uso diffuso e toglierlo e' un lavoro a se'.
+
+### Correzioni
+- **Una sola semantica per le chiavi AI (M02).** Vedi `ai_chiavi.py`: la mappa
+  fra il nome di struttura (`ai_provider`) e quello di sistema
+  (`default_ai_provider`) e l'ordine di risoluzione — override di struttura,
+  globale `default_*`, chiave storica senza prefisso, predefinito — stanno in un
+  modulo solo. Un override salvato come stringa vuota vale come assente, quindi
+  svuotare un campo nell'interfaccia riporta la struttura al valore globale, e
+  creare una struttura non scrive piu' alcuna riga AI: una riga copiata sarebbe
+  stata un override, e avrebbe inchiodato la struttura ai valori del giorno in
+  cui e' nata.
+- **Traffico fermato durante ripristino e azzeramento (A07).** `manutenzione_globale.py`
+  conta i lavori in corso, li drena a tempo e nega l'operazione se il traffico
+  non si ferma; le richieste nuove ricevono 503 con `Retry-After`.
+- **Archivio di ripristino completo e prova di restore (M12).** Un solo ZIP con
+  database, `uploads/`, configurazione, manifest SHA-256 e istruzioni, piu' la
+  verifica che vale come prova di ripristino documentata.
+- **Validazione di dominio condivisa (M14).** `validazione_dominio.py` applica ai
+  dati estratti dall'AI le stesse regole del form; una riga incoerente viene
+  respinta con il motivo invece di essere normalizzata in silenzio.
+- **Scritture multi-tabella in transazione (M03).** `models.transazione()`, con
+  rimozione compensativa dei file gia' copiati quando la transazione torna
+  indietro.
+- **Tetto alle analisi AI (M07).** `coda_import.py` limita le analisi
+  contemporanee, globali e per struttura; i due tetti sono politica di sistema e
+  si leggono solo dal config globale.
+- **Database che non dichiara la propria versione (B05).** Con `PRAGMA
+  user_version = 0` ogni strumento deve dedurre la versione dalla forma delle
+  tabelle, ed e' cosi' che un file gia' aggiornato si e' fatto riconoscere come
+  v1.1 con nove migrazioni pendenti. `manutenzione.py diagnosi` ora lo dice, con
+  il rimedio: backup verificato, poi un avvio del programma o `python
+  manutenzione.py migra`, infine di nuovo la diagnosi. Il controllo tace quando
+  ci sono migrazioni pendenti, che sono gia' un errore a se'. Nessuna scrittura
+  automatica di `user_version`.
+
+### Manutenzione
+- **Dipendenze riproducibili (B03).** `requirements.txt` dichiarava solo limiti
+  inferiori: un'installazione fatta oggi poteva risolvere versioni mai provate,
+  major comprese. Ora ogni dipendenza diretta ha un minimo e un massimo, e
+  `requirements.lock.txt` blocca le 44 versioni — indirette comprese — su cui la
+  suite e' verde. In esercizio si installa dal lock. Il file lo genera
+  `aggiorna_lock.py` (`--verifica` esce 1 se e' disallineato), e
+  `.github/workflows/dipendenze.yml` installa dal lock, esegue la suite e passa
+  `pip-audit` sulle versioni bloccate ogni lunedi': le CVE si valutano, non si
+  aggiornano alla cieca su un prodotto installato in ospedale.
+
+### Test
+`tests/test_allegati.py` (27), `tests/test_asset_locali.py` (21),
+`tests/test_dipendenze.py` (6), `tests/test_versione_schema.py` (9), oltre ai
+test aggiunti con le voci precedenti.
+
+---
+
+## [2.8.2] - 2026-08-28
+
+Quattro difetti rimasti aperti dopo l'audit del 28/08: l'indirizzo del server AI
+locale che portava il server a bussare dove voleva chi lo configurava, uno
+scheduler che girava due volte, l'API che scriveva sul database a ogni lettura,
+e gli allegati degli impianti senza il controllo di contenimento che le altre
+sezioni hanno gia'. Nessun cambio di schema — `PRAGMA user_version` resta 271.
+
+### Sicurezza
+- **Richieste in uscita verso l'indirizzo scelto dall'admin di struttura (SSRF).**
+  Il `base_url` del server AI locale (Ollama, LM Studio, endpoint
+  OpenAI-compatibile) lo compila l'admin di una struttura, ma la richiesta parte
+  dal server: senza controlli era una sonda verso localhost, verso la LAN e verso
+  gli indirizzi di metadata di un'installazione in cloud
+  (`169.254.169.254`), con il risultato visibile nella pagina di prova. Il nuovo
+  modulo `sicurezza_url.valida_url_ai_locale()` impone tre regole: solo `http` e
+  `https` e nessuna credenziale nell'URL; nessun indirizzo su una rete di sistema
+  — link-local (IPv4 e IPv6, anche mascherata da `::ffff:169.254.169.254`),
+  multicast, riservata, broadcast — controllata **dopo** la risoluzione DNS e
+  su tutti gli indirizzi restituiti, non solo sul primo; nessuna porta sotto la
+  1024 tranne la 80 e la 443, perche' li' stanno SSH, SMTP e SMB, non un server
+  AI. Loopback e reti private restano raggiungibili: e' li' che vive il server AI
+  di un'installazione in LAN.
+  Chi vuole stringere ancora ha la chiave `ai_local_url_allowlist` in
+  `config.local.json` — lista di `host`, `host:porta`, `CIDR` o `CIDR:porta`
+  (anche come stringa separata da virgole): se e' compilata passa solo quello che
+  vi compare, ed e' l'unica deroga per una porta di sistema. L'allowlist e'
+  politica di sistema: si legge sempre dalla configurazione globale, mai da
+  `strutture_config`, cosi' l'admin di struttura non puo' allargarla.
+  Il controllo scatta due volte, sul salvataggio e sull'uso: le rotte di prova
+  (`/strutture/<id>/config/test-ai` e `/admin/configurazione/test-ai`) rispondono
+  400 e registrano il rifiuto in `log_attivita` senza scrivere nulla in
+  configurazione, mentre `_fetch_local_models()`, `_call_openai_compatible()` e
+  `check_ai_configured()` rivalidano al momento della chiamata — un indirizzo
+  arrivato per altre vie, per esempio da un ripristino, non diventa comunque una
+  richiesta in uscita.
+
+### Correzioni
+- **Scheduler duplicato in sviluppo.** Con `debug=True` il reloader di Werkzeug
+  tiene vivi due processi, e `init_scheduler()` viene chiamato prima di
+  `app.run()`: lo scheduler partiva in tutti e due. Ogni ciclo — posta, backup,
+  avvisi di scadenza — girava due volte, con lo stesso messaggio importato due
+  volte e due email allo stesso destinatario. Ora `scheduler.deve_avviare_scheduler()`
+  decide: fuori dal debug parte sempre, in debug solo nel processo che esegue
+  davvero l'applicazione (`WERKZEUG_RUN_MAIN`). `run_production.py`, che non usa
+  il reloader, non cambia; il messaggio di avvio dice quale dei due processi ha
+  lo scheduler invece di dichiararlo attivo in entrambi.
+- **L'API scriveva sul database a ogni chiamata.** Ogni richiesta autenticata
+  aggiornava `api_tokens.ultimo_utilizzo`, anche le GET di sola lettura. SQLite
+  serializza gli scrittori: un client che interroga `/api/v1/apparecchi` ogni
+  pochi secondi apriva una transazione in scrittura altrettanto spesso, mettendo
+  in coda l'importazione, lo scheduler e gli utenti del gestionale. Il timestamp
+  serve a riconoscere i token abbandonati, non a contare le chiamate: ora si
+  riscrive al massimo ogni cinque minuti, e il controllo si fa in memoria perche'
+  anche un `UPDATE` che non aggiorna nessuna riga prende comunque il lock.
+- **Allegati degli impianti fuori dalla cartella uploads.** Le rotte di scarico
+  ed eliminazione dei documenti e dei verbali componevano il percorso unendo
+  `UPLOADS_PATH` al valore del database senza verificare dove finisse, mentre
+  apparecchi, manutenzioni e verifiche lo fanno da tempo. Un `filepath` che
+  risale portava `send_file` a servire, e `os.remove` a cancellare, un file
+  qualsiasi del server. Oggi quel valore lo scrive il programma, ma le stesse
+  righe vengono ripercorse dopo un ripristino o un'importazione da un'altra
+  installazione, dove il valore non l'abbiamo scritto noi. Ora tutte e tre le
+  rotte passano da `impianti._percorso_allegato()`, che risolve il percorso e
+  rifiuta quello che esce da `uploads`.
+
+### Test
+- Nuovo `tests/test_ssrf_ai_locale.py` (67 test): gli schemi diversi da HTTP(S),
+  le credenziali nell'URL, ognuna delle reti vietate compresa quella mascherata
+  da IPv6, il nome che risolve sui metadata, il nome con piu' record A di cui uno
+  solo vietato, le porte di sistema, tutte le forme dell'allowlist e le due rotte
+  di prova che rifiutano con 400 senza lasciare nulla in `strutture_config`.
+- Nuovo `tests/test_audit_residui.py` (30 test): la tabella di verita' della
+  guardia sul reloader, la soglia dei cinque minuti sul timestamp del token con
+  la verifica sul database vero attraverso l'API, e i percorsi che escono da
+  `uploads` respinti sia dalla funzione sia dalle rotte — compreso il file
+  esterno che l'eliminazione non deve toccare.
+
+---
+
+## [2.8.1] - 2026-08-28
+
+Seguito della 2.8.0: le correzioni dell'audit ora hanno i test di regressione
+che mancavano, piu' quattro difetti che la revisione della copertura ha fatto
+emergere. Nessun cambio di schema — `PRAGMA user_version` resta 271.
+
+### Sicurezza
+- **Operazioni globali riservate al superadmin.** `operazione_globale_required`
+  concedeva l'accesso a qualunque `admin`: l'amministratore di una struttura
+  poteva scaricare il backup, ripristinarlo e leggere la configurazione globale,
+  cioe' i dati e le credenziali di tutti gli altri tenant. Ora passa il solo
+  superadmin. Fa eccezione l'installazione a struttura singola, dove `seed.py`
+  non crea nessun superadmin e "globale" coincide con "la mia struttura": li'
+  l'admin conserva l'accesso. Le strutture si contano tutte, anche quelle
+  disattivate, perche' i loro dati restano nel database.
+- **Formule nei fogli Excel esportati.** Descrizioni, ubicazioni e note le
+  scrivono gli utenti, i report li apre qualcun altro: una cella che inizia per
+  `=`, `+`, `-`, `@`, TAB o CR viene eseguita da Excel e LibreOffice. Ogni
+  valore passa ora da `export_service.cella_sicura()`, che antepone un apostrofo
+  alle sole stringhe a rischio; numeri e date restano numeri e date.
+
+### Correzioni
+- **Verbali email bruciati da un errore di elaborazione.** La posta si leggeva
+  con `FETCH RFC822`, che marca `\Seen` da solo. Un'eccezione a meta' lavoro
+  lasciava il messaggio letto e la ricerca successiva, che e' su `UNSEEN`, non lo
+  ritrovava piu': il verbale era perso senza traccia in coda. Ora si legge con
+  `BODY.PEEK[]`, un FETCH fallito o incompleto solleva, e il flag di lettura lo
+  mette il chiamante solo dopo un giro andato a buon fine.
+- **Il launcher apriva sempre la porta 5000.** `launcher.pyw` leggeva soltanto
+  `config.json`, ma dalla 2.6 `port` e `app_name` stanno in
+  `config.local.json`. Ora fonde i due file, con il locale che vince, come fa
+  `load_config()` in `app.py`.
+
+### Test
+- Nuovo `tests/test_hardening_audit.py` (29 test) sui quattro punti sopra: i
+  ruoli ammessi alle operazioni globali nelle due modalita' di installazione,
+  il FETCH che non tocca il flag di lettura, la neutralizzazione delle formule
+  fino al foglio scritto, e la porta letta dal launcher.
+- La suite completa e' a 597 test.
+
+---
+
+## [2.8.0] - 2026-08-28
+
+Release di correzione: un audit della codebase ha trovato sedici difetti, in
+larga parte punti in cui il codice riscriveva a mano uno scope che
+l'applicazione ha gia' pronto e fail-closed. La regola applicata ovunque e'
+quella di `models.filtro_divisione()`: in un'applicazione multi-tenant
+l'assenza di scope significa "nessun dato", mai "tutti i dati".
+
+### Sicurezza
+- **Dashboard senza filtro per l'admin senza struttura attiva.** La rotta `/`
+  riscriveva lo scope inline e il ramo "admin, nessuna struttura" cadeva su una
+  clausola vuota: conteggi, scadenze e ultimi interventi erano quelli di tutte
+  le strutture. Ora usa `filtro_divisione()`, unica fonte dello scope.
+- **Badge scadenze in `auth.py`** aveva lo stesso ramo scoperto: rivelava il
+  volume di lavoro degli altri tenant. Senza scope non si conta nulla.
+- **Elenchi e ricerche degli import** (`import_bp.py`) cadevano su una query
+  senza filtro quando lo scope mancava. Introdotto `_scope_import()`.
+- **`/uploads/<path>`**: i file senza il prefisso `strutture/<id>/` — quelli
+  delle installazioni precedenti alla 2.5, della modalita' single-struttura e
+  di ogni `upload_subdir()` con `struttura_id` a None — venivano serviti a
+  qualunque utente autenticato. Ora `models.strutture_proprietarie_file()`
+  risale al proprietario dalla riga che referenzia il file; un file che nessuna
+  riga referenzia viene negato.
+- **Pagina sicurezza / sblocco IP** (`admin.py`) era `@admin_required`, ma
+  `login_attempts` e' una tabella globale: un admin di struttura leggeva IP ed
+  email di chi tenta l'accesso alle altre. Ora `@operazione_globale_required`.
+- **Import email senza struttura attribuibile.** Con IMAP globale e piu'
+  strutture attive il monitor proseguiva con `struttura_id` a None e
+  `_find_apparecchio()` cercava la matricola su tutto il database: manutenzioni
+  e verbali potevano finire sull'apparecchio di un'altra struttura. Ora
+  l'import si sospende e lo dice nel log; la ricerca per matricola senza scope
+  non restituisce nulla.
+- **Token API in chiaro dentro il cookie di sessione.** Il segreto appena
+  creato viaggiava in un `flash()` — quindi nel cookie firmato ma non cifrato,
+  nella cronologia del browser e nei log di ogni proxy. Ora esiste solo nel
+  corpo della risposta che lo mostra.
+- **Login su struttura disattivata.** L'accesso riusciva lo stesso e l'utente
+  si ritrovava con `g.struttura_id` a None, che diverse rotte leggevano come
+  "nessun filtro". Ora viene rifiutato con un messaggio esplicito.
+
+### Corretto
+- **Task dello scheduler in loop.** `last_run` veniva aggiornato dopo la
+  chiamata: un task che sollevava un'eccezione veniva ritentato ogni 30 secondi
+  per sempre, riempiendo il log e, per il controllo email, ribussando all'IMAP
+  di continuo. Ora `last_run` si aggiorna comunque.
+- **Avvisi scadenza e backup settimanale legati all'ora esatta.** Entrambi i
+  controlli confrontavano `now.hour ==` su un task che gira ogni 3600 secondi
+  *di orologio*: il timer deriva, quindi la finestra poteva essere colpita due
+  volte (digest doppio) o saltata del tutto (nessun avviso, nessun backup per
+  una settimana). Ora si risponde a una domanda indipendente dall'istante del
+  controllo — "il momento di questo periodo e' passato, e ho gia' agito?" — con
+  la risposta persistita: `strutture_config.ultimo_avviso_scadenze` per i
+  digest, la data del backup piu' recente su disco per i backup. Un riavvio non
+  provoca piu' un doppio invio, e un'applicazione spenta la domenica recupera
+  il backup nei giorni successivi.
+- **Piano di manutenzione duplicato.** `applica_catalogo()` filtrava le voci
+  gia' presenti nella rotta chiamante, non nel servizio: un doppio invio del
+  modulo (o due schede aperte) duplicava le scadenze, e da li' ogni avviso
+  partiva due volte. Il controllo e' ora dentro il servizio.
+- **Paginazione API senza limiti.** `?per_page=-1` arrivava a SQLite come
+  `LIMIT -1`, cioe' nessun limite, e `?page=0` dava un OFFSET negativo. Pagina
+  e dimensione sono ora riportate dentro limiti sensati (max 200 per pagina).
+- **`POST /api/v1/manutenzioni`** rispondeva 500 invece che 400 su `costo` o
+  `periodicita_giorni` non numerici o negativi. Le scritture via API finiscono
+  ora anche nel registro attivita'.
+
+### Modificato
+- I dati dei grafici della dashboard passano al template come oggetti e
+  vengono resi con `|tojson` invece che con `json.dumps()` piu' `|safe` dentro
+  una stringa JavaScript fra apici: un valore proveniente dal database non puo'
+  piu' chiudere il tag `<script>`.
+
+### Test
+- `tests/test_schema_impianti_sync.py`: verifica che il DDL degli impianti in
+  `schema.sql` e quello in `schema_impianti.DDL_IMPIANTI` creino gli stessi
+  oggetti con lo stesso testo. Le due copie servono percorsi diversi
+  (installazione nuova / migrazione) e una divergenza sulla vista
+  `prossime_scadenze_impianti` resterebbe invisibile fino allo scadenzario.
+
+---
+
+## [2.7.1] - 2026-08-28
+
+### Corretto
+- **Versione dichiarata dal database.** `apply_schema_updates()` scriveva
+  `PRAGMA user_version` solo sui database nati prima dell'introduzione del
+  versioning: un'installazione aggiornata riceveva le tabelle impianti ma
+  continuava a dichiararsi `200`, mentre un'installazione nuova partiva da
+  `schema.sql` con il numero corrente. Stesso schema, numero diverso — e quel
+  numero e' letto da `manutenzione.py`, `migrate.py` e
+  `importa_installazione.py`. Ora la versione viene allineata a `271` a ogni
+  avvio, ma solo se le tabelle impianti esistono davvero e solo verso l'alto:
+  un database piu' recente non viene retrocesso da un'installazione rimasta
+  indietro.
+- **`migrate.py` non conosceva la 2.7.** Il registro delle migrazioni si
+  fermava alla v2.3: su un database senza impianti lo strumento rispondeva
+  "nessuna migrazione necessaria". L'avvio di Flask creava comunque le
+  tabelle, quindi nessun dato mancava, ma il report era falso proprio dove lo
+  si consulta — prima di aggiornare. Aggiunta la voce `v2.7`.
+
+### Modificato
+- Il DDL delle tabelle impianti vive ora in `schema_impianti.py`, importato
+  sia da `models.apply_schema_updates()` sia da `migrate.py`. Il modulo non
+  importa Flask: e' cio' che continua a permettere a `migrate.py --db` di
+  puntare a un'altra installazione.
+
+---
+
+## [2.7.0] - 2026-08-27
+
+### Aggiunto
+- **Gestione impianti.** Accanto agli apparecchi elettromedicali la struttura
+  puo' ora tenere il registro dei propri impianti (elettrico, antincendio,
+  gas medicali, elevatori, climatizzazione...). Ogni impianto appartiene a una
+  divisione, ha un'anagrafica, i componenti che lo compongono, la
+  documentazione (dichiarazioni di conformita', certificati, libretti,
+  planimetrie) con i dati dell'emittente, un piano di manutenzione e lo
+  storico degli interventi. Nuovo blueprint `impianti.py` sotto `/impianti`,
+  servizio `impianti_service.py`, sette tabelle nuove (`manutentori`,
+  `impianti`, `impianti_componenti`, `impianti_documenti`,
+  `impianti_scadenze`, `impianti_interventi`, `impianti_avvisi_inviati`) e la
+  vista `prossime_scadenze_impianti`.
+- **Catalogo delle periodicita' standard** (`impianti_catalogo.py`): creando un
+  impianto si propongono le scadenze di legge del suo tipo (con riferimento
+  normativo e periodicita'), da applicare in blocco o una alla volta. Il
+  catalogo e' un suggerimento iniziale: modificarlo non riscrive i piani gia'
+  in essere, e non ripropone le voci che sono state sospese.
+- **Registrazione degli interventi con verbale.** Chiudere un intervento con
+  esito positivo su una scadenza ne sposta in avanti la data secondo la
+  periodicita'; il PDF del verbale resta allegato all'intervento.
+- **Anagrafica manutentori** per struttura, agganciabile all'impianto e al
+  singolo intervento.
+- **Scadenzario unificato.** `/scadenzario` mostra insieme le scadenze degli
+  apparecchi e quelle degli impianti, con il filtro `origine`
+  (tutto / apparecchi / impianti); i contatori della dashboard e i badge
+  tengono conto di entrambe le origini.
+- **Libretto dell'impianto in PDF**: anagrafica, componenti, documentazione,
+  piano di manutenzione e storico degli interventi in un unico documento
+  scaricabile. Il report PDF periodico include la sezione degli impianti in
+  scadenza.
+- **Avvisi di scadenza degli impianti** via email, con soglie di preavviso e
+  cascata dei destinatari (manutentore, indirizzi aggiuntivi della scadenza,
+  referenti della struttura): un invio per indirizzo, senza doppioni grazie a
+  `impianti_avvisi_inviati`, e disattivabili per struttura
+  (`avvisi_impianti_attivi`). Le scadenze degli impianti compaiono anche nel
+  digest giornaliero.
+
+### Modificato
+- **Perimetro della struttura.** Esportazione e cancellazione di una struttura
+  comprendono impianti, componenti, documenti, scadenze, interventi e
+  manutentori; il riepilogo `ESPORTAZIONE.txt` li elenca.
+- **`importa_installazione.py`** importa anche le tabelle degli impianti, con
+  i relativi allegati (`uploads/strutture/<id>/impianti/`) e la rimappatura
+  delle chiavi esterne fra impianto, componente, scadenza, intervento e
+  manutentore. Come `sessioni` e `login_attempts`, `impianti_avvisi_inviati`
+  non viene importata: gli avvisi gia' partiti appartengono al deployment di
+  origine.
+- `PRAGMA user_version` 200 -> 270.
+
+### Corretto
+- **La cancellazione di una struttura falliva se i suoi impianti erano
+  firmati.** `impianti.created_by`, `impianti.updated_by`,
+  `impianti_documenti.uploaded_by` e `impianti_interventi.created_by` non
+  hanno `ON DELETE`, e la rimozione cancella gli utenti prima della struttura:
+  quando la cascata avrebbe portato via gli impianti, l'utente era gia'
+  sparito e il vincolo saltava. Ora quelle colonne vengono azzerate insieme
+  agli altri riferimenti utente. Di riflesso, il conteggio dei riferimenti
+  mostrato prima di cancellare un utente comprende anche gli impianti.
+- **L'esportazione dello scadenzario ignorava la struttura**: il file usciva
+  con le scadenze di tutte le strutture.
+
+---
+
 ## [2.6.4] - 2026-08-25
 
 ### Corretto

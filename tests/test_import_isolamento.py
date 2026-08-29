@@ -103,7 +103,8 @@ def test_admin_non_puo_importare_su_divisione_di_altra_struttura(client, app, st
 
 def test_match_automatico_non_trova_apparecchi_di_altre_strutture(client, app, monkeypatch, strutture_import):
     """Uno scenario legittimo, non anomalo: un utente della struttura B, la
-    cui struttura viene disattivata, resta assegnato alla sua divisione
+    cui struttura viene disattivata mentre lui e' collegato, resta assegnato
+    alla sua divisione
     (utenti_divisioni non dipende dallo stato della struttura) e supera quindi
     il controllo di divisione — ma g.struttura_id e' None. L'unico apparecchio
     con quella matricola vive nella struttura Z, estranea: se il match
@@ -111,8 +112,6 @@ def test_match_automatico_non_trova_apparecchi_di_altre_strutture(client, app, m
     dell'import, lo trova comunque. Deve restare senza match."""
     from models import execute, query_one
     _configura_ai_globale(app)
-    with app.app_context():
-        execute("UPDATE strutture SET attiva = 0 WHERE id = ?", (strutture_import['b'],))
 
     import ai_service
     monkeypatch.setattr(ai_service, 'extract_text_from_file',
@@ -128,6 +127,12 @@ def test_match_automatico_non_trova_apparecchi_di_altre_strutture(client, app, m
     )
 
     entra(client, 'utenteb@i.it')
+    # La struttura si disattiva a sessione gia' aperta: dalla 2.8.0 il login su
+    # una struttura non attiva viene rifiutato, ma una sessione aperta prima
+    # resta valida ed e' esattamente da li' che nasce g.struttura_id a None.
+    with app.app_context():
+        execute("UPDATE strutture SET attiva = 0 WHERE id = ?", (strutture_import['b'],))
+
     dati = {
         'file': (io.BytesIO(b'testo finto'), 'verbale.csv'),
         'divisione_id': str(strutture_import['divisione_b']),

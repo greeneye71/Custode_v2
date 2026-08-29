@@ -1,3 +1,5 @@
+{# Come struttura_switcher.html: scegliere la struttura attiva e' una
+   scrittura di sessione, quindi POST con CSRF, non un link. #}
 <li class="nav-item dropdown">
   <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
     <i class="bi bi-building me-1"></i>
@@ -6,10 +8,12 @@
   <ul class="dropdown-menu dropdown-menu-end">
     {% for s in strutture_list %}
     <li>
-      <a class="dropdown-item {% if g_struttura and g_struttura.id == s.id %}active{% endif %}"
-         href="{{ url_for('auth.tecnico_seleziona_struttura', struttura_id=s.id) }}">
-        <i class="bi bi-building me-2"></i>{{ s.nome }}
-      </a>
+      <form method="post" action="{{ url_for('auth.tecnico_seleziona_struttura', struttura_id=s.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="dropdown-item {% if g_struttura and g_struttura.id == s.id %}active{% endif %}">
+          <i class="bi bi-building me-2"></i>{{ s.nome }}
+        </button>
+      </form>
     </li>
     {% endfor %}
   </ul>

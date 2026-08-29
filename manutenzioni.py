@@ -4,6 +4,7 @@ CRUD for maintenance records + Scadenzario (deadline tracking).
 """
 
 import os
+from collections import Counter
 from datetime import datetime
 
 from flask import (
@@ -12,9 +13,10 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import allegati
 from auth import login_required
 from models import (query_one, query_all, execute, log_attivita, upload_subdir,
-                    apparecchio_accessibile, filtro_divisione)
+                    nome_file_unico, apparecchio_accessibile, filtro_divisione)
 
 manutenzioni_bp = Blueprint('manutenzioni', __name__)
 
@@ -101,11 +103,12 @@ def _save_verbale(file_obj, manutenzione_id, struttura_id=None):
     """Save uploaded PDF verbale for a manutenzione. Returns relative path or None."""
     if not file_obj or not file_obj.filename:
         return None
-    ext = file_obj.filename.rsplit('.', 1)[-1].lower()
-    if ext not in ALLOWED_VERBALE_EXT:
+    # M05: estensione e contenuto. Il chiamante non mostra messaggi qui: un
+    # verbale rifiutato lascia la manutenzione senza allegato, come prima.
+    if allegati.verifica(file_obj, ALLOWED_VERBALE_EXT):
         return None
     uploads_dir, rel_prefix = upload_subdir('verbali', struttura_id)
-    safe_name = secure_filename(f"{int(datetime.now().timestamp())}_{file_obj.filename}")
+    safe_name = nome_file_unico(file_obj.filename)
     full_path = os.path.join(uploads_dir, safe_name)
     file_obj.save(full_path)
     return f"{rel_prefix}/{safe_name}"
@@ -367,71 +370,75 @@ def scarica_verbale(id):
 # Scadenzario
 # ---------------------------------------------------------------------------
 
+#: Colonne comuni alle due origini. La UNION si fa su queste, non su SELECT *:
+#: le due viste hanno colonne diverse e l'ordine dei campi non coincide.
+_SCADENZE_APPARECCHI = """
+    SELECT 'apparecchio' AS origine, ps.apparecchio_id AS oggetto_id,
+           COALESCE(ps.descrizione, ps.marca || ' ' || ps.modello) AS oggetto,
+           ps.matricola AS dettaglio, ps.divisione_id, ps.tipo_manutenzione AS tipo,
+           ps.prossima_scadenza, ps.giorni_rimasti, ps.priorita
+    FROM prossime_scadenze ps
+    WHERE 1=1 {filtro_div}
+"""
+
+_SCADENZE_IMPIANTI = """
+    SELECT 'impianto' AS origine, psi.impianto_id AS oggetto_id,
+           psi.impianto_nome AS oggetto,
+           psi.scadenza_nome AS dettaglio, psi.divisione_id,
+           COALESCE(psi.tipo_custom, psi.tipo) AS tipo,
+           psi.prossima_scadenza, psi.giorni_rimasti, psi.priorita
+    FROM prossime_scadenze_impianti psi
+    WHERE 1=1 {filtro_div}
+"""
+
+
+def scadenze_unificate(origine, limite=None):
+    """Le scadenze delle due origini, normalizzate sulle stesse colonne.
+
+    Il filtro di divisione si applica separatamente ai due rami: le viste hanno
+    alias diversi (ps, psi) e filtro_divisione() nomina l'alias nella clausola.
+    Se `limite` e' valorizzato, tronca il risultato in SQL (LIMIT parametrico)
+    invece di materializzare l'intera UNION per poi scartarne la maggior parte.
+    """
+    rami, parametri = [], []
+    if origine in ('tutto', 'apparecchi'):
+        clausola, valori = filtro_divisione('ps')
+        rami.append(_SCADENZE_APPARECCHI.format(filtro_div=clausola))
+        parametri.extend(valori)
+    if origine in ('tutto', 'impianti'):
+        clausola, valori = filtro_divisione('psi')
+        rami.append(_SCADENZE_IMPIANTI.format(filtro_div=clausola))
+        parametri.extend(valori)
+    if not rami:
+        return []
+
+    sql = " UNION ALL ".join(rami) + " ORDER BY prossima_scadenza ASC"
+    if limite:
+        sql += " LIMIT ?"
+        parametri.append(limite)
+    return query_all(sql, parametri)
+
+
 @manutenzioni_bp.route('/scadenzario')
 @login_required
 def scadenzario():
-    """Deadline tracking view with priority badges."""
-    div_clause, div_params = filtro_divisione('ps')
-
-    tipo = request.args.get('tipo', '')
+    """Deadline tracking view with priority badges, unified across origins."""
+    origine = request.args.get('origine', 'tutto')
+    if origine not in ('tutto', 'apparecchi', 'impianti'):
+        origine = 'tutto'
     priorita = request.args.get('priorita', '')
-    tipo_record = request.args.get('tipo_record', '')  # 'manutenzione' | 'verifica' | ''
 
-    where_clauses = ["1=1"]
-    params = []
-
-    if tipo:
-        where_clauses.append("ps.tipo_manutenzione = ?")
-        params.append(tipo)
-
-    if priorita:
-        where_clauses.append("ps.priorita = ?")
-        params.append(priorita)
-
-    if tipo_record == 'manutenzione':
-        where_clauses.append("ps.tipo_record = 'manutenzione'")
-    elif tipo_record == 'verifica':
-        where_clauses.append("ps.tipo_record = 'verifica'")
-
-    where_sql = " AND ".join(where_clauses)
-    # Fix div_clause to use 'ps' alias
-    div_clause_ps = div_clause.replace('a.divisione_id', 'ps.divisione_id')
-
-    # Summary counts by priority
-    summary_sql = f"""
-        SELECT priorita, COUNT(*) as cnt
-        FROM prossime_scadenze ps
-        WHERE 1=1 {div_clause_ps}
-        GROUP BY priorita
-    """
-    summary_rows = query_all(summary_sql, div_params)
-    summary = {r['priorita']: r['cnt'] for r in summary_rows}
-
-    # Summary counts by tipo_record
-    tipo_summary_rows = query_all(
-        f"""SELECT tipo_record, COUNT(*) as cnt
-            FROM prossime_scadenze ps
-            WHERE 1=1 {div_clause_ps}
-            GROUP BY tipo_record""",
-        div_params
-    )
-    tipo_summary = {r['tipo_record']: r['cnt'] for r in tipo_summary_rows}
-
-    # Main query
-    data_sql = f"""
-        SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-        FROM prossime_scadenze ps
-        LEFT JOIN divisioni d ON ps.divisione_id = d.id
-        WHERE {where_sql} {div_clause_ps}
-        ORDER BY ps.prossima_scadenza ASC
-    """
-    scadenze = query_all(data_sql, params + div_params)
+    # Il summary deve riflettere TUTTE le priorità anche quando la vista è
+    # filtrata su una sola: altrimenti le card delle altre priorità
+    # mostrerebbero 0 e l'utente perderebbe la via d'uscita dal filtro.
+    tutte = scadenze_unificate(origine)
+    summary = Counter(s['priorita'] for s in tutte)
+    scadenze = [s for s in tutte if not priorita or s['priorita'] == priorita]
 
     context = {
         'scadenze': scadenze,
         'summary': summary,
-        'tipo_summary': tipo_summary,
-        'filtri': {'tipo': tipo, 'priorita': priorita, 'tipo_record': tipo_record},
+        'filtri': {'priorita': priorita, 'origine': origine},
     }
 
     if request.args.get('partial'):

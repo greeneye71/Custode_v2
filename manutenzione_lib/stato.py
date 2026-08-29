@@ -11,11 +11,17 @@ chi chiede assistenza.
 import os
 import sqlite3
 
+import ai_chiavi
+
 TABELLE_DATI = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti', 'accessori')
+# Nome del provider -> chiave AI per-struttura. Il nome che quella chiave ha
+# nella configurazione globale lo sa ai_chiavi, che risolve anche la forma
+# legacy senza prefisso: '--db' puo' puntare a un'installazione vecchia, e li'
+# la chiave si chiama ancora 'anthropic_api_key'.
 PROVIDER_CHIAVI = {
-    'anthropic': 'default_anthropic_api_key',
-    'gemini': 'default_gemini_api_key',
-    'openai': 'default_openai_api_key',
+    'anthropic': 'anthropic_api_key',
+    'gemini': 'gemini_api_key',
+    'openai': 'openai_api_key',
 }
 
 
@@ -150,11 +156,11 @@ def _sezione_uploads(conn, config, radice):
 def _sezione_ai(config):
     return {
         'disponibile': True,
-        'provider': config.get('default_ai_provider'),
-        'chiavi': {nome: bool(config.get(chiave))
+        'provider': ai_chiavi.valore_globale(config, 'ai_provider', None),
+        'chiavi': {nome: bool(ai_chiavi.valore_globale(config, chiave, ''))
                    for nome, chiave in PROVIDER_CHIAVI.items()},
-        'base_url_locale': config.get('default_ai_local_base_url'),
-        'modello_import': config.get('default_ai_import_model'),
+        'base_url_locale': ai_chiavi.valore_globale(config, 'ai_local_base_url', None),
+        'modello_import': ai_chiavi.valore_globale(config, 'ai_import_model', None),
     }
 
 

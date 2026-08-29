@@ -6,11 +6,19 @@ Runs periodic tasks in a background thread:
 - Automatic backup (weekly, Sunday 03:00)
 """
 
+import os
 import threading
 import time
 import logging
 import sqlite3
 from datetime import datetime
+
+# A livello di modulo (non dentro il metodo, come le altre import locali di
+# questo file) cosi' i test possono sostituirla con monkeypatch.setattr
+# facendo scheduler.invia = ... invece di rimettere mano a posta.py, che e'
+# codice di invio condiviso con altri flussi.
+from posta import invia
+import manutenzione_globale
 
 logger = logging.getLogger('medinventory.scheduler')
 
@@ -63,6 +71,15 @@ class BackgroundScheduler:
                 'last_run': 0,
             },
             {
+                'name': 'impianti_alerts',
+                # Ogni ora, senza finestra oraria fissa: la tabella
+                # impianti_avvisi_inviati impedisce i doppioni, quindi ogni ora
+                # successiva e' un tentativo ripetuto gratis se l'SMTP era giu'.
+                'func': self._send_impianti_alerts,
+                'interval': 3600,
+                'last_run': 0,
+            },
+            {
                 'name': 'cleanup_login_attempts',
                 'func': self._cleanup_login_attempts,
                 'interval': 86400,  # una volta al giorno
@@ -92,12 +109,28 @@ class BackgroundScheduler:
 
             for task in self._tasks:
                 if now - task['last_run'] >= task['interval']:
-                    try:
-                        logger.debug(f"Esecuzione task: {task['name']}")
-                        task['func']()
+                    # Il task si registra fra i lavori in corso: un ripristino
+                    # o un azzeramento aspetta che finisca prima di sostituire
+                    # il file del database, e i task che devono ancora partire
+                    # restano fermi finche' la manutenzione non e' conclusa.
+                    # Il turno non viene consumato, cosi' ripartono subito dopo.
+                    with manutenzione_globale.lavoro() as ammesso:
+                        if not ammesso:
+                            logger.info(
+                                "Manutenzione in corso (%s): task rinviati.",
+                                manutenzione_globale.descrizione())
+                            break
+                        # last_run si aggiorna comunque: fino alla 2.7.1 stava
+                        # dentro il try, dopo la chiamata, quindi un task che
+                        # sollevava veniva ritentato ogni 30 secondi per sempre —
+                        # riempiendo il log e, per il controllo email, ribussando
+                        # all'IMAP di continuo.
                         task['last_run'] = now
-                    except Exception as e:
-                        logger.error(f"Errore nel task {task['name']}: {e}")
+                        try:
+                            logger.debug(f"Esecuzione task: {task['name']}")
+                            task['func']()
+                        except Exception as e:
+                            logger.error(f"Errore nel task {task['name']}: {e}")
 
             # Sleep for 30 seconds between checks
             self._stop_event.wait(30)
@@ -161,7 +194,7 @@ class BackgroundScheduler:
         report PDF non e' mai stato raggiungibile.
         """
         with self.app.app_context():
-            from models import query_all, get_struttura_config
+            from models import query_all, get_struttura_config, set_struttura_config
             strutture = query_all(
                 "SELECT * FROM strutture WHERE attiva=1 AND email_notifiche IS NOT NULL"
             )
@@ -170,21 +203,125 @@ class BackgroundScheduler:
                 sid = struttura['id']
                 if get_struttura_config(sid, 'avvisi_scadenza_attivi', '') != '1':
                     continue
-                if not self._is_digest_due(get_struttura_config(sid, 'report_frequenza',
-                                                                'settimanale')):
+                frequenza = get_struttura_config(sid, 'report_frequenza', 'settimanale')
+                periodo = self._periodo_digest(frequenza)
+                if periodo is None:
+                    continue
+                # Registrato in strutture_config e non in memoria: un riavvio
+                # dell'applicazione non deve far ripartire gli avvisi già
+                # inviati per questo periodo.
+                if get_struttura_config(sid, 'ultimo_avviso_scadenze', '') == periodo:
                     continue
 
                 formato = get_struttura_config(sid, 'avvisi_scadenza_formato', 'testo')
                 try:
                     if formato == 'pdf':
-                        self._invia_report_pdf(struttura)
+                        esito = self._invia_report_pdf(struttura)
                     else:
-                        self._invia_digest(struttura)
+                        esito = self._invia_digest(struttura)
+                    # Il periodo si segna solo se l'avviso e' davvero partito
+                    # (o se non c'era nulla da mandare). Fino alla 2.8.0 lo si
+                    # segnava comunque: un SMTP irraggiungibile per un'ora
+                    # bruciava silenziosamente l'avviso di tutto il periodo,
+                    # senza che nessuno se ne accorgesse.
+                    if esito in ('inviato', 'niente_da_inviare'):
+                        set_struttura_config(sid, 'ultimo_avviso_scadenze', periodo)
+                    else:
+                        logger.error(
+                            f"Avviso scadenze non partito per {struttura['nome']}: "
+                            f"il periodo {periodo} resta da inviare.")
                 except Exception as e:
                     # Gira in un thread di fondo: un'eccezione qui fermerebbe
                     # gli avvisi di tutte le strutture successive, e nessuno la
                     # vedrebbe se non nel log.
                     logger.error(f"Errore avvisi struttura {struttura['nome']}: {e}")
+
+    def _send_impianti_alerts(self):
+        """Avvisi di scadenza degli impianti, un invio per indirizzo.
+
+        Non c'e' digest: ogni verifica ha destinatari propri (il manutentore
+        della riga, l'indirizzo extra del perito) e un messaggio unico non
+        potrebbe rispettarli. Un invio per indirizzo e non un unico invio con
+        i destinatari uniti da virgola: smtplib.SMTP.sendmail (dentro
+        posta.invia) tratta una stringa come UN SOLO destinatario di envelope,
+        quindi "a@x.it, b@y.it" diventa un RCPT TO invalido per RFC 5321 e i
+        server veri lo rifiutano.
+        """
+        with self.app.app_context():
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from models import query_all, get_struttura_config
+            import impianti_service
+
+            if datetime.now().hour < 7:
+                return
+            if not self._config_smtp()['host']:
+                logger.warning("SMTP di sistema non configurato: avvisi "
+                               "impianti non inviati.")
+                return
+
+            strutture = query_all("SELECT * FROM strutture WHERE attiva = 1")
+            for struttura in strutture:
+                sid = struttura['id']
+                if get_struttura_config(sid, 'avvisi_impianti_attivi', '1') != '1':
+                    continue
+                try:
+                    for avviso in impianti_service.avvisi_da_inviare(sid):
+                        indirizzi = impianti_service.destinatari(struttura, avviso)
+                        if not indirizzi:
+                            # Configurazione incompleta, non un guasto: la
+                            # struttura non ha indicato nessun destinatario.
+                            logger.info(
+                                f"Nessun destinatario per la scadenza "
+                                f"{avviso['scadenza_id']} ({struttura['nome']})")
+                            continue
+                        oggetto, testo = impianti_service.corpo_avviso(
+                            struttura, avviso)
+
+                        # Un messaggio nuovo per indirizzo: posta.invia()
+                        # scrive dentro From/To, e Message.__setitem__
+                        # accumula invece di sostituire, quindi riusare lo
+                        # stesso MIMEMultipart fra piu' invii duplicherebbe
+                        # gli header dal secondo invio in poi.
+                        falliti = []
+                        raggiunti = []
+                        for indirizzo in indirizzi:
+                            msg = MIMEMultipart()
+                            msg['Subject'] = oggetto
+                            msg.attach(MIMEText(testo, 'plain', 'utf-8'))
+                            if invia(self.app.config.get('APP_CONFIG'),
+                                     indirizzo, msg):
+                                raggiunti.append(indirizzo)
+                            else:
+                                falliti.append(indirizzo)
+
+                        if falliti:
+                            logger.error(
+                                f"Avviso impianto non partito per "
+                                f"{falliti} (scadenza {avviso['scadenza_id']}, "
+                                f"{struttura['nome']})")
+
+                        # Si registra se almeno un invio e' partito: un
+                        # indirizzo permanentemente rotto non deve bloccare
+                        # per sempre il riavviso a quelli buoni (altrimenti il
+                        # ciclo orario ritenta all'infinito), al prezzo che
+                        # quell'indirizzo perda la notifica in silenzio — per
+                        # questo il fallimento e' loggato sopra a livello
+                        # ERROR, cosi' l'operatore vede quale indirizzo e'
+                        # rotto. Si registra e si logga chi e' stato
+                        # raggiunto davvero, non la lista di partenza: con un
+                        # invio parzialmente fallito la colonna 'destinatari'
+                        # e' l'unica traccia di chi ha ricevuto l'avviso.
+                        if raggiunti:
+                            for soglia in avviso['soglie_coperte']:
+                                impianti_service.registra_avviso(
+                                    avviso['scadenza_id'], soglia,
+                                    avviso['prossima_scadenza'], raggiunti)
+                            logger.info(f"Avviso impianto inviato a "
+                                        f"{raggiunti} ({struttura['nome']})")
+                except Exception as e:
+                    logger.error(f"Errore avvisi impianti struttura "
+                                 f"{struttura['nome']}: {e}")
 
     def _config_smtp(self):
         """I parametri del server di posta, solo di sistema (vedi posta.py)."""
@@ -213,7 +350,11 @@ class BackgroundScheduler:
         return False
 
     def _invia_report_pdf(self, struttura):
-        """Genera il report PDF delle scadenze e lo allega."""
+        """Genera il report PDF delle scadenze e lo allega.
+
+        Restituisce 'inviato' o 'fallito': chi chiama segna il periodo come
+        gia' avvisato solo nel primo caso.
+        """
         import os
         import tempfile
         from email.mime.application import MIMEApplication
@@ -239,21 +380,40 @@ class BackgroundScheduler:
             allegato.add_header('Content-Disposition', 'attachment',
                                 filename=f"scadenze_{struttura['codice']}.pdf")
             msg.attach(allegato)
-            self._invia(struttura, msg)
+            return 'inviato' if self._invia(struttura, msg) else 'fallito'
         finally:
             if os.path.exists(percorso):
                 os.remove(percorso)
 
-    def _is_digest_due(self, frequenza):
-        """Controlla se è il momento giusto per inviare il digest."""
-        now = datetime.now()
+    def _periodo_digest(self, frequenza, now=None):
+        """La chiave del periodo corrente, o None se il momento non e' ancora passato.
+
+        Fino alla 2.7.1 qui si confrontava l'ora esatta (now.hour == 7) su un
+        task che gira ogni 3600 secondi *di orologio*: il timer deriva, quindi
+        due controlli potevano cadere nella stessa ora (digest doppio) o
+        saltarla del tutto (digest mai inviato per quel giorno). Ora si
+        risponde a una domanda che non dipende dall'istante del controllo:
+        "il momento di questo periodo e' passato?". Chi chiama confronta la
+        chiave con l'ultimo invio registrato e manda una volta sola.
+        """
+        now = now or datetime.now()
         if frequenza == 'giornaliero':
-            return now.hour == 7
-        elif frequenza == 'settimanale':
-            return now.weekday() == 0 and now.hour == 7  # lunedì alle 7:00
-        elif frequenza == 'mensile':
-            return now.day == 1 and now.hour == 7  # primo del mese alle 7:00
-        return False
+            if now.hour < 7:
+                return None
+            return now.strftime('%Y-%m-%d')
+        if frequenza == 'settimanale':
+            # Lunedì alle 7:00. Se l'applicazione era ferma quel lunedì,
+            # l'invio si recupera nei giorni successivi della stessa settimana
+            # invece di essere perso.
+            if now.weekday() == 0 and now.hour < 7:
+                return None
+            anno, settimana, _ = now.isocalendar()
+            return f'{anno}-W{settimana:02d}'
+        if frequenza == 'mensile':
+            if now.day == 1 and now.hour < 7:
+                return None
+            return now.strftime('%Y-%m')
+        return None
 
     def _invia_digest(self, struttura):
         """Il digest di testo delle scadenze della struttura.
@@ -262,10 +422,12 @@ class BackgroundScheduler:
         avviso di scadenza attraversa piu' divisioni, quindi nominarne una sola
         nell'oggetto sarebbe falso, ma il destinatario deve comunque poter
         capire di chi si parla — il mittente non glielo dice piu'.
+
+        Restituisce 'inviato', 'niente_da_inviare' oppure 'fallito'.
         """
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
-        from models import query_all
+        from models import query_all, get_struttura_config
 
         scadenze = query_all("""
             SELECT ps.*, a.matricola, a.marca, a.modello, a.descrizione,
@@ -277,8 +439,24 @@ class BackgroundScheduler:
             AND ps.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
             ORDER BY ps.priorita, ps.prossima_scadenza
         """, (struttura['id'],))
-        if not scadenze:
-            return
+
+        # Interrogato prima del return anticipato: una struttura puo' non
+        # avere apparecchi in scadenza ma avere impianti, e in quel caso il
+        # digest va comunque mandato.
+        impianti = []
+        if get_struttura_config(struttura['id'], 'avvisi_impianti_attivi',
+                                '1') == '1':
+            impianti = query_all("""
+                SELECT v.*, d.nome as divisione_nome
+                FROM prossime_scadenze_impianti v
+                LEFT JOIN divisioni d ON d.id = v.divisione_id
+                WHERE v.struttura_id = ?
+                  AND v.priorita IN ('scaduto', 'urgente', 'attenzione', 'avviso')
+                ORDER BY v.prossima_scadenza
+            """, (struttura['id'],))
+
+        if not scadenze and not impianti:
+            return 'niente_da_inviare'
 
         priorita_labels = {
             'scaduto':    'SCADUTO',
@@ -299,32 +477,91 @@ class BackgroundScheduler:
                         f"scade: {s['prossima_scadenza']} ({s['giorni_rimasti']} gg)"
                     )
 
+        if impianti:
+            righe.append("\nIMPIANTI")
+            righe.append("-" * 30)
+            for i in impianti:
+                righe.append(
+                    f"  {i['impianto_nome']} — {i['scadenza_nome']} — "
+                    f"{i['divisione_nome'] or '-'} — scade: "
+                    f"{i['prossima_scadenza']} ({i['giorni_rimasti']} gg)")
+
         msg = MIMEMultipart()
         msg['Subject'] = (f"Scadenzario {struttura['nome']} — "
                           f"{datetime.now().strftime('%d/%m/%Y')}")
         msg.attach(MIMEText("\n".join(righe), 'plain', 'utf-8'))
-        self._invia(struttura, msg)
+        return 'inviato' if self._invia(struttura, msg) else 'fallito'
+
+    def _eta_ultimo_backup(self, backups_path):
+        """Giorni trascorsi dal backup piu' recente, o None se non ce ne sono."""
+        import os
+        try:
+            file_backup = [
+                os.path.join(backups_path, n) for n in os.listdir(backups_path)
+                if n.startswith('medinventory_backup_') and n.endswith('.sqlite')
+            ]
+        except OSError:
+            return None
+        if not file_backup:
+            return None
+        piu_recente = max(os.path.getmtime(f) for f in file_backup)
+        return (time.time() - piu_recente) / 86400
 
     def _check_backup(self):
-        """Check if a weekly backup is needed (Sunday 03:00)."""
-        now = datetime.now()
-        # Only run on Sunday (weekday 6) between 03:00 and 03:59
-        if now.weekday() == 6 and now.hour == 3:
-            try:
-                from backup_service import create_backup
-                config = self.app.config['APP_CONFIG']
-                db_path = self.app.config['DATABASE_PATH']
-                backups_path = self.app.config['BACKUPS_PATH']
-                retention = config.get('backup_retention', 4)
+        """Backup settimanale, la domenica dalle 03:00.
 
-                create_backup(db_path, backups_path, retention)
-                logger.info("Backup settimanale completato.")
-            except Exception as e:
-                logger.error(f"Errore backup settimanale: {e}")
+        Fino alla 2.7.1 la condizione era now.hour == 3 su un task che gira
+        ogni 3600 secondi *di orologio*: il timer deriva, quindi la finestra
+        poteva essere saltata (nessun backup per una settimana intera) o
+        colpita due volte. Ora conta l'eta' del backup piu' recente sul disco,
+        che sopravvive anche a un riavvio e tiene conto dei backup manuali.
+        """
+        now = datetime.now()
+        backups_path = self.app.config['BACKUPS_PATH']
+        eta = self._eta_ultimo_backup(backups_path)
+
+        if eta is not None:
+            if eta < 6:
+                return
+            # Fuori dalla finestra della domenica si aspetta ancora un po':
+            # oltre gli otto giorni pero' si recupera comunque, altrimenti
+            # un'applicazione spenta la domenica resterebbe senza backup.
+            if not (now.weekday() == 6 and now.hour >= 3) and eta < 8:
+                return
+
+        try:
+            from backup_service import create_backup
+            config = self.app.config['APP_CONFIG']
+            db_path = self.app.config['DATABASE_PATH']
+            retention = config.get('backup_retention', 4)
+
+            create_backup(db_path, backups_path, retention)
+            logger.info("Backup settimanale completato.")
+        except Exception as e:
+            logger.error(f"Errore backup settimanale: {e}")
 
 
 # Global scheduler instance
 _scheduler = None
+
+
+def deve_avviare_scheduler(debug=False, env=None):
+    """Dice se questo processo e' quello che deve tenere lo scheduler.
+
+    Con debug=True Werkzeug ricarica il codice in un processo figlio e il
+    padre resta vivo a sorvegliarlo. init_scheduler() viene chiamato prima di
+    app.run(), quindi girerebbe in tutti e due: ogni ciclo (posta, backup,
+    avvisi di scadenza) partirebbe due volte, con due verbali importati dallo
+    stesso messaggio e due email di avviso allo stesso destinatario.
+
+    Il figlio ha WERKZEUG_RUN_MAIN='true', il padre no. Fuori dal reloader la
+    variabile non c'e' comunque: senza il controllo su debug, in produzione lo
+    scheduler non partirebbe piu' affatto.
+    """
+    if not debug:
+        return True
+    ambiente = os.environ if env is None else env
+    return ambiente.get('WERKZEUG_RUN_MAIN') == 'true'
 
 
 def init_scheduler(app):

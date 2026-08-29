@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}Manutentori - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2><i class="bi bi-tools me-2"></i> Manutentori</h2>
+    <p class="text-muted mb-0">Anagrafica delle ditte manutentrici della struttura</p>
+</div>
+
+<div class="d-flex justify-content-end mb-3">
+    <a href="{{ url_for('impianti.lista') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Torna agli impianti
+    </a>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Ragione sociale</th>
+                    <th>Partita IVA</th>
+                    <th>Telefono</th>
+                    <th>Email</th>
+                    <th>Stato</th>
+                    <th class="text-end">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in manutentori %}
+                <tr>
+                    <td>{{ m.ragione_sociale }}</td>
+                    <td>{{ m.partita_iva or '-' }}</td>
+                    <td>{{ m.telefono or '-' }}</td>
+                    <td>{{ m.email or '-' }}</td>
+                    <td>
+                        {% if m.attivo %}
+                        <span class="badge bg-success">Attivo</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Non attivo</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <button type="button" class="btn btn-sm btn-outline-primary" title="Modifica"
+                                data-bs-toggle="collapse" data-bs-target="#modifica-{{ m.id }}">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <form method="POST"
+                              action="{{ url_for('impianti.elimina_manutentore', manutentore_id=m.id) }}"
+                              class="d-inline"
+                              onsubmit="return confirm('Eliminare questo manutentore? I riferimenti negli impianti e negli interventi verranno azzerati.')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Elimina">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                <tr class="collapse" id="modifica-{{ m.id }}">
+                    <td colspan="6" class="bg-light">
+                        <form method="POST"
+                              action="{{ url_for('impianti.modifica_manutentore', manutentore_id=m.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label for="ragione-{{ m.id }}" class="form-label">Ragione sociale <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="ragione-{{ m.id }}"
+                                           name="ragione_sociale" value="{{ m.ragione_sociale }}" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="piva-{{ m.id }}" class="form-label">Partita IVA</label>
+                                    <input type="text" class="form-control" id="piva-{{ m.id }}"
+                                           name="partita_iva" value="{{ m.partita_iva or '' }}">
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="indirizzo-{{ m.id }}" class="form-label">Indirizzo</label>
+                                    <input type="text" class="form-control" id="indirizzo-{{ m.id }}"
+                                           name="indirizzo" value="{{ m.indirizzo or '' }}">
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="telefono-{{ m.id }}" class="form-label">Telefono</label>
+                                    <input type="text" class="form-control" id="telefono-{{ m.id }}"
+                                           name="telefono" value="{{ m.telefono or '' }}">
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="email-{{ m.id }}" class="form-label">Email</label>
+                                    <input type="email" class="form-control" id="email-{{ m.id }}"
+                                           name="email" value="{{ m.email or '' }}">
+                                </div>
+                                <div class="col-md-4">
+                                    <label for="note-{{ m.id }}" class="form-label">Note</label>
+                                    <input type="text" class="form-control" id="note-{{ m.id }}"
+                                           name="note" value="{{ m.note or '' }}">
+                                </div>
+                                <div class="col-12">
+                                    <div class="form-check">
+                                        <input type="checkbox" class="form-check-input" id="attivo-{{ m.id }}"
+                                               name="attivo" {% if m.attivo %}checked{% endif %}>
+                                        <label class="form-check-label" for="attivo-{{ m.id }}">Attivo</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="bi bi-check-lg me-1"></i> Salva
+                                </button>
+                            </div>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-muted text-center py-3">Nessun manutentore registrato.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-plus-lg me-1"></i> Aggiungi manutentore
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('impianti.nuovo_manutentore') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label for="nuovo-ragione" class="form-label">Ragione sociale <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="nuovo-ragione" name="ragione_sociale" required>
+                </div>
+                <div class="col-md-4">
+                    <label for="nuovo-piva" class="form-label">Partita IVA</label>
+                    <input type="text" class="form-control" id="nuovo-piva" name="partita_iva">
+                </div>
+                <div class="col-md-4">
+                    <label for="nuovo-indirizzo" class="form-label">Indirizzo</label>
+                    <input type="text" class="form-control" id="nuovo-indirizzo" name="indirizzo">
+                </div>
+                <div class="col-md-4">
+                    <label for="nuovo-telefono" class="form-label">Telefono</label>
+                    <input type="text" class="form-control" id="nuovo-telefono" name="telefono">
+                </div>
+                <div class="col-md-4">
+                    <label for="nuovo-email" class="form-label">Email</label>
+                    <input type="email" class="form-control" id="nuovo-email" name="email">
+                </div>
+                <div class="col-md-4">
+                    <label for="nuovo-note" class="form-label">Note</label>
+                    <input type="text" class="form-control" id="nuovo-note" name="note">
+                </div>
+            </div>
+            <div class="mt-3">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-plus-lg me-1"></i> Aggiungi
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

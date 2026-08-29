@@ -20,10 +20,11 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from flask import (Flask, g, session, redirect, url_for, render_template,
-                   request, current_app)
+                   request, current_app, jsonify)
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf.csrf import CSRFProtect
 
+import manutenzione_globale
 from models import close_db, init_db, get_db, query_all
 from auth import login_required as auth_login_required
 
@@ -31,7 +32,7 @@ from auth import login_required as auth_login_required
 # Version (source of truth — config.json is auto-updated at startup)
 # ---------------------------------------------------------------------------
 
-APP_VERSION = "2.6.4"
+APP_VERSION = "2.8.4"
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -75,19 +76,21 @@ LOCAL_CONFIG_KEYS = frozenset({
     'app_name', 'organization', 'structure_name',
     'host', 'port', 'debug',
     'secret_key', 'encryption_key',
-    'session_lifetime_hours', 'backup_retention',
+    'session_lifetime_hours', 'backup_retention', 'archivio_retention',
     'ai_provider', 'anthropic_api_key', 'gemini_api_key', 'openai_api_key',
     'ai_import_model', 'ai_email_model', 'ai_verifiche_model',
     'ai_local_base_url', 'ai_local_model',
     'default_ai_provider',
     'default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key',
     'default_ai_local_base_url', 'default_ai_local_model',
+    'ai_local_url_allowlist',
     'default_ai_import_model', 'default_ai_email_model',
+    'import_max_analisi', 'import_max_analisi_struttura',
     'email_check_interval_minutes',
     'imap_enabled', 'imap_account', 'imap_password', 'imap_server', 'imap_port', 'imap_ssl',
     'alert_email_enabled', 'alert_email_to',
     'smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_use_tls',
-    'single_struttura', 'force_https', 'cloudflare_mode',
+    'single_struttura', 'force_https', 'cloudflare_mode', 'behind_proxy',
 })
 
 
@@ -244,7 +247,14 @@ def create_app():
     # ProxyFix: corregge request.remote_addr e scheme quando l'app è dietro
     # un reverse proxy o tunnel (Cloudflare Tunnel, Nginx, ecc.).
     # x_for=1 si fida di un solo hop proxy (cloudflared → app).
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    #
+    # Applicato solo se il deployment dichiara di stare dietro un proxy: in
+    # accesso LAN diretto X-Forwarded-For arriva dal client, e fidarsene
+    # significa lasciargli scegliere l'IP con cui viene contato il rate limit
+    # del login e con cui finisce nel log attività.
+    if (config.get('cloudflare_mode', False) or config.get('force_https', False)
+            or config.get('behind_proxy', False)):
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     # ---------------------------------------------------------------------------
     # Cookie security
@@ -361,6 +371,26 @@ def create_app():
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
         # Disabilita funzionalità browser non necessarie (geolocation, camera, ecc.)
         response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+        # Content-Security-Policy (M13): tutto il frontend e' servito da
+        # static/vendor/, quindi la pagina non ha piu' bisogno di nessuna
+        # origine esterna. Con default-src 'self' un tag iniettato che punta
+        # a un dominio di terzi non viene caricato, e i dati non possono
+        # essere spediti fuori via fetch o immagine remota.
+        # 'unsafe-inline' resta necessario: i template usano <script> inline e
+        # attributi style/onclick. Toglierlo richiede nonce su ogni blocco,
+        # lavoro che vale la pena solo insieme al riordino dei template.
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "connect-src 'self'; "
+            "frame-ancestors 'self'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "object-src 'none'"
+        )
         # HSTS: forza il browser a usare HTTPS per i prossimi 12 mesi.
         # Inviato solo quando la connessione è (o sembra) HTTPS, per non
         # bloccare l'accesso LAN su HTTP puro.
@@ -370,6 +400,26 @@ def create_app():
                 'max-age=31536000; includeSubDomains'
             )
         return response
+
+    # ---------------------------------------------------------------------------
+    # Modo manutenzione (ripristino backup, azzeramento database)
+    # ---------------------------------------------------------------------------
+    # Ogni richiesta si registra fra i lavori in corso e si toglie alla fine.
+    # Chi sostituisce il file del database aspetta che il conteggio torni a
+    # zero prima di procedere, e nel frattempo le richieste nuove ricevono 503
+    # invece di leggere un database che sta sparendo sotto di loro.
+    @app.before_request
+    def blocca_durante_manutenzione():
+        if manutenzione_globale.entra():
+            return None
+        if request.path.startswith('/api/'):
+            return jsonify({'errore': manutenzione_globale.MESSAGGIO}), 503,                 {'Retry-After': '30'}
+        return render_template('manutenzione.html',
+                               messaggio=manutenzione_globale.MESSAGGIO), 503,             {'Retry-After': '30'}
+
+    @app.teardown_request
+    def fine_richiesta(exc=None):
+        manutenzione_globale.esci()
 
     # ---------------------------------------------------------------------------
     # HTTPS redirect (opzionale — attivo solo con force_https=true in config)
@@ -411,6 +461,9 @@ def create_app():
     from verifiche import verifiche_bp
     app.register_blueprint(verifiche_bp)
 
+    from impianti import impianti_bp
+    app.register_blueprint(impianti_bp)
+
     from strutture_bp import strutture_bp
     app.register_blueprint(strutture_bp)
 
@@ -428,39 +481,21 @@ def create_app():
     @auth_login_required
     def index():
         from flask import redirect, url_for
-        from models import query_one, query_all
+        from models import query_one, query_all, filtro_divisione
 
         # Tecnico senza struttura selezionata → pagina di selezione
         if getattr(g, 'user', {}).get('ruolo') == 'tecnico' and not getattr(g, 'struttura_id', None):
             return redirect(url_for('auth.tecnico_seleziona_struttura_page'))
 
-        # Division filter
-        div = getattr(g, 'divisione_attiva', None)
-        struttura_id = getattr(g, 'struttura_id', None)
-        if div and div.get('id') != 'tutte':
-            div_clause = "AND a.divisione_id = ?"
-            div_params = [div['id']]
-            div_clause_m = "AND a.divisione_id = ?"
-        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
-            if struttura_id:
-                div_clause = "AND a.struttura_id = ?"
-                div_params = [struttura_id]
-                div_clause_m = "AND a.struttura_id = ?"
-            else:
-                div_clause = ""
-                div_params = []
-                div_clause_m = ""
-        else:
-            ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-            if ids:
-                ph = ','.join('?' * len(ids))
-                div_clause = f"AND a.divisione_id IN ({ph})"
-                div_params = ids
-                div_clause_m = div_clause
-            else:
-                div_clause = "AND 1=0"
-                div_params = []
-                div_clause_m = "AND 1=0"
+        # Scope dell'utente. Fino alla 2.7.1 questa rotta riscriveva
+        # filtro_divisione() inline, e il ramo admin senza struttura attiva
+        # cadeva su div_clause = "" — cioe' nessun filtro, e la dashboard
+        # mostrava conteggi e ultimi interventi di tutte le strutture.
+        # L'unica fonte dello scope e' models.filtro_divisione().
+        # Tutte le query qui sotto usano l'alias "a" per apparecchi, anche
+        # quelle che partono da manutenzioni: una sola clausola basta.
+        div_clause, div_params = filtro_divisione('a')
+        div_clause_m = div_clause
 
         # Stat 1: Total apparecchi (non dismessi)
         r = query_one(
@@ -469,34 +504,23 @@ def create_app():
         )
         totale_apparecchi = r['cnt'] if r else 0
 
-        # Stat 2: Active alerts (deadlines <= 30 days)
-        if div and div.get('id') != 'tutte':
-            r = query_one(
-                "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id = ? AND priorita IN ('scaduto','urgente','attenzione','avviso')",
-                [div['id']]
-            )
-        elif getattr(g, 'user', {}).get('ruolo') in ('admin', 'tecnico'):
-            if struttura_id:
-                r = query_one(
-                    """SELECT COUNT(*) as cnt FROM prossime_scadenze ps
-                       JOIN apparecchi a ON a.id = ps.apparecchio_id
-                       WHERE a.struttura_id = ? AND ps.priorita IN ('scaduto','urgente','attenzione','avviso')""",
-                    [struttura_id]
-                )
-            else:
-                r = query_one(
-                    "SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE priorita IN ('scaduto','urgente','attenzione','avviso')"
-                )
-        else:
-            ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-            if ids:
-                ph = ','.join('?' * len(ids))
-                r = query_one(
-                    f"SELECT COUNT(*) as cnt FROM prossime_scadenze WHERE divisione_id IN ({ph}) AND priorita IN ('scaduto','urgente','attenzione','avviso')",
-                    ids
-                )
-            else:
-                r = None
+        # Stat 2: Active alerts (deadlines <= 30 days), somma apparecchi + impianti
+        # Anche questo blocco riscriveva lo scope a mano e per l'admin senza
+        # struttura attiva contava le scadenze di tutte le strutture. Le due
+        # viste espongono struttura_id e divisione_id, quindi filtro_divisione()
+        # si applica direttamente all'alias della vista.
+        cl_ps, par_ps = filtro_divisione('ps')
+        cl_psi, par_psi = filtro_divisione('psi')
+        r = query_one(
+            f"""SELECT (SELECT COUNT(*) FROM prossime_scadenze ps
+                        WHERE ps.priorita IN ('scaduto','urgente','attenzione','avviso')
+                          {cl_ps})
+                    + (SELECT COUNT(*) FROM prossime_scadenze_impianti psi
+                        WHERE psi.priorita IN ('scaduto','urgente','attenzione','avviso')
+                          {cl_psi})
+                    AS cnt""",
+            par_ps + par_psi
+        )
         scadenze_attive = r['cnt'] if r else 0
 
         # Stat 3: Manutenzioni this month
@@ -519,33 +543,9 @@ def create_app():
         )
         costi_mese = r['tot'] if r else 0
 
-        # Upcoming deadlines (top 10)
-        if div and div.get('id') != 'tutte':
-            scadenze_imminenti = query_all(
-                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   WHERE ps.divisione_id = ?
-                   ORDER BY ps.prossima_scadenza ASC LIMIT 10""",
-                [div['id']]
-            )
-        elif struttura_id:
-            scadenze_imminenti = query_all(
-                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   JOIN apparecchi a ON a.id = ps.apparecchio_id
-                   WHERE a.struttura_id = ?
-                   ORDER BY ps.prossima_scadenza ASC LIMIT 10""",
-                [struttura_id]
-            )
-        else:
-            scadenze_imminenti = query_all(
-                """SELECT ps.*, d.nome as divisione_nome, d.colore as divisione_colore
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   ORDER BY ps.prossima_scadenza ASC LIMIT 10"""
-            )
+        # Upcoming deadlines (top 10), unificate fra apparecchi e impianti
+        from manutenzioni import scadenze_unificate
+        scadenze_imminenti = scadenze_unificate('tutto', limite=10)
 
         # Recent interventions (last 10)
         ultimi_interventi = query_all(
@@ -655,7 +655,12 @@ def create_app():
             div_params
         )
 
-        import json
+        # I dati dei grafici viaggiano come oggetti, non come stringhe JSON:
+        # in dashboard.html il filtro |tojson li scrive gia' come letterale
+        # JavaScript, con le sequenze di escape che rendono impossibile a un
+        # valore proveniente dal database (la descrizione di un apparecchio,
+        # per esempio) chiudere il tag <script>. Fino alla 2.7.1 erano
+        # json.dumps() piu' |safe dentro una stringa fra apici.
         return render_template('dashboard.html',
                                totale_apparecchi=totale_apparecchi,
                                scadenze_attive=scadenze_attive,
@@ -666,10 +671,10 @@ def create_app():
                                apparecchi_senza_verifica=apparecchi_senza_verifica,
                                scadenze_imminenti=scadenze_imminenti,
                                ultimi_interventi=ultimi_interventi,
-                               chart_classificazione_json=json.dumps(chart_classificazione),
-                               chart_costi_json=json.dumps(chart_costi),
-                               chart_tipi_json=json.dumps(chart_tipi),
-                               chart_verifiche_json=json.dumps(chart_verifiche))
+                               chart_classificazione=chart_classificazione,
+                               chart_costi=chart_costi,
+                               chart_tipi=chart_tipi,
+                               chart_verifiche=chart_verifiche)
 
     # ---------------------------------------------------------------------------
     # HTTP error handlers
@@ -714,19 +719,38 @@ def create_app():
     def uploaded_file(filename):
         import re
         from flask import send_from_directory, abort as _abort
+        from models import strutture_proprietarie_file
         uploads_path = app.config['UPLOADS_PATH']
         resolved = os.path.realpath(os.path.join(uploads_path, filename))
         if not resolved.startswith(os.path.realpath(uploads_path) + os.sep):
             _abort(403)
+
+        ruolo = g.user.get('ruolo')
+        if ruolo == 'superadmin':
+            return send_from_directory(uploads_path, filename)
+
+        # In modalita' single-struttura non esiste una dimensione tenant.
+        if app.config.get('APP_CONFIG', {}).get('single_struttura', False):
+            return send_from_directory(uploads_path, filename)
+
+        user_struttura_id = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
+
         # Multi-tenant: verify caller has access to the struttura owning this file
         m = re.match(r'^strutture/(\d+)/', filename)
         if m:
-            file_struttura_id = int(m.group(1))
-            ruolo = g.user.get('ruolo')
-            if ruolo != 'superadmin':
-                user_struttura_id = getattr(g, 'struttura_id', None) or g.user.get('struttura_id')
-                if user_struttura_id != file_struttura_id:
-                    _abort(403)
+            if user_struttura_id != int(m.group(1)):
+                _abort(403)
+            return send_from_directory(uploads_path, filename)
+
+        # Nessun prefisso di struttura: il percorso da solo non dice a chi
+        # appartiene il file. Fino alla 2.7.1 questi file venivano serviti a
+        # qualunque utente autenticato di qualunque struttura. Si risale al
+        # proprietario dalla riga che li referenzia; se nessuna riga li
+        # referenzia, o se appartengono a un'altra struttura, si nega.
+        if not user_struttura_id:
+            _abort(403)
+        if user_struttura_id not in strutture_proprietarie_file(filename):
+            _abort(403)
         return send_from_directory(uploads_path, filename)
 
     return app
@@ -741,19 +765,27 @@ if __name__ == '__main__':
     config = app.config['APP_CONFIG']
 
     # Start background scheduler (email monitoring, session cleanup, backups)
-    from scheduler import init_scheduler
-    scheduler = init_scheduler(app)
+    # In debug il reloader di Werkzeug tiene vivi due processi: lo scheduler va
+    # solo in quello che esegue davvero l'applicazione, altrimenti ogni ciclo
+    # (posta, backup, avvisi) parte due volte.
+    from scheduler import init_scheduler, deve_avviare_scheduler
+    debug = config.get('debug', False)
+    scheduler = init_scheduler(app) if deve_avviare_scheduler(debug) else None
 
     print(f"\n  {config.get('app_name', 'MedInventory')} avviato")
     print(f"  http://{config.get('host', '0.0.0.0')}:{config.get('port', 5000)}")
     print(f"  by {config.get('organization', 'Studio Bergamaschi')}")
-    print(f"  Scheduler attivo (email check ogni {config.get('email_check_interval_minutes', 15)} min)\n")
+    if scheduler:
+        print(f"  Scheduler attivo (email check ogni {config.get('email_check_interval_minutes', 15)} min)\n")
+    else:
+        print("  Scheduler affidato al processo ricaricato dal debugger")
+        print()
 
     try:
         app.run(
             host=config.get('host', '0.0.0.0'),
             port=config.get('port', 5000),
-            debug=config.get('debug', False)
+            debug=debug
         )
     finally:
         from scheduler import stop_scheduler

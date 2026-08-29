@@ -134,7 +134,7 @@ def test_il_registro_conserva_l_email_originale(client, app, dati):
 def test_un_utente_cancellato_non_entra_piu(client, app, dati):
     entra(client, 'admin@a.it')
     client.post(f"/admin/utenti/{dati['mario']}/elimina", follow_redirects=True)
-    client.get('/logout')
+    client.post('/logout')
     r = client.post('/login', data={'email': 'mario@a.it', 'password': 'Passw0rd!'},
                     follow_redirects=True)
     assert 'dashboard' not in r.get_data(as_text=True).lower()
@@ -205,7 +205,7 @@ def test_non_compare_nell_elenco_utenti_dell_admin(client, dati):
 def test_non_compare_nell_elenco_utenti_del_superadmin(client, dati):
     entra(client, 'admin@a.it')
     _cancella(client, dati['mario'])
-    client.get('/logout')
+    client.post('/logout')
     entra(client, 'super@x.it')
     assert 'mario@a.it' not in client.get('/admin/utenti').get_data(as_text=True)
 
@@ -232,7 +232,7 @@ def test_un_tecnico_cancellato_non_compare_nell_elenco_tecnici(client, app, dati
 def test_non_compare_nella_scheda_della_struttura(client, dati):
     entra(client, 'admin@a.it')
     _cancella(client, dati['mario'])
-    client.get('/logout')
+    client.post('/logout')
     entra(client, 'super@x.it')
     assert 'mario@a.it' not in client.get(f"/strutture/{dati['a']}").get_data(as_text=True)
 

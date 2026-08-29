@@ -1,4 +1,4 @@
-"""
+r"""
 MedInventory - Windows Launcher con System Tray (TNA)
 Estensione .pyw: nessuna finestra console su Windows.
 
@@ -19,14 +19,28 @@ import urllib.request
 # --- Cerca la directory dell'app ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+LOCAL_CONFIG_PATH = os.path.join(BASE_DIR, 'config.local.json')
+
+
+def _leggi_json(percorso):
+    try:
+        with open(percorso, 'r', encoding='utf-8') as f:
+            dati = json.load(f)
+        return dati if isinstance(dati, dict) else {}
+    except Exception:
+        return {}
 
 
 def _load_config():
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    """Configurazione effettiva: config.json + config.local.json, locale vince.
+
+    Stessa fusione di app.load_config(). Leggere solo config.json era leggere
+    il file sbagliato: port e app_name stanno in config.local.json dalla 2.6,
+    quindi il launcher apriva sempre la 5000 anche su una porta diversa.
+    """
+    config = _leggi_json(CONFIG_PATH)
+    config.update(_leggi_json(LOCAL_CONFIG_PATH))
+    return config
 
 
 class MedInventoryLauncher:

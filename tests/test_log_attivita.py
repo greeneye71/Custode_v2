@@ -56,7 +56,7 @@ def test_admin_non_vede_le_voci_di_un_altra_struttura(client, scenario):
     """Il default automatico non deve rendere il registro globale."""
     entra(client, 'admin@a.it')
     crea_apparecchio(client, scenario['div_a'], 'OCU-1')
-    client.get('/logout')
+    client.post('/logout')
 
     entra(client, 'admin@b.it')
     pagina = client.get('/admin/log-attivita').data.decode('utf-8', errors='replace')

@@ -440,3 +440,246 @@ def test_il_reimporto_non_riporta_il_logo_ne_lo_storico_import(app, tmp_path):
         con.close()
     assert logo_in_target is None
     assert import_history_in_target == 0
+
+# ---------------------------------------------------------------------------
+# Gli impianti nel giro completo (task 14)
+# ---------------------------------------------------------------------------
+
+def _aggiungi_impianti(installazione, single_struttura):
+    """Innesta un impianto completo su un'installazione gia' costruita.
+
+    Volutamente separato da _costruisci_installazione: quella e' condivisa
+    con _verifica_giro_completo, che conta gli allegati sul disco della
+    destinazione (`len(nomi_file_dest) == 6`). Aggiungere li' gli allegati
+    degli impianti farebbe fallire i due test preesistenti per un motivo che
+    non c'entra nulla con quello che provano.
+
+    Come per gli apparecchi, Clinica Beta riceve un impianto suo con un
+    allegato riconoscibile dal nome: serve a dimostrare che ne' l'archivio
+    ne' la destinazione lo vedono mai.
+    """
+    con = sqlite3.connect(installazione['db'])
+    con.execute("PRAGMA foreign_keys = ON")
+
+    def percorso(nome_file, struttura_id):
+        if single_struttura:
+            return f'impianti/{nome_file}'
+        return f'strutture/{struttura_id}/impianti/{nome_file}'
+
+    s, altra = installazione['struttura'], installazione['altra']
+    utente = con.execute("SELECT id FROM utenti WHERE email = 'admin@alfa.it'").fetchone()[0]
+    divisione = con.execute(
+        "SELECT id FROM divisioni WHERE struttura_id = ?", (s,)).fetchone()[0]
+    divisione_beta = con.execute(
+        "SELECT id FROM divisioni WHERE struttura_id = ?", (altra,)).fetchone()[0]
+
+    manutentore = con.execute(
+        "INSERT INTO manutentori (struttura_id,ragione_sociale,partita_iva) "
+        "VALUES (?,'Impianti Rossi srl','01234567890')", (s,)).lastrowid
+    # Un manutentore di Beta con la STESSA ragione sociale: se l'esportazione
+    # non lo lasciasse fuori, il vincolo UNIQUE (struttura_id, ragione_sociale)
+    # non se ne accorgerebbe (le strutture sono due) e arriverebbe qui.
+    con.execute("INSERT INTO manutentori (struttura_id,ragione_sociale) "
+                "VALUES (?,'Impianti Rossi srl')", (altra,))
+
+    impianto = con.execute(
+        "INSERT INTO impianti (struttura_id,divisione_id,nome,tipo,stato,ubicazione,"
+        "manutentore_id,created_by,updated_by) "
+        "VALUES (?,?,'Cabina MT','elettrico','attivo','Sottostazione',?,?,?)",
+        (s, divisione, manutentore, utente, utente)).lastrowid
+    componente = con.execute(
+        "INSERT INTO impianti_componenti (impianto_id,descrizione,marca,matricola) "
+        "VALUES (?,'Trasformatore','ABB','TR-1')", (impianto,)).lastrowid
+    dichiarazione = percorso('dico.pdf', s)
+    con.execute(
+        "INSERT INTO impianti_documenti (impianto_id,tipo,descrizione,data_documento,"
+        "filename,filepath,uploaded_by) "
+        "VALUES (?,'dichiarazione_conformita','DiCo cabina','2026-01-10',"
+        "'dico.pdf',?,?)", (impianto, dichiarazione, utente))
+    scadenza = con.execute(
+        "INSERT INTO impianti_scadenze (impianto_id,componente_id,nome,"
+        "riferimento_normativo,periodicita_mesi,prossima_scadenza,giorni_anticipo) "
+        "VALUES (?,?,'Verifica messa a terra','DPR 462/01',60,'2027-03-01',45)",
+        (impianto, componente)).lastrowid
+    verbale = percorso('verbale-impianto.pdf', s)
+    con.execute(
+        "INSERT INTO impianti_interventi (impianto_id,scadenza_id,componente_id,tipo,"
+        "data_intervento,esito,manutentore_id,verbale_path,costo,created_by) "
+        "VALUES (?,?,?,'verifica','2026-02-01','positivo',?,?,320.5,?)",
+        (impianto, scadenza, componente, manutentore, verbale, utente))
+    # Appartiene al deployment di origine: reimportarla farebbe tacere qui un
+    # avviso che da qui non e' mai partito.
+    con.execute(
+        "INSERT INTO impianti_avvisi_inviati (scadenza_id,soglia,scadenza_target) "
+        "VALUES (?,'45','2027-03-01')", (scadenza,))
+
+    impianto_beta = con.execute(
+        "INSERT INTO impianti (struttura_id,divisione_id,nome,tipo) "
+        "VALUES (?,?,'Cabina altrui','elettrico')", (altra, divisione_beta)).lastrowid
+    dichiarazione_beta = percorso('beta-impianto.pdf', altra)
+    con.execute(
+        "INSERT INTO impianti_documenti (impianto_id,filename,filepath) "
+        "VALUES (?,'beta-impianto.pdf',?)", (impianto_beta, dichiarazione_beta))
+    con.commit()
+    con.close()
+
+    uploads = installazione['uploads']
+    for relativo in (dichiarazione, verbale, dichiarazione_beta):
+        assoluto = os.path.join(uploads, relativo.replace('/', os.sep))
+        os.makedirs(os.path.dirname(assoluto), exist_ok=True)
+        with open(assoluto, 'wb') as f:
+            f.write(b'%PDF-1.4 ' + relativo.encode())
+
+    return {'documento': dichiarazione, 'verbale': verbale}
+
+
+@pytest.mark.parametrize('single_struttura', [False, True])
+def test_gli_impianti_sopravvivono_al_giro_completo(app, tmp_path, single_struttura):
+    """Esportare e reimportare una struttura porta con se' tutto l'impianto.
+
+    Non basta contare le righe: le figlie degli impianti si riferiscono l'una
+    all'altra per id (scadenza -> componente, intervento -> scadenza) e
+    l'importatore assegna id nuovi. Se una sola di quelle rimappature saltasse,
+    i conteggi resterebbero identici e il piano di manutenzione punterebbe al
+    componente sbagliato - o al componente di un altro impianto.
+    """
+    from struttura_service import esporta_struttura
+    installazione = _costruisci_installazione(tmp_path, single_struttura=single_struttura)
+    allegati = _aggiungi_impianti(installazione, single_struttura)
+
+    archivio = esporta_struttura(installazione['db'], installazione['uploads'],
+                                 installazione['struttura'], str(tmp_path / 'archivi'),
+                                 single_struttura=single_struttura)
+
+    file_archivio = {f for _, _, presenti in os.walk(os.path.join(archivio, 'uploads'))
+                     for f in presenti}
+    assert 'beta-impianto.pdf' not in file_archivio, (
+        f"l'archivio contiene un allegato di impianto altrui: {sorted(file_archivio)}")
+    assert 'dico.pdf' in file_archivio
+    assert 'verbale-impianto.pdf' in file_archivio
+
+    destinazione = _installazione_vuota(app, tmp_path)
+    esito = _reimporta(archivio, destinazione)
+    assert esito.returncode == 0, f"import fallito:\n{esito.stdout}\n{esito.stderr}"
+
+    con = sqlite3.connect(str(destinazione / 'data' / 'database.sqlite'))
+    try:
+        impianti = con.execute(
+            "SELECT id,nome,tipo,stato,divisione_id,struttura_id,manutentore_id,"
+            "created_by,updated_by FROM impianti").fetchall()
+        assert len(impianti) == 1
+        (imp_id, nome, tipo, stato, divisione_id, struttura_id,
+         manutentore_id, created_by, updated_by) = impianti[0]
+        assert (nome, tipo, stato) == ('Cabina MT', 'elettrico', 'attivo')
+
+        # La divisione e il manutentore sono quelli importati con la struttura,
+        # non gli id della sorgente rimasti li' per caso.
+        assert con.execute(
+            "SELECT struttura_id FROM divisioni WHERE id = ?",
+            (divisione_id,)).fetchone()[0] == struttura_id
+        assert con.execute(
+            "SELECT struttura_id,ragione_sociale FROM manutentori WHERE id = ?",
+            (manutentore_id,)).fetchone() == (struttura_id, 'Impianti Rossi srl')
+        # Un solo manutentore: quello di Beta non e' mai uscito dall'origine.
+        assert con.execute("SELECT COUNT(*) FROM manutentori").fetchone()[0] == 1
+
+        utente_dest = con.execute(
+            "SELECT id FROM utenti WHERE email = 'admin@alfa.it'").fetchone()[0]
+        assert created_by == utente_dest
+        assert updated_by == utente_dest
+
+        componenti = con.execute(
+            "SELECT id,impianto_id,matricola FROM impianti_componenti").fetchall()
+        assert len(componenti) == 1
+        comp_id, comp_impianto, matricola = componenti[0]
+        assert (comp_impianto, matricola) == (imp_id, 'TR-1')
+
+        documenti = con.execute(
+            "SELECT impianto_id,tipo,filename,filepath,uploaded_by"
+            " FROM impianti_documenti").fetchall()
+        assert len(documenti) == 1
+        doc_impianto, doc_tipo, doc_nome, doc_path, doc_utente = documenti[0]
+        assert (doc_impianto, doc_tipo, doc_nome) == (
+            imp_id, 'dichiarazione_conformita', 'dico.pdf')
+        assert doc_utente == utente_dest
+
+        scadenze = con.execute(
+            "SELECT id,impianto_id,componente_id,nome,periodicita_mesi,giorni_anticipo"
+            " FROM impianti_scadenze").fetchall()
+        assert len(scadenze) == 1
+        sc_id, sc_impianto, sc_componente, sc_nome, periodicita, anticipo = scadenze[0]
+        assert (sc_impianto, sc_componente) == (imp_id, comp_id)
+        assert (sc_nome, periodicita, anticipo) == ('Verifica messa a terra', 60, 45)
+
+        interventi = con.execute(
+            "SELECT impianto_id,scadenza_id,componente_id,tipo,data_intervento,esito,"
+            "manutentore_id,verbale_path,costo,created_by FROM impianti_interventi").fetchall()
+        assert len(interventi) == 1
+        (in_impianto, in_scadenza, in_componente, in_tipo, in_data, in_esito,
+         in_manutentore, in_verbale, in_costo, in_utente) = interventi[0]
+        assert (in_impianto, in_scadenza, in_componente) == (imp_id, sc_id, comp_id)
+        assert (in_tipo, in_data, in_esito) == ('verifica', '2026-02-01', 'positivo')
+        assert in_manutentore == manutentore_id
+        assert in_costo == 320.5
+        assert in_utente == utente_dest
+
+        # Gli avvisi gia' inviati restano all'origine: qui la scadenza deve
+        # tornare ad avvisare.
+        assert con.execute(
+            "SELECT COUNT(*) FROM impianti_avvisi_inviati").fetchone()[0] == 0
+    finally:
+        con.close()
+
+    uploads_dest = str(destinazione / 'uploads')
+    for rel in (doc_path, in_verbale):
+        assert rel, "percorso dell'allegato azzerato dall'import"
+        assoluto = os.path.join(uploads_dest, rel.replace('/', os.sep))
+        assert os.path.isfile(assoluto), f"allegato non ricreato al percorso dichiarato: {rel}"
+
+    nomi_file_dest = {f for _, _, presenti in os.walk(uploads_dest) for f in presenti}
+    assert 'beta-impianto.pdf' not in nomi_file_dest
+    assert {'dico.pdf', 'verbale-impianto.pdf'} <= nomi_file_dest
+
+    assert allegati['documento'].endswith('dico.pdf')
+
+
+def test_reimportare_due_volte_non_duplica_gli_impianti(app, tmp_path):
+    """La seconda passata non deve raddoppiare niente.
+
+    Vale la pena provarlo proprio qui: manutentori e impianti non possono
+    usare _riusa_esistente (con --se-esiste duplica il vincolo UNIQUE su
+    (struttura_id, nome) rifiuterebbe l'inserimento), quindi hanno una
+    ricerca diretta scritta a mano - una strada che nessun altro test
+    percorre due volte.
+    """
+    from struttura_service import esporta_struttura
+    installazione = _costruisci_installazione(tmp_path, single_struttura=False)
+    _aggiungi_impianti(installazione, single_struttura=False)
+
+    archivio = esporta_struttura(installazione['db'], installazione['uploads'],
+                                 installazione['struttura'], str(tmp_path / 'archivi'),
+                                 single_struttura=False)
+    destinazione = _installazione_vuota(app, tmp_path)
+
+    primo = _reimporta(archivio, destinazione)
+    assert primo.returncode == 0, f"primo import fallito:\n{primo.stdout}\n{primo.stderr}"
+    con = sqlite3.connect(str(destinazione / 'data' / 'database.sqlite'))
+    try:
+        struttura_id = con.execute("SELECT id FROM strutture").fetchone()[0]
+    finally:
+        con.close()
+
+    secondo = _reimporta(archivio, destinazione,
+                         extra=('--in-struttura', str(struttura_id)))
+    assert secondo.returncode == 0, (
+        f"secondo import fallito:\n{secondo.stdout}\n{secondo.stderr}")
+
+    con = sqlite3.connect(str(destinazione / 'data' / 'database.sqlite'))
+    try:
+        for tabella in ('manutentori', 'impianti', 'impianti_componenti',
+                        'impianti_documenti', 'impianti_scadenze',
+                        'impianti_interventi'):
+            n = con.execute(f"SELECT COUNT(*) FROM {tabella}").fetchone()[0]
+            assert n == 1, f"{tabella}: {n} righe dopo il secondo import"
+    finally:
+        con.close()

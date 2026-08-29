@@ -1,0 +1,37 @@
+# B03: installazione dal lock, suite di test e scansione CVE delle
+# dipendenze effettivamente installate. Settimanale, oltre che su push.
+name: Dipendenze e test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # lunedi' alle 05:00 UTC: le CVE nuove arrivano anche senza commit
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+jobs:
+  verifica:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Installa dal lock
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+          pip install pytest pip-audit
+
+      - name: Suite di test
+        run: python -m pytest tests/ -q
+
+      - name: Scansione CVE del lock
+        # Non blocca la build: segnala. Le CVE si valutano, non si
+        # aggiornano alla cieca su un prodotto installato in ospedale.
+        continue-on-error: true
+        run: pip-audit -r requirements.lock.txt --strict

@@ -6,7 +6,16 @@ Provides connection management and query helpers for SQLite.
 import sqlite3
 import os
 import logging
+from contextlib import contextmanager
 from flask import g, current_app
+from werkzeug.utils import secure_filename
+
+import ai_chiavi
+from schema_impianti import (
+    DDL_IMPIANTI,
+    SCHEMA_VERSION_IMPIANTI,
+    tabelle_impianti_presenti,
+)
 
 logger = logging.getLogger('medinventory.models')
 
@@ -53,6 +62,71 @@ def upload_subdir(subdir, struttura_id=None, uploads_base=None, single_struttura
 
     os.makedirs(abs_path, exist_ok=True)
     return abs_path, rel_prefix
+
+
+def nome_file_unico(filename, prefisso=None):
+    """Nome su disco per un file caricato, che non puo' collidere con un altro.
+
+    Il nome originale passa da secure_filename(); davanti ci vanno il momento
+    del caricamento e un token casuale. Il solo timestamp al secondo non
+    bastava: due file omonimi caricati nello stesso secondo — due verbali
+    'scan.pdf', due allegati della stessa email — finivano sullo stesso
+    percorso, e il primo veniva sovrascritto restando citato a database.
+    """
+    import time
+    import uuid
+    base = secure_filename(filename or '')
+    if not base:
+        base = 'file'
+    parti = [str(int(time.time())), uuid.uuid4().hex[:8], base]
+    if prefisso:
+        parti.insert(0, secure_filename(prefisso))
+    return '_'.join(parti)
+
+
+# Colonne che contengono un percorso relativo dentro uploads/, con la query
+# che risale alla struttura proprietaria. Se si aggiunge una colonna di
+# upload va aggiunta anche qui, altrimenti /uploads non sapra' a chi
+# appartiene il file e lo neghera'.
+_COLONNE_UPLOAD = (
+    "SELECT struttura_id FROM apparecchi WHERE foto_path = ?",
+    "SELECT a.struttura_id FROM manutenzioni m"
+    " JOIN apparecchi a ON a.id = m.apparecchio_id WHERE m.verbale_path = ?",
+    "SELECT a.struttura_id FROM verifiche v"
+    " JOIN apparecchi a ON a.id = v.apparecchio_id WHERE v.documento_path = ?",
+    "SELECT a.struttura_id FROM documenti d"
+    " JOIN apparecchi a ON a.id = d.apparecchio_id WHERE d.filepath = ?",
+    "SELECT i.struttura_id FROM impianti_documenti id_"
+    " JOIN impianti i ON i.id = id_.impianto_id WHERE id_.filepath = ?",
+    "SELECT i.struttura_id FROM impianti_interventi ii"
+    " JOIN impianti i ON i.id = ii.impianto_id WHERE ii.verbale_path = ?",
+    "SELECT struttura_id FROM import_history WHERE filepath = ?",
+)
+
+
+def strutture_proprietarie_file(percorso_relativo):
+    """Strutture che possiedono il file di upload indicato.
+
+    Serve a /uploads per i percorsi che non hanno il prefisso
+    strutture/<id>/ — quelli prodotti in modalita' single-struttura, dalle
+    installazioni precedenti alla 2.5 e da ogni chiamata a upload_subdir()
+    con struttura_id a None. Su quei percorsi il prefisso non dice nulla, e
+    fino alla 2.7.1 il file veniva servito a chiunque fosse autenticato.
+
+    Restituisce l'insieme degli struttura_id proprietari. Insieme vuoto =
+    file non referenziato da alcuna riga: chi chiama deve negarlo, non
+    servirlo. Un NULL in colonna (import via email non attribuito) entra
+    nell'insieme come None e non combacia con nessuna struttura.
+    """
+    proprietarie = set()
+    for sql in _COLONNE_UPLOAD:
+        try:
+            for riga in query_all(sql, (percorso_relativo,)):
+                proprietarie.add(riga['struttura_id'])
+        except sqlite3.OperationalError:
+            # Tabella o colonna non ancora migrata: l'assenza non autorizza.
+            continue
+    return proprietarie
 
 
 def percorso_logo_struttura(struttura):
@@ -144,14 +218,61 @@ def query_all(sql, params=()):
         raise
 
 
+def in_transazione():
+    """True se il chiamante sta dentro un blocco transazione()."""
+    return bool(getattr(g, '_transazione_livello', 0))
+
+
+@contextmanager
+def transazione():
+    """Raggruppa piu' scritture in una sola transazione (M03).
+
+    execute() fa commit a ogni istruzione: giusto per la scrittura singola,
+    sbagliato per un'operazione composta. Un intervento registrato senza che
+    la sua scadenza avanzi, o una scheda salvata con la vecchia lista di
+    accessori gia' cancellata, sono stati che nessuno ha mai voluto e che
+    l'operatore non ha modo di riconoscere.
+
+    Dentro il blocco i commit di execute() sono sospesi: si esce con un solo
+    commit, o con un rollback se il blocco solleva. Il blocco e' rientrante -
+    quello annidato si aggancia al piu' esterno, che e' l'unico a decidere -
+    cosi' una funzione di servizio puo' proteggere la propria sequenza senza
+    sapere se chi la chiama ne ha gia' aperta una.
+
+    I file su disco non partecipano: chi copia un allegato dentro il blocco
+    deve rimuoverlo da se' se la transazione fallisce.
+    """
+    db = get_db()
+    if in_transazione():
+        g._transazione_livello += 1
+        try:
+            yield db
+        finally:
+            g._transazione_livello -= 1
+        return
+
+    g._transazione_livello = 1
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        g._transazione_livello = 0
+
+
 def execute(sql, params=()):
     """Execute an INSERT/UPDATE/DELETE and return the cursor.
     Use cursor.lastrowid for inserts, cursor.rowcount for updates/deletes.
+
+    Fa commit da solo, a meno che il chiamante non sia dentro transazione().
     """
     try:
         db = get_db()
         cursor = db.execute(sql, params)
-        db.commit()
+        if not in_transazione():
+            db.commit()
         return cursor
     except Exception as e:
         logger.error(f"execute failed: {e} | SQL: {sql[:100]!r}")
@@ -415,6 +536,7 @@ def apply_schema_updates():
         """CREATE VIEW prossime_scadenze AS
 SELECT
   a.id AS apparecchio_id,
+  a.struttura_id,
   a.divisione_id,
   a.descrizione,
   a.marca,
@@ -448,6 +570,7 @@ WHERE a.stato != 'dismesso'
 UNION ALL
 SELECT
   a.id AS apparecchio_id,
+  a.struttura_id,
   a.divisione_id,
   a.descrizione,
   a.marca,
@@ -509,6 +632,9 @@ ORDER BY prossima_scadenza ASC""",
         # temporanea vale accanto a password_hash, non al suo posto.
         "ALTER TABLE utenti ADD COLUMN reset_hash TEXT",
         "ALTER TABLE utenti ADD COLUMN reset_scadenza DATETIME",
+        # Tabelle impianti: il DDL vive in schema_impianti.py perche' lo
+        # condividiamo con migrate.py, che non puo' importare models (Flask).
+        *DDL_IMPIANTI,
     ]
     for sql in migrations:
         try:
@@ -796,6 +922,19 @@ ORDER BY prossima_scadenza ASC""",
     else:
         logger.debug(f"Schema DB versione {schema_ver}")
 
+    # Allineamento alla versione corrente dello schema.  Si alza solo se le
+    # tabelle impianti esistono davvero (le migrazioni sopra possono essere
+    # fallite) e solo verso l'alto: un database piu' recente non deve essere
+    # retrocesso da un'installazione rimasta indietro.
+    schema_ver = db.execute("PRAGMA user_version").fetchone()[0]
+    if schema_ver < SCHEMA_VERSION_IMPIANTI and tabelle_impianti_presenti(db):
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION_IMPIANTI}")
+        db.commit()
+        logger.info(
+            f"Schema DB: versione portata da {schema_ver} a "
+            f"{SCHEMA_VERSION_IMPIANTI}"
+        )
+
 
 def filtro_divisione(table_alias='a'):
     """Clausola WHERE e parametri per limitare una query allo scope dell'utente.
@@ -865,6 +1004,111 @@ def apparecchio_accessibile(apparecchio_id):
     return app_row
 
 
+def divisione_accessibile(divisione_id):
+    """Verifica che la divisione sia una destinazione lecita per chi scrive.
+
+    Gemella di apparecchio_accessibile() per i casi in cui il bersaglio della
+    scrittura non e' un apparecchio esistente ma una divisione scelta in un
+    form: creazione di una scheda da import, conferma di un verbale email.
+    Fino alla 2.8.0 questi punti convalidavano solo la struttura, cosi' un
+    ruolo 'utente' poteva depositare dati in un reparto non suo.
+
+    Restituisce la riga della divisione, oppure None se non accessibile.
+    """
+    if not divisione_id:
+        return None
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        div = query_one(
+            "SELECT * FROM divisioni WHERE id = ? AND struttura_id = ?",
+            (divisione_id, struttura_id)
+        )
+    elif g.user['ruolo'] == 'superadmin':
+        div = query_one("SELECT * FROM divisioni WHERE id = ?", (divisione_id,))
+    else:
+        return None
+    if not div:
+        return None
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        accessible_ids = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if div['id'] not in accessible_ids:
+            return None
+    return div
+
+
+def scegli_apparecchio(candidati, modello=None, marca=None):
+    """Sceglie a quale apparecchio appartiene un documento, o rifiuta di farlo.
+
+    La chiave naturale dello schema e' UNIQUE(struttura_id, modello, matricola):
+    la matricola da sola NON identifica un apparecchio, due modelli diversi
+    possono portarla. Fino alla 2.8.0 tutti i matcher facevano fetchone() sulla
+    sola matricola, quindi con due candidati la scelta era arbitraria e un
+    verbale o una verifica potevano essere scritti sul dispositivo sbagliato.
+
+    Qui, quando il documento non basta a decidere, non si decide: si restituisce
+    None e la riga finisce in scelta manuale.
+
+    `candidati` sono le righe gia' filtrate per matricola e per scope (struttura
+    e divisione): questa funzione non interroga il database e non conosce Flask,
+    cosi' la usano anche i matcher che lavorano su una sqlite3.Connection nuda.
+
+    Restituisce (riga, motivo) con motivo in:
+      'nessuno'            nessun candidato
+      'matricola'          candidato unico
+      'matricola+modello'  piu' candidati, uno solo combacia per modello (e marca)
+      'ambiguo'            piu' candidati e nessuna certezza: non associare
+    """
+    candidati = list(candidati or [])
+    if not candidati:
+        return None, 'nessuno'
+    if len(candidati) == 1:
+        return candidati[0], 'matricola'
+
+    def _norm(valore):
+        return (valore or '').strip().lower()
+
+    modello_n = _norm(modello)
+    if not modello_n:
+        return None, 'ambiguo'
+    ristretti = [c for c in candidati if _norm(c['modello']) == modello_n]
+    marca_n = _norm(marca)
+    if marca_n:
+        per_marca = [c for c in ristretti if _norm(c['marca']) == marca_n]
+        if per_marca:
+            ristretti = per_marca
+    if len(ristretti) == 1:
+        return ristretti[0], 'matricola+modello'
+    return None, 'ambiguo'
+
+
+def impianto_accessibile(impianto_id):
+    """Verifica che l'impianto sia nello scope dell'utente corrente.
+
+    Gemella di apparecchio_accessibile(): struttura per l'isolamento
+    multi-tenant, divisione per i ruoli non amministrativi. Le tabelle figlie
+    degli impianti non portano struttura_id, quindi ogni rotta che tocca
+    componenti, documenti, piano o interventi passa prima di qui.
+    Restituisce la riga dell'impianto, oppure None.
+    """
+    struttura_id = getattr(g, 'struttura_id', None)
+    if struttura_id:
+        riga = query_one(
+            "SELECT * FROM impianti WHERE id = ? AND struttura_id = ?",
+            (impianto_id, struttura_id)
+        )
+    elif g.user['ruolo'] == 'superadmin':
+        riga = query_one("SELECT * FROM impianti WHERE id = ?", (impianto_id,))
+    else:
+        return None
+    if not riga:
+        return None
+    if g.user['ruolo'] not in ('admin', 'superadmin', 'tecnico'):
+        accessibili = [d['id'] for d in getattr(g, 'divisioni', [])]
+        if riga['divisione_id'] not in accessibili:
+            return None
+    return riga
+
+
 #: Sentinella per distinguere "struttura non indicata" (da dedurre dalla
 #: richiesta in corso) da "operazione deliberatamente globale" (None esplicito).
 STRUTTURA_AUTO = object()
@@ -909,18 +1153,27 @@ def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None,
 def get_struttura_config(struttura_id, chiave, default=None):
     """Legge un valore di configurazione per-struttura.
     Se non presente, restituisce il valore globale da APP_CONFIG o il default.
+
+    Per le impostazioni AI il nome globale non coincide con quello di struttura
+    (`ai_provider` qui, `default_ai_provider` nella configurazione di sistema):
+    la corrispondenza e l'ordine di risoluzione stanno in `ai_chiavi.py`, non
+    ripeterli qui.
     """
     row = query_one(
         "SELECT valore FROM strutture_config WHERE struttura_id = ? AND chiave = ?",
         (struttura_id, chiave)
     )
-    if row and row['valore'] is not None:
-        return row['valore']
+    valore = row['valore'] if row else None
+    if valore is not None and not (ai_chiavi.e_chiave_ai(chiave) and valore == ''):
+        return valore
     # Fallback al config globale
     try:
-        return (current_app.config.get('APP_CONFIG') or {}).get(chiave, default)
+        config = current_app.config.get('APP_CONFIG') or {}
     except RuntimeError:
         return default
+    if ai_chiavi.e_chiave_ai(chiave):
+        return ai_chiavi.valore_globale(config, chiave, default)
+    return config.get(chiave, default)
 
 
 def set_struttura_config(struttura_id, chiave, valore):

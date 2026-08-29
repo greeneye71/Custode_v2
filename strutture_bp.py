@@ -12,11 +12,14 @@ from flask import (
     flash, g, current_app, jsonify
 )
 from werkzeug.utils import secure_filename
+import allegati
+import ai_chiavi
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config, \
-    upload_subdir, percorso_logo_struttura
+    upload_subdir, nome_file_unico, percorso_logo_struttura
 from ai_service import ANTHROPIC_MODELS, GEMINI_MODELS, OPENAI_MODELS, AI_PROVIDERS, AI_PROVIDER_DEFAULTS
+from sicurezza_url import valida_url_ai_locale
 
 strutture_bp = Blueprint('strutture', __name__, url_prefix='/strutture')
 
@@ -252,23 +255,12 @@ def nuova():
                     (g.user['id'], struttura_id)
                 )
             db.commit()
-            # Seed AI config di default dalla config globale
-            from app import load_config as _load_config
-            _cfg = _load_config()
-            _ai_defaults_map = {
-                'default_ai_provider':       'ai_provider',
-                'default_anthropic_api_key': 'anthropic_api_key',
-                'default_gemini_api_key':    'gemini_api_key',
-                'default_openai_api_key':    'openai_api_key',
-                'default_ai_local_base_url': 'ai_local_base_url',
-                'default_ai_local_model':    'ai_local_model',
-                'default_ai_import_model':   'ai_import_model',
-                'default_ai_email_model':    'ai_email_model',
-            }
-            for _cfg_key, _struttura_key in _ai_defaults_map.items():
-                _val = _cfg.get(_cfg_key)
-                if _val:
-                    set_struttura_config(struttura_id, _struttura_key, _val)
+            # Nessuna copia dei default AI dentro strutture_config: una riga
+            # copiata e' a tutti gli effetti un override e congelerebbe la
+            # struttura sui valori del giorno della creazione. Le impostazioni
+            # AI non scritte si risolvono a ogni lettura sui `default_*`
+            # globali (ai_chiavi.py), cosi' una modifica del default raggiunge
+            # anche le strutture create prima.
             log_attivita(g.user['id'], 'crea', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" creata')
             log_attivita(g.user['id'], 'creazione', 'divisioni', divisione_id,
@@ -601,6 +593,7 @@ def elimina(struttura_id):
         g.user['id'], 'eliminazione', 'strutture', struttura_id,
         f'Struttura "{esito["nome"]}" eliminata: {esito["apparecchi"]} apparecchi, '
         f'{esito["manutenzioni"]} manutenzioni, {esito["verifiche"]} verifiche, '
+        f'{esito["impianti"]} impianti, {esito["manutentori"]} manutentori, '
         f'{esito["utenti"]} utenti. Archivio: {esito["archivio"]}. '
         f'File non rimossi: {len(esito["file_non_rimossi"])}.',
         request.remote_addr)
@@ -684,10 +677,17 @@ def _fetch_openai_models(api_key):
         return [m[0] for m in OPENAI_MODELS]
 
 
-def _fetch_local_models(base_url):
-    """Fetch models from local OpenAI-compatible server. Raises ValueError on failure."""
+def _fetch_local_models(base_url, allowlist=None):
+    """Fetch models from local OpenAI-compatible server. Raises ValueError on failure.
+
+    L'indirizzo lo sceglie l'admin della struttura e la richiesta parte dal
+    server: valida_url_ai_locale() tiene fuori le reti di sistema e, se
+    l'operatore l'ha compilata, applica ai_local_url_allowlist. La validazione
+    sta qui e non solo nella rotta perche' e' questa la funzione che apre la
+    connessione.
+    """
     import httpx
-    base_url = base_url.rstrip('/')
+    base_url = valida_url_ai_locale(base_url, allowlist)
     try:
         with httpx.Client(timeout=10.0) as client:
             r = client.get(f"{base_url}/v1/models")
@@ -762,15 +762,34 @@ def config(struttura_id):
                     (struttura_id, chiave)
                 )
 
+        # Fuori dal loop apposta: qui il default e' '1' (avvisi accesi), quindi
+        # se passasse per CHIAVI_PREFERENZE/CASELLE un valore vuoto verrebbe
+        # cancellato invece che scritto a '0', e l'interruttore non si
+        # potrebbe mai spegnere davvero.
+        set_struttura_config(struttura_id, 'avvisi_impianti_attivi',
+                             '1' if request.form.get('avvisi_impianti_attivi') else '0')
+
         flash('Configurazione salvata.', 'success')
         log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
                      'Preferenze avvisi di scadenza salvate', request.remote_addr)
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
     cfg = get_struttura_config_all(struttura_id)
+    # Le impostazioni AI si mostrano risolte: se la struttura non ha un
+    # override, nel campo compare il default globale che verrebbe usato
+    # davvero. `cfg_ai_ereditate` dice quali di quei valori non sono suoi, in
+    # modo che l'interfaccia lo possa dichiarare invece di far credere che
+    # siano stati salvati qui.
+    config_globale = current_app.config.get('APP_CONFIG') or {}
+    cfg_ai = {chiave: ai_chiavi.risolvi(chiave, cfg.get(chiave), config_globale)
+              for chiave in ai_chiavi.CHIAVI_AI}
+    cfg_ai_ereditate = {chiave for chiave in ai_chiavi.CHIAVI_AI
+                        if not cfg.get(chiave)}
     return render_template('strutture/config.html',
                            struttura=struttura,
                            cfg=cfg,
+                           cfg_ai=cfg_ai,
+                           cfg_ai_ereditate=cfg_ai_ereditate,
                            is_admin_only=is_admin_only,
                            ai_providers=AI_PROVIDERS,
                            anthropic_models=ANTHROPIC_MODELS,
@@ -799,11 +818,25 @@ def test_ai_config(struttura_id):
     if provider not in valid_providers:
         return jsonify({'ok': False, 'message': f'Provider non valido: {provider}', 'models': []}), 400
 
+    # L'URL del server AI locale si valida prima di salvarlo: cosi' non resta in
+    # strutture_config un indirizzo che nessuna chiamata potrebbe poi usare, e
+    # l'admin vede subito perche' e' stato rifiutato.
+    allowlist = current_app.config.get('APP_CONFIG', {})
+    base_url_richiesto = (data.get('local_base_url') or '').strip()
+    if provider in AI_PROVIDER_DEFAULTS and base_url_richiesto:
+        try:
+            base_url_richiesto = valida_url_ai_locale(base_url_richiesto, allowlist)
+        except ValueError as e:
+            log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
+                         f'Test AI {provider}: URL locale rifiutato ({str(e)[:120]})',
+                         request.remote_addr, struttura_id=struttura_id)
+            return jsonify({'ok': False, 'models': [], 'message': str(e)}), 400
+
     fields_to_save = {
         'ai_provider':       provider,
         'ai_import_model':   (data.get('ai_import_model') or '').strip(),
         'ai_email_model':    (data.get('ai_email_model') or '').strip(),
-        'ai_local_base_url': (data.get('local_base_url') or '').strip(),
+        'ai_local_base_url': base_url_richiesto,
         'ai_local_model':    (data.get('local_model') or '').strip(),
     }
     for chiave, valore in fields_to_save.items():
@@ -845,7 +878,7 @@ def test_ai_config(struttura_id):
         else:
             if not active_base_url:
                 return jsonify({'ok': False, 'message': 'URL server AI non configurato.', 'models': []})
-            models = _fetch_local_models(active_base_url)
+            models = _fetch_local_models(active_base_url, allowlist)
 
         log_attivita(g.user['id'], 'modifica', 'strutture_config', struttura_id,
                      f'Test AI {provider}: OK, {len(models)} modelli', request.remote_addr,
@@ -967,8 +1000,18 @@ def nuovo_token(struttura_id):
     log_attivita(g.user['id'], 'crea_token', 'api_tokens', None,
                  f'Token "{nome}" creato per struttura {struttura_id}',
                  struttura_id=struttura_id)
-    flash(f'Token creato. Copia ora, non sarà più visibile: {raw}', 'warning')
-    return redirect(url_for('strutture.api_tokens', struttura_id=struttura_id))
+
+    # Il token in chiaro si mostra rendendo la pagina, non con flash() e un
+    # redirect: fino alla 2.7.1 il segreto passava dentro il cookie di sessione
+    # (firmato ma non cifrato) e restava nella cronologia del browser e in
+    # qualunque proxy che registri le intestazioni. Qui esiste solo nel corpo
+    # di questa risposta.
+    tokens = query_all(
+        "SELECT * FROM api_tokens WHERE struttura_id=? ORDER BY created_at DESC",
+        (struttura_id,)
+    )
+    return render_template('strutture/api_tokens.html', struttura=struttura,
+                           tokens=tokens, token_nuovo=raw)
 
 
 @strutture_bp.route('/<int:struttura_id>/tokens/<int:token_id>/revoca', methods=['POST'])
@@ -1012,16 +1055,17 @@ def carica_logo(struttura_id):
         flash('Nessun file selezionato.', 'warning')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
-    estensione = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
-    if estensione not in ESTENSIONI_LOGO:
-        flash('Formato non supportato. Usa PNG o JPG.', 'danger')
+    rifiuto = allegati.verifica(file, ESTENSIONI_LOGO,
+                                'Formato non supportato. Usa PNG o JPG.')
+    if rifiuto:
+        flash(rifiuto, 'danger')
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
     precedente = query_one("SELECT logo_path FROM strutture WHERE id = ?", (struttura_id,))
     vecchio_logo_path = (precedente or {}).get('logo_path')
 
     cartella, prefisso = upload_subdir('loghi', struttura_id)
-    nome = secure_filename(f"{int(datetime.now().timestamp())}_{file.filename}")
+    nome = nome_file_unico(file.filename)
     nuovo_logo_path = f"{prefisso}/{nome}"
     file.save(os.path.join(cartella, nome))
     execute("UPDATE strutture SET logo_path = ? WHERE id = ?",
