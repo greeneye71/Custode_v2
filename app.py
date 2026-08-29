@@ -76,7 +76,7 @@ LOCAL_CONFIG_KEYS = frozenset({
     'app_name', 'organization', 'structure_name',
     'host', 'port', 'debug',
     'secret_key', 'encryption_key',
-    'session_lifetime_hours', 'backup_retention',
+    'session_lifetime_hours', 'backup_retention', 'archivio_retention',
     'ai_provider', 'anthropic_api_key', 'gemini_api_key', 'openai_api_key',
     'ai_import_model', 'ai_email_model', 'ai_verifiche_model',
     'ai_local_base_url', 'ai_local_model',

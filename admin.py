@@ -15,6 +15,7 @@ from flask import (
 from werkzeug.security import generate_password_hash
 
 import ai_chiavi
+import archivio_recupero
 
 from auth import (admin_required, superadmin_required,
                   tecnico_o_admin_required, operazione_globale_required)
@@ -991,10 +992,14 @@ def backup():
         else:
             db_size = f"{size_bytes / (1024 * 1024):.1f} MB"
 
+    archivi = archivio_recupero.elenca_archivi(backups_path)
+
     return render_template('admin/backup.html',
                            backups=backups,
+                           archivi=archivi,
                            db_size=db_size,
-                           retention=config.get('backup_retention', 4))
+                           retention=config.get('backup_retention', 4),
+                           archivio_retention=config.get('archivio_retention', 2))
 
 
 @admin_bp.route('/backup/crea', methods=['POST'])
@@ -1030,9 +1035,7 @@ def backup_scarica(filename):
     from werkzeug.utils import safe_join
 
     backups_path = current_app.config['BACKUPS_PATH']
-    if (not filename.startswith('medinventory_backup_')
-            or not filename.endswith('.sqlite')
-            or '/' in filename or '\\' in filename or '..' in filename):
+    if not _nome_backup_valido(filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -1050,9 +1053,7 @@ def backup_ripristina(filename):
     db_path = current_app.config['DATABASE_PATH']
 
     # Strict filename validation: no path separators or traversal sequences
-    if (not filename.startswith('medinventory_backup_')
-            or not filename.endswith('.sqlite')
-            or '/' in filename or '\\' in filename or '..' in filename):
+    if not _nome_backup_valido(filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -1123,9 +1124,7 @@ def backup_elimina(filename):
 
     backups_path = current_app.config['BACKUPS_PATH']
 
-    if (not filename.startswith('medinventory_backup_')
-            or not filename.endswith('.sqlite')
-            or '/' in filename or '\\' in filename or '..' in filename):
+    if not _nome_backup_valido(filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -1134,6 +1133,157 @@ def backup_elimina(filename):
     try:
         delete_backup(backup_path)
         flash(f"Backup {filename} eliminato.", 'info')
+    except Exception as e:
+        flash(f"Errore durante l'eliminazione: {str(e)}", 'danger')
+
+    return redirect(url_for('admin.backup'))
+
+
+@admin_bp.route('/backup/<filename>/verifica', methods=['POST'])
+@operazione_globale_required
+def backup_verifica(filename):
+    """Prova un backup senza ripristinarlo.
+
+    Serve a sapere che il file e' davvero ripristinabile *prima* del giorno in
+    cui servira': l'audit chiede prove periodiche di ripristino, non la sola
+    constatazione che il backup e' stato creato.
+    """
+    from backup_service import verifica_database
+
+    backups_path = current_app.config['BACKUPS_PATH']
+    if not _nome_backup_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    problemi = verifica_database(os.path.join(backups_path, filename))
+
+    log_attivita(g.user['id'], 'backup_verifica', 'backup', None,
+                 f"Verifica di {filename}: "
+                 + ('nessun problema' if not problemi else '; '.join(problemi)),
+                 request.remote_addr, struttura_id=None)
+
+    if problemi:
+        flash(f"Il backup {filename} NON e' ripristinabile: " + ' '.join(problemi),
+              'danger')
+    else:
+        flash(f"Il backup {filename} e' integro e ripristinabile.", 'success')
+
+    return redirect(url_for('admin.backup'))
+
+
+# ============================================================================
+# ARCHIVIO DI RIPRISTINO COMPLETO
+# ============================================================================
+
+def _nome_backup_valido(filename):
+    """Il nome viene dall'URL: deve restare un file dentro la cartella backup."""
+    return (filename.startswith('medinventory_backup_')
+            and filename.endswith('.sqlite')
+            and '/' not in filename and '\\' not in filename
+            and '..' not in filename)
+
+
+def _nome_archivio_valido(filename):
+    """Come sopra, per gli archivi di ripristino completo."""
+    return (filename.startswith(archivio_recupero.PREFISSO)
+            and filename.endswith(archivio_recupero.ESTENSIONE)
+            and '/' not in filename and '\\' not in filename
+            and '..' not in filename)
+
+
+@admin_bp.route('/backup/archivio/crea', methods=['POST'])
+@operazione_globale_required
+def archivio_crea():
+    """Crea l'archivio di ripristino completo (database + allegati + config)."""
+    import app as app_module
+
+    try:
+        includi_uploads = request.form.get('includi_uploads', '1') != '0'
+        config = current_app.config['APP_CONFIG']
+
+        risultato = archivio_recupero.crea_archivio(
+            db_path=current_app.config['DATABASE_PATH'],
+            uploads_path=current_app.config['UPLOADS_PATH'],
+            config_paths=[app_module.CONFIG_PATH, app_module.LOCAL_CONFIG_PATH],
+            archivi_path=current_app.config['BACKUPS_PATH'],
+            versione_app=config.get('version', 'sconosciuta'),
+            includi_uploads=includi_uploads,
+            retention=config.get('archivio_retention', 2))
+
+        log_attivita(g.user['id'], 'archivio_creazione', 'backup', None,
+                     f"Archivio di ripristino creato: {risultato['filename']} "
+                     f"({risultato['manifest']['numero_allegati']} allegati)",
+                     request.remote_addr, struttura_id=None)
+
+        flash(f"Archivio di ripristino creato: {risultato['filename']} "
+              f"({risultato['size_display']}). Contiene la configurazione "
+              "locale, chiave di cifratura compresa: custodiscilo come una "
+              "password.", 'success')
+    except Exception as e:
+        flash(f"Errore durante la creazione dell'archivio: {str(e)}", 'danger')
+
+    return redirect(url_for('admin.backup'))
+
+
+@admin_bp.route('/backup/archivio/<filename>/scarica')
+@operazione_globale_required
+def archivio_scarica(filename):
+    """Scarica un archivio di ripristino."""
+    from flask import send_from_directory
+
+    if not _nome_archivio_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    log_attivita(g.user['id'], 'archivio_download', 'backup', None,
+                 f"Archivio scaricato: {filename}", request.remote_addr,
+                 struttura_id=None)
+
+    return send_from_directory(current_app.config['BACKUPS_PATH'], filename,
+                               as_attachment=True)
+
+
+@admin_bp.route('/backup/archivio/<filename>/verifica', methods=['POST'])
+@operazione_globale_required
+def archivio_verifica(filename):
+    """Prova di ripristino: impronte di tutti i file e validita' del database."""
+    if not _nome_archivio_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    percorso = os.path.join(current_app.config['BACKUPS_PATH'], filename)
+    problemi = archivio_recupero.verifica_archivio(percorso)
+
+    log_attivita(g.user['id'], 'archivio_verifica', 'backup', None,
+                 f"Verifica di {filename}: "
+                 + ('nessun problema' if not problemi else '; '.join(problemi)),
+                 request.remote_addr, struttura_id=None)
+
+    if problemi:
+        flash(f"L'archivio {filename} NON e' utilizzabile: " + ' '.join(problemi),
+              'danger')
+    else:
+        flash(f"L'archivio {filename} e' completo: impronte corrette e database "
+              "ripristinabile.", 'success')
+
+    return redirect(url_for('admin.backup'))
+
+
+@admin_bp.route('/backup/archivio/<filename>/elimina', methods=['POST'])
+@superadmin_required
+def archivio_elimina(filename):
+    """Elimina un archivio di ripristino."""
+    if not _nome_archivio_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    try:
+        archivio_recupero.elimina_archivio(
+            os.path.join(current_app.config['BACKUPS_PATH'], filename))
+        log_attivita(g.user['id'], 'archivio_eliminazione', 'backup', None,
+                     f"Archivio eliminato: {filename}", request.remote_addr,
+                     struttura_id=None)
+        flash(f"Archivio {filename} eliminato.", 'info')
     except Exception as e:
         flash(f"Errore durante l'eliminazione: {str(e)}", 'danger')
 

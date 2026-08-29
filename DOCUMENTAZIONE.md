@@ -354,6 +354,7 @@ La configurazione dell'applicazione è memorizzata nel file `config.json`, creat
 | `backups_path` | backups | Cartella per i backup |
 | `session_lifetime_hours` | 8 | Durata della sessione utente in ore |
 | `backup_retention` | 4 | Numero di backup da conservare |
+| `archivio_retention` | 2 | Numero di archivi di ripristino completo da conservare |
 | `anthropic_api_key` | *(vuoto)* | Chiave API Anthropic per Claude |
 | `ai_import_model` | claude-sonnet-4-20250514 | Modello AI per import inventario |
 | `ai_email_model` | claude-haiku-4-5-20251001 | Modello AI per parsing email |
@@ -783,6 +784,19 @@ I report rispettano sempre il **filtro divisione attiva**: se si è selezionata 
 
 ## 11. Backup e ripristino
 
+Ci sono **due strumenti distinti**, e la differenza conta il giorno del disastro:
+
+| Strumento | Cosa contiene | Quando usarlo |
+|---|---|---|
+| **Backup del database** | Solo il file SQLite | Errore di inserimento, cancellazione sbagliata, ritorno indietro sulla stessa macchina |
+| **Archivio di ripristino completo** | Database + `uploads/` + configurazione + manifest + istruzioni | Disco perso, macchina nuova, trasloco dell'installazione |
+
+Il backup del database **non contiene** gli allegati (verbali, foto, documenti
+degli impianti), la configurazione locale, il logo, la chiave di cifratura delle
+password di posta. Dopo un ripristino su un'installazione nuova i record
+esistono ma i loro allegati no, e le password IMAP/SMTP cifrate diventano
+illeggibili: per quello serve l'archivio completo.
+
 ### Backup automatico
 
 Il sistema esegue un backup automatico del database ogni **domenica alle ore 03:00**. Il numero di backup conservati è configurabile (default: 4).
@@ -800,8 +814,15 @@ Da *Amministrazione > Backup*:
 |---|---|
 | **Crea** | Genera un nuovo backup immediato |
 | **Scarica** | Download del file di backup |
+| **Verifica** | Prova di ripristino: apre il backup in sola lettura e ne controlla la validità, senza toccare il database in uso |
 | **Ripristina** | Sovrascrive il database attuale con il backup selezionato |
 | **Elimina** | Cancella un backup specifico |
+
+**Verifica** è la prova di ripristino da ripetere periodicamente: fa sugli
+stessi controlli che il ripristino farebbe (integrità SQLite, presenza delle
+tabelle, versione di schema non più recente del programma) e dice subito se quel
+file è utilizzabile. Sapere che il backup *è stato creato* non è sapere che è
+ripristinabile.
 
 ### Ripristino
 
@@ -832,9 +853,48 @@ Da *Amministrazione > Backup*:
 Lo stesso vale per l'azzeramento del database dalla configurazione globale, che
 usa il medesimo modo manutenzione.
 
+### Archivio di ripristino completo
+
+Da *Amministrazione > Backup > Archivio di ripristino completo*. Produce un solo
+file ZIP `medinventory_recupero_YYYYMMDD_HHMMSS_<id>.zip` che contiene:
+
+- `database/database.sqlite` — copia consistente presa con `sqlite3.backup()`,
+  quindi valida anche se l'applicazione sta lavorando;
+- `uploads/…` — tutti gli allegati (escludibili con la spunta *Includi allegati*
+  quando servono solo i dati);
+- `config/config.json` e `config/config.local.json`;
+- `MANIFEST.json` — versione dell'applicazione, versione di schema, data,
+  conteggi delle tabelle principali e **impronta SHA-256 di ogni file**;
+- `ISTRUZIONI_RIPRISTINO.txt` — la procedura passo passo, dentro l'archivio,
+  perché serve quando la macchina di origine non c'è più.
+
+L'archivio si scrive con un nome temporaneo e viene rinominato solo a fine
+scrittura: un archivio incompleto non compare mai nell'elenco. La retention è
+configurabile con `archivio_retention` (default: 2), perché con gli allegati
+dentro questi file sono grossi.
+
+**Verifica** estrae l'archivio in una cartella temporanea, ricalcola l'impronta
+di ogni file e la confronta con il manifest, poi valida il database estratto
+esattamente come farebbe prima di un ripristino. È la prova di ripristino: se
+passa, quell'archivio è sufficiente a rimettere in piedi l'installazione.
+
+> **L'archivio contiene la configurazione locale**, quindi la chiave di
+> cifratura e le chiavi API dei provider AI. Vale come una credenziale: va
+> custodito di conseguenza e non inviato per posta. La creazione, il download,
+> la verifica e l'eliminazione sono tracciate nel log attività.
+
+Ripristino da archivio, in breve (la versione completa è dentro l'archivio):
+fermare l'applicazione, installare la stessa versione di MedInventory indicata
+nel manifest, copiare `database/database.sqlite` sul percorso configurato,
+`uploads/` sulla cartella allegati, i file di `config/` nella radice, riavviare.
+
+Tutte le operazioni sull'archivio sono globali (`@operazione_globale_required`):
+un admin di struttura non può crearlo né scaricarlo, perché contiene i dati di
+tutte le strutture e i segreti del deployment.
+
 ### Politica di retention
 
-Quando il numero di backup supera il limite configurato (`backup_retention`), i backup più vecchi vengono automaticamente eliminati. Questo avviene sia dopo un backup manuale che dopo quello automatico.
+Quando il numero di backup supera il limite configurato (`backup_retention`), i backup più vecchi vengono automaticamente eliminati. Questo avviene sia dopo un backup manuale che dopo quello automatico. Gli archivi di ripristino seguono la stessa regola con `archivio_retention`.
 
 ---
 
@@ -1308,6 +1368,11 @@ Vista SQL precalcolata che mostra tutte le scadenze future con priorita automati
 | GET | `/admin/backup/<filename>/scarica` | Scarica backup |
 | POST | `/admin/backup/<filename>/ripristina` | Ripristina backup |
 | POST | `/admin/backup/<filename>/elimina` | Elimina backup |
+| POST | `/admin/backup/<filename>/verifica` | Prova di ripristino di un backup |
+| POST | `/admin/backup/archivio/crea` | Crea archivio di ripristino completo |
+| GET | `/admin/backup/archivio/<filename>/scarica` | Scarica archivio |
+| POST | `/admin/backup/archivio/<filename>/verifica` | Verifica archivio (impronte + database) |
+| POST | `/admin/backup/archivio/<filename>/elimina` | Elimina archivio |
 | GET | `/admin/log-attivita` | Log attivita |
 | POST | `/admin/reset-database` | Azzera database completo (con backup automatico) |
 | POST | `/admin/reset-parziale` | Reset parziale: cancella inventario, mantiene utenti |

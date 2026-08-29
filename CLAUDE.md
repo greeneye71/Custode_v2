@@ -135,6 +135,7 @@ not be able to widen it.
 | `email_monitor.py` | IMAP polling, PDF extraction, AI parsing of maintenance reports |
 | `scheduler.py` | Background daemon: email checks, session cleanup, auto-backups, deadline digests, scheduled PDF reports |
 | `backup_service.py` | SQLite backup/restore lifecycle |
+| `archivio_recupero.py` | Disaster-recovery archive: one ZIP with database, `uploads/`, config, SHA-256 manifest and restore instructions, plus the verify step that doubles as the documented restore drill. Flask-free |
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
 | `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
 | `sicurezza_url.py` | URL validation for the local AI server: scheme, blocked networks after DNS resolution, ports, optional `ai_local_url_allowlist`. Flask-free |
