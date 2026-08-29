@@ -371,6 +371,26 @@ def create_app():
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
         # Disabilita funzionalità browser non necessarie (geolocation, camera, ecc.)
         response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+        # Content-Security-Policy (M13): tutto il frontend e' servito da
+        # static/vendor/, quindi la pagina non ha piu' bisogno di nessuna
+        # origine esterna. Con default-src 'self' un tag iniettato che punta
+        # a un dominio di terzi non viene caricato, e i dati non possono
+        # essere spediti fuori via fetch o immagine remota.
+        # 'unsafe-inline' resta necessario: i template usano <script> inline e
+        # attributi style/onclick. Toglierlo richiede nonce su ogni blocco,
+        # lavoro che vale la pena solo insieme al riordino dei template.
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "connect-src 'self'; "
+            "frame-ancestors 'self'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "object-src 'none'"
+        )
         # HSTS: forza il browser a usare HTTPS per i prossimi 12 mesi.
         # Inviato solo quando la connessione è (o sembra) HTTPS, per non
         # bloccare l'accesso LAN su HTTP puro.
