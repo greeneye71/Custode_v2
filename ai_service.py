@@ -21,6 +21,7 @@ import logging
 
 from ai_chiavi import DEFAULT_AI, valore_globale
 from sicurezza_url import valida_url_ai_locale, leggi_allowlist
+from validazione_dominio import TIPO_NON_CLASSIFICATO
 
 logger = logging.getLogger('medinventory.ai')
 
@@ -689,7 +690,9 @@ def _parse_classification_result(result):
         return 'verbale_manutenzione'
     if 'inventario' in r:
         return 'inventario'
-    return 'inventario'
+    # M14: una classificazione non riconosciuta non diventa 'inventario'.
+    # Il documento va rivisto a mano, non importato come qualcos'altro.
+    return TIPO_NON_CLASSIFICATO
 
 
 # ---------------------------------------------------------------------------
@@ -788,7 +791,7 @@ def analyze_verifiche_from_pdf_document(filepath, api_key, model='claude-haiku-4
 
 def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type from PDF text.
-    Returns: 'verifica_elettrica' | 'manutenzione'
+    Returns: 'verifica_elettrica' | 'manutenzione' | 'da_classificare'
     """
     text_lower = pdf_text.lower()
 
@@ -817,16 +820,20 @@ def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-2025
             f"Classifica questo documento:\n\n{pdf_text[:2000]}",
             api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
         )
-        if 'verifica' in result.lower():
+        risposta = result.lower()
+        if 'verifica' in risposta:
             return 'verifica_elettrica'
+        if 'manutenzione' in risposta:
+            return 'manutenzione'
     except Exception:
-        pass
-    return 'manutenzione'
+        logger.warning("Classificazione AI del documento email fallita", exc_info=True)
+    # M14: se l'AI non si pronuncia, il documento resta da classificare.
+    return TIPO_NON_CLASSIFICATO
 
 
 def classify_email_document_type_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type for a scanned PDF.
-    Returns: 'verifica_elettrica' | 'manutenzione'
+    Returns: 'verifica_elettrica' | 'manutenzione' | 'da_classificare'
     """
     try:
         result = _call_ai_with_pdf(
@@ -834,11 +841,15 @@ def classify_email_document_type_from_pdf_document(filepath, api_key, model='cla
             "Classifica questo documento.",
             filepath, api_key, model, max_tokens=200, config=config, struttura_id=struttura_id
         )
-        if 'verifica' in result.lower():
+        risposta = result.lower()
+        if 'verifica' in risposta:
             return 'verifica_elettrica'
+        if 'manutenzione' in risposta:
+            return 'manutenzione'
     except Exception:
-        pass
-    return 'manutenzione'
+        logger.warning("Classificazione AI del PDF scansionato fallita", exc_info=True)
+    # M14: se l'AI non si pronuncia, il documento resta da classificare.
+    return TIPO_NON_CLASSIFICATO
 
 
 # ---------------------------------------------------------------------------

@@ -131,7 +131,7 @@ def test_verbale_parzialmente_importato_resta_in_coda(app, scenario, monkeypatch
     assert rec['righe_importate'] == 1
     assert [r['stato'] for r in righe] == ['imported', 'pending', 'pending']
     assert righe[1]['note_revisione'] == 'Apparecchio non individuato dalla matricola'
-    assert righe[2]['note_revisione'] == 'Data intervento assente'
+    assert righe[2]['note_revisione'] == "Data dell'intervento assente"
     assert righe[2]['apparecchio_match_id'] == scenario['app2']
     assert [json.loads(r['dati_estratti'])['matricola'] for r in righe] == \
         ['MAT-001', 'SCONOSCIUTA', 'MAT-002']

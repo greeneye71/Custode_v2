@@ -23,6 +23,8 @@ from models import (query_one, query_all, execute, log_attivita, upload_subdir,
                     nome_file_unico, apparecchio_accessibile,
                     divisione_accessibile, filtro_divisione,
                     scegli_apparecchio)
+from validazione_dominio import (valida_apparecchio, valida_manutenzione,
+                                 valida_verifica, messaggio_errori)
 
 import_bp = Blueprint('import', __name__)
 logger = logging.getLogger('medinventory.import')
@@ -128,9 +130,6 @@ DOC_TYPE_LABELS = {
     'verbale_manutenzione': 'Verbale di Manutenzione',
     'verifica_elettrica': 'Verifica di Sicurezza Elettrica',
 }
-
-TIPI_VALIDI_MANUTENZIONE = {'preventiva', 'correttiva', 'verifica', 'calibrazione'}
-ESITI_VALIDI_VERIFICA = {'positivo', 'negativo', 'con_riserva'}
 
 
 def _ruolo_vede_ogni_divisione():
@@ -849,6 +848,12 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                 # struttura e divisione comprese.
                 if not apparecchio_accessibile(row['apparecchio_match_id']):
                     raise ValueError("Apparecchio abbinato non accessibile")
+                # M14: stessi controlli del form anche qui. Marca, modello e
+                # matricola non vengono riscritti su una scheda esistente,
+                # quindi in questo ramo non sono obbligatori.
+                data, errori = valida_apparecchio(data, richiedi_identificativi=False)
+                if errori:
+                    raise ValueError(messaggio_errori(errori))
                 execute(
                     """UPDATE apparecchi SET
                        descrizione = COALESCE(descrizione, ?),
@@ -877,6 +882,11 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                 div_row = divisione_accessibile(import_rec['divisione_id'])
                 if not div_row:
                     raise ValueError("Divisione di destinazione non accessibile")
+                # M14: marca, modello e matricola obbligatori come nel form;
+                # date e anno passano dalla stessa normalizzazione.
+                data, errori = valida_apparecchio(data)
+                if errori:
+                    raise ValueError(messaggio_errori(errori))
                 # struttura_id dalla sessione (authoritative); fallback alla
                 # divisione solo per il superadmin che non impersona nessuno.
                 imp_struttura_id = getattr(g, 'struttura_id', None) or div_row['struttura_id']
@@ -889,11 +899,11 @@ def _execute_inventario(import_id, selected_ids, import_rec):
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (import_rec['divisione_id'],
                      imp_struttura_id,
-                     data.get('matricola', ''),
+                     data.get('matricola'),
                      data.get('descrizione'),
                      data.get('numero_inventario'),
-                     data.get('marca', ''),
-                     data.get('modello', ''),
+                     data.get('marca'),
+                     data.get('modello'),
                      data.get('anno_fabbricazione'),
                      data.get('classificazione'),
                      data.get('ubicazione'),
@@ -937,6 +947,12 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                 errors += 1
                 continue
 
+            # M14: validazione di dominio condivisa con il form, prima di
+            # copiare allegati o di toccare il database.
+            data, errori = valida_manutenzione(data)
+            if errori:
+                raise ValueError(messaggio_errori(errori))
+
             # Determine apparecchio: user override or AI match
             app_override = request.form.get(f'apparecchio_id_{row_id}')
             if app_override:
@@ -966,14 +982,8 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                 errors += 1
                 continue
 
-            # Bug E: validate required date field
-            data_intervento = (data.get('data_intervento') or '').strip()
-            if not data_intervento:
-                raise ValueError("data_intervento mancante")
-
-            # Normalize tipo to valid set
-            tipo_raw = (data.get('tipo') or 'preventiva').strip().lower()
-            tipo = tipo_raw if tipo_raw in TIPI_VALIDI_MANUTENZIONE else 'preventiva'
+            data_intervento = data['data_intervento']
+            tipo = data['tipo']
 
             # Copy page PDF to verbali folder if available
             verbale_path = None
@@ -988,18 +998,8 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                     shutil.copy2(src, dest)
                     verbale_path = f"{verbali_prefix}/{dest_name}"
 
-            # Safe periodicita conversion (handles floats like "365.0")
-            periodicita_giorni = None
-            if data.get('periodicita_giorni'):
-                try:
-                    periodicita_giorni = int(float(data['periodicita_giorni']))
-                except (ValueError, TypeError):
-                    periodicita_giorni = None
-
-            try:
-                costo = float(data['costo']) if data.get('costo') else None
-            except (ValueError, TypeError):
-                costo = None
+            periodicita_giorni = data['periodicita_giorni']
+            costo = data['costo']
 
             cursor = execute(
                 """INSERT INTO manutenzioni
@@ -1011,7 +1011,7 @@ def _execute_verbali(import_id, selected_ids, import_rec):
                     apparecchio_id,
                     tipo,
                     data_intervento,
-                    data.get('prossima_scadenza') or None,
+                    data['prossima_scadenza'],
                     periodicita_giorni,
                     data.get('tecnico_ditta'),
                     data.get('descrizione'),
@@ -1053,6 +1053,13 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                         (int(row_id),))
                 errors += 1
                 continue
+
+            # M14: validazione di dominio condivisa con il form, prima di
+            # creare apparecchi o copiare allegati per una riga da scartare.
+            # Un esito assente o incomprensibile non diventa piu' 'positivo'.
+            data, errori = valida_verifica(data)
+            if errori:
+                raise ValueError(messaggio_errori(errori))
 
             # Risoluzione apparecchio: crea nuovo, override manuale, o match AI
             crea_nuovo = request.form.get(f'crea_nuovo_{row_id}') == '1'
@@ -1115,14 +1122,8 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                 errors += 1
                 continue
 
-            # Bug E: validate required date field
-            data_verifica = (data.get('data_verifica') or '').strip()
-            if not data_verifica:
-                raise ValueError("data_verifica mancante")
-
-            # Normalize esito to valid set
-            esito_raw = (data.get('esito') or 'positivo').strip().lower()
-            esito = esito_raw if esito_raw in ESITI_VALIDI_VERIFICA else 'positivo'
+            data_verifica = data['data_verifica']
+            esito = data['esito']
 
             # Copy page PDF to verifiche folder if available
             documento_path = None
@@ -1137,9 +1138,8 @@ def _execute_verifiche(import_id, selected_ids, import_rec):
                     shutil.copy2(src, dest)
                     documento_path = f"{verifiche_prefix}/{dest_name}"
 
-            # Bug F: safe periodicita conversion (handles floats like "365.0"); default 730 (2 anni)
-            periodicita = int(float(data.get('periodicita_giorni') or 730))
-            prossima = data.get('prossima_scadenza') or None
+            periodicita = data['periodicita_giorni']
+            prossima = data['prossima_scadenza']
             if not prossima:
                 try:
                     d = datetime.strptime(data_verifica, '%Y-%m-%d')

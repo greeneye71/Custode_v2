@@ -17,6 +17,8 @@ import uuid
 import traceback
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
+from validazione_dominio import (valida_manutenzione, valida_verifica,
+                                 messaggio_errori, TIPO_NON_CLASSIFICATO)
 
 logger = logging.getLogger('medinventory.email')
 
@@ -252,7 +254,26 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 doc_type = classify_email_document_type(pdf_text, api_key, ai_model, config=app_config, struttura_id=struttura_id)
             logger.info(f"Tipo documento rilevato: {doc_type} per {att['filename']}")
 
-            if doc_type == 'verifica_elettrica':
+            # M14: se il tipo non e' riconosciuto il documento non viene
+            # importato come manutenzione "per default": finisce in coda,
+            # da classificare a mano.
+            errore_coda = 'In attesa di revisione manuale'
+
+            if doc_type == TIPO_NON_CLASSIFICATO:
+                logger.info(
+                    "Documento non classificato: %s messo in coda per revisione",
+                    att['filename'])
+                tipo_import_value = 'verbale_email'
+                apparecchio_id = None
+                ai_response = None
+                parsed_data_str = None
+                righe_preview = []
+                totale = 0
+                righe_imp = 0
+                errore_coda = ('Tipo di documento non riconosciuto: '
+                               'classificare a mano prima di importare')
+
+            elif doc_type == 'verifica_elettrica':
                 # Branch verifiche di sicurezza elettrica
                 if scanned_pdf:
                     from ai_service import analyze_verifiche_from_pdf_document
@@ -279,25 +300,23 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                                 item, None, False,
                                 'Apparecchio non individuato dalla matricola'))
                             continue
-                        if not item.get('data_verifica'):
+                        # M14: stessa validazione del form e dell'import
+                        # manuale. Una data illeggibile o un esito che l'AI
+                        # non ha capito mandano la riga in revisione, non in
+                        # archivio con un 'positivo' inventato.
+                        puliti, errori = valida_verifica(item)
+                        if errori:
                             righe_preview.append(_riga_preview(
                                 item, item_app_id, False,
-                                'Data della verifica assente'))
+                                messaggio_errori(errori)))
                             continue
                         try:
-                            # Default 730 giorni (2 anni) se non indicato
-                            periodicita_v = int(item.get('periodicita_giorni') or 730)
-                            prossima = item.get('prossima_scadenza') or None
+                            periodicita_v = puliti['periodicita_giorni']
+                            prossima = puliti['prossima_scadenza']
                             if not prossima:
-                                try:
-                                    d = datetime.strptime(item['data_verifica'], '%Y-%m-%d')
-                                    d += timedelta(days=periodicita_v)
-                                    prossima = d.strftime('%Y-%m-%d')
-                                except ValueError:
-                                    pass
-                            esito_v = (item.get('esito') or 'positivo').strip().lower()
-                            if esito_v not in ('positivo', 'negativo', 'con_riserva'):
-                                esito_v = 'positivo'
+                                d = datetime.strptime(puliti['data_verifica'], '%Y-%m-%d')
+                                d += timedelta(days=periodicita_v)
+                                prossima = d.strftime('%Y-%m-%d')
 
                             conn.execute(
                                 """INSERT INTO verifiche
@@ -306,10 +325,10 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                                 (
                                     item_app_id,
-                                    item.get('data_verifica'),
+                                    puliti['data_verifica'],
                                     prossima,
                                     periodicita_v,
-                                    esito_v,
+                                    puliti['esito'],
                                     item.get('tecnico_ditta'),
                                     item.get('note'),
                                 )
@@ -377,15 +396,16 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                                 parsed_data, None, False,
                                 'Apparecchio non individuato dalla matricola'))
                             continue
-                        if not parsed_data.get('data_intervento'):
+                        # M14: stessa validazione del form e dell'import
+                        # manuale; una riga incoerente resta in revisione.
+                        puliti, errori = valida_manutenzione(parsed_data)
+                        if errori:
                             righe_preview.append(_riga_preview(
                                 parsed_data, apparecchio_id, False,
-                                'Data intervento assente'))
+                                messaggio_errori(errori)))
                             continue
                         try:
-                            tipo_m = (parsed_data.get('tipo') or 'preventiva').strip().lower()
-                            if tipo_m not in ('preventiva', 'correttiva', 'verifica', 'calibrazione'):
-                                tipo_m = 'preventiva'
+                            tipo_m = puliti['tipo']
                             conn.execute(
                                 """INSERT INTO manutenzioni
                                    (apparecchio_id, tipo, data_intervento, prossima_scadenza,
@@ -395,13 +415,13 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                                 (
                                     apparecchio_id,
                                     tipo_m,
-                                    parsed_data.get('data_intervento'),
-                                    parsed_data.get('prossima_scadenza') or None,
-                                    parsed_data.get('periodicita_giorni'),
+                                    puliti['data_intervento'],
+                                    puliti['prossima_scadenza'],
+                                    puliti['periodicita_giorni'],
                                     parsed_data.get('tecnico_ditta'),
                                     parsed_data.get('descrizione'),
                                     parsed_data.get('esito'),
-                                    parsed_data.get('costo'),
+                                    puliti['costo'],
                                     verbale_rel_path
                                 )
                             )
@@ -436,7 +456,7 @@ def _process_email(mail, msg_id, divisione_id, api_key, ai_model, uploads_dir, d
                 ai_response=ai_response,
                 parsed_data=parsed_data_str,
                 apparecchio_id=apparecchio_id,
-                errori=None if completato else 'In attesa di revisione manuale',
+                errori=None if completato else errore_coda,
                 totale_righe=totale,
                 righe_importate=righe_imp,
                 struttura_id=struttura_id,
