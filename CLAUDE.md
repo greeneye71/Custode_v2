@@ -98,6 +98,17 @@ Key fields (all in `config.local.json`):
 
 **Per-struttura config** lives in the `strutture_config` table (`get_struttura_config()` / `set_struttura_config()` in `models.py`), and falls back to the global values above. AI keys and models can be overridden per facility. **The mail server cannot**: since 2.6.2 SMTP is system-wide only, and each facility keeps just the deadline-alert preferences (`avvisi_scadenza_attivi`, `avvisi_scadenza_formato`, `report_frequenza`). All alerts therefore leave from the same sender, and name their facility in the subject and body.
 
+**AI key naming** — the same setting has two names: `ai_provider` on the facility
+side, `default_ai_provider` in the system config. The map and the resolution
+order live in one Flask-free module, `ai_chiavi.py`, and nowhere else:
+*facility override -> `default_*` global -> legacy unprefixed key -> built-in
+default*. An override stored as an empty string counts as absent, so clearing a
+field in the UI returns the facility to the global value. Creating a struttura
+writes no AI row at all: a copied row would be an override, and would pin the
+facility to the defaults of the day it was created. `ai_local_url_allowlist` is
+deliberately *not* in that map — it is system policy, and a facility admin must
+not be able to widen it.
+
 ## Architecture
 
 ### Flask Application Factory

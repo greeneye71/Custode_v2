@@ -19,6 +19,7 @@ import io
 import os
 import logging
 
+from ai_chiavi import DEFAULT_AI, valore_globale
 from sicurezza_url import valida_url_ai_locale, leggi_allowlist
 
 logger = logging.getLogger('medinventory.ai')
@@ -173,9 +174,15 @@ AI_PROVIDER_DEFAULTS = {
 
 
 def _get_ai_config(config=None, struttura_id=None):
-    """Get AI provider configuration.
-    When struttura_id is given: reads ONLY from struttura_config (no global config fallback for AI keys).
-    When struttura_id is None: reads from global config.
+    """Configurazione AI effettiva.
+
+    Con `struttura_id`: override della struttura, altrimenti il default globale
+    `default_*`, altrimenti la chiave legacy, altrimenti il default di
+    programma. Senza `struttura_id`: la sola configurazione globale, con lo
+    stesso ordine fra `default_*` e chiave legacy.
+
+    La corrispondenza fra i due nomi sta in `ai_chiavi.py` e non va ripetuta
+    qui: e' quella che prima divergeva fra interfaccia, seed e servizio AI.
     """
     if config is None:
         from flask import current_app
@@ -183,34 +190,31 @@ def _get_ai_config(config=None, struttura_id=None):
 
     if struttura_id:
         from models import get_struttura_config as _gsc
-        def _sc(key, default=''):
-            val = _gsc(struttura_id, key)
-            return val if val is not None else default
+        def _sc(chiave):
+            return _gsc(struttura_id, chiave, DEFAULT_AI[chiave])
     else:
-        def _sc(key, default=''):
-            return config.get(key, default)
+        def _sc(chiave):
+            return valore_globale(config, chiave, DEFAULT_AI[chiave])
 
     return {
-        'provider':       _sc('ai_provider', 'anthropic'),
-        'api_key':        _sc('anthropic_api_key', ''),
-        'gemini_api_key': _sc('gemini_api_key', ''),
-        'openai_api_key': _sc('openai_api_key', ''),
-        'model_import':   _sc('ai_import_model', 'claude-sonnet-4-20250514'),
-        'model_email':    _sc('ai_email_model', 'claude-haiku-4-5-20251001'),
-        'local_base_url': _sc('ai_local_base_url', 'http://localhost:11434'),
-        'local_model':    _sc('ai_local_model', ''),
+        'provider':       _sc('ai_provider'),
+        'api_key':        _sc('anthropic_api_key'),
+        'gemini_api_key': _sc('gemini_api_key'),
+        'openai_api_key': _sc('openai_api_key'),
+        'model_import':   _sc('ai_import_model'),
+        'model_email':    _sc('ai_email_model'),
+        'local_base_url': _sc('ai_local_base_url'),
+        'local_model':    _sc('ai_local_model'),
         # L'allowlist degli URL locali e' politica di sistema: si legge sempre
         # dalla configurazione globale, mai da strutture_config, perche' e' il
         # limite che vincola l'admin di struttura e non deve poterlo allargare.
+        # Per lo stesso motivo non compare in ai_chiavi.CHIAVI_AI.
         'local_url_allowlist': leggi_allowlist(config),
     }
 
 
 def get_ai_config(struttura_id=None, config=None):
-    """Public alias for _get_ai_config.
-    When struttura_id is given: reads ONLY from struttura_config (no global fallback).
-    When struttura_id is None: reads from global config.
-    """
+    """Alias pubblico di _get_ai_config: stesso ordine di risoluzione."""
     return _get_ai_config(config=config, struttura_id=struttura_id)
 
 

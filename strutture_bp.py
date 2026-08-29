@@ -12,6 +12,7 @@ from flask import (
     flash, g, current_app, jsonify
 )
 from werkzeug.utils import secure_filename
+import ai_chiavi
 from auth import superadmin_required, login_required, tecnico_o_superadmin_required
 from models import query_all, query_one, execute, log_attivita, get_db, \
     get_struttura_config_all, set_struttura_config, get_struttura_config, \
@@ -253,23 +254,12 @@ def nuova():
                     (g.user['id'], struttura_id)
                 )
             db.commit()
-            # Seed AI config di default dalla config globale
-            from app import load_config as _load_config
-            _cfg = _load_config()
-            _ai_defaults_map = {
-                'default_ai_provider':       'ai_provider',
-                'default_anthropic_api_key': 'anthropic_api_key',
-                'default_gemini_api_key':    'gemini_api_key',
-                'default_openai_api_key':    'openai_api_key',
-                'default_ai_local_base_url': 'ai_local_base_url',
-                'default_ai_local_model':    'ai_local_model',
-                'default_ai_import_model':   'ai_import_model',
-                'default_ai_email_model':    'ai_email_model',
-            }
-            for _cfg_key, _struttura_key in _ai_defaults_map.items():
-                _val = _cfg.get(_cfg_key)
-                if _val:
-                    set_struttura_config(struttura_id, _struttura_key, _val)
+            # Nessuna copia dei default AI dentro strutture_config: una riga
+            # copiata e' a tutti gli effetti un override e congelerebbe la
+            # struttura sui valori del giorno della creazione. Le impostazioni
+            # AI non scritte si risolvono a ogni lettura sui `default_*`
+            # globali (ai_chiavi.py), cosi' una modifica del default raggiunge
+            # anche le strutture create prima.
             log_attivita(g.user['id'], 'crea', 'struttura', struttura_id,
                          f'Struttura "{dati["nome"]}" creata')
             log_attivita(g.user['id'], 'creazione', 'divisioni', divisione_id,
@@ -784,9 +774,21 @@ def config(struttura_id):
         return redirect(url_for('strutture.config', struttura_id=struttura_id))
 
     cfg = get_struttura_config_all(struttura_id)
+    # Le impostazioni AI si mostrano risolte: se la struttura non ha un
+    # override, nel campo compare il default globale che verrebbe usato
+    # davvero. `cfg_ai_ereditate` dice quali di quei valori non sono suoi, in
+    # modo che l'interfaccia lo possa dichiarare invece di far credere che
+    # siano stati salvati qui.
+    config_globale = current_app.config.get('APP_CONFIG') or {}
+    cfg_ai = {chiave: ai_chiavi.risolvi(chiave, cfg.get(chiave), config_globale)
+              for chiave in ai_chiavi.CHIAVI_AI}
+    cfg_ai_ereditate = {chiave for chiave in ai_chiavi.CHIAVI_AI
+                        if not cfg.get(chiave)}
     return render_template('strutture/config.html',
                            struttura=struttura,
                            cfg=cfg,
+                           cfg_ai=cfg_ai,
+                           cfg_ai_ereditate=cfg_ai_ereditate,
                            is_admin_only=is_admin_only,
                            ai_providers=AI_PROVIDERS,
                            anthropic_models=ANTHROPIC_MODELS,

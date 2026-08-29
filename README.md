@@ -212,7 +212,7 @@ SQLite in modalità WAL con foreign key abilitate. Schema definito in `schema.sq
 | Tabella | Descrizione |
 |---|---|
 | `strutture` | **v2.0** — Anagrafica strutture sanitarie (nome, codice, modalità) |
-| `strutture_config` | **v2.0** — Configurazione per-struttura: provider e chiavi AI, preferenze sugli avvisi di scadenza. **Dalla v2.6.2 non contiene piu' impostazioni SMTP**: il server di posta e' unico e di sistema |
+| `strutture_config` | **v2.0** — Configurazione per-struttura: provider e chiavi AI, preferenze sugli avvisi di scadenza. **Dalla v2.6.2 non contiene piu' impostazioni SMTP**: il server di posta e' unico e di sistema. **Dalla v2.8.3 contiene solo override**: le impostazioni AI non scritte qui si risolvono a ogni lettura sui `default_*` globali (`ai_chiavi.py`), quindi una struttura senza righe segue le modifiche della configurazione di sistema |
 | `api_tokens` | **v2.0** — Token Bearer per REST API, scoped per struttura |
 | `login_attempts` | **v2.0** — Rate limiting tentativi di accesso e richieste di reset password |
 | `divisioni` | Reparti/divisioni della struttura, con colore e codice |

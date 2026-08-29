@@ -9,6 +9,7 @@ import logging
 from flask import g, current_app
 from werkzeug.utils import secure_filename
 
+import ai_chiavi
 from schema_impianti import (
     DDL_IMPIANTI,
     SCHEMA_VERSION_IMPIANTI,
@@ -1104,18 +1105,27 @@ def log_attivita(utente_id, azione, entita, entita_id=None, dettagli=None,
 def get_struttura_config(struttura_id, chiave, default=None):
     """Legge un valore di configurazione per-struttura.
     Se non presente, restituisce il valore globale da APP_CONFIG o il default.
+
+    Per le impostazioni AI il nome globale non coincide con quello di struttura
+    (`ai_provider` qui, `default_ai_provider` nella configurazione di sistema):
+    la corrispondenza e l'ordine di risoluzione stanno in `ai_chiavi.py`, non
+    ripeterli qui.
     """
     row = query_one(
         "SELECT valore FROM strutture_config WHERE struttura_id = ? AND chiave = ?",
         (struttura_id, chiave)
     )
-    if row and row['valore'] is not None:
-        return row['valore']
+    valore = row['valore'] if row else None
+    if valore is not None and not (ai_chiavi.e_chiave_ai(chiave) and valore == ''):
+        return valore
     # Fallback al config globale
     try:
-        return (current_app.config.get('APP_CONFIG') or {}).get(chiave, default)
+        config = current_app.config.get('APP_CONFIG') or {}
     except RuntimeError:
         return default
+    if ai_chiavi.e_chiave_ai(chiave):
+        return ai_chiavi.valore_globale(config, chiave, default)
+    return config.get(chiave, default)
 
 
 def set_struttura_config(struttura_id, chiave, valore):

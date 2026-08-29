@@ -14,6 +14,8 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash
 
+import ai_chiavi
+
 from auth import (admin_required, superadmin_required,
                   tecnico_o_admin_required, operazione_globale_required)
 from models import query_one, query_all, execute, log_attivita, get_db
@@ -780,6 +782,12 @@ def configurazione():
     display_config = dict(config)
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
+    # Le impostazioni AI si mostrano risolte: un'installazione aggiornata da una
+    # versione precedente alla 2.6 tiene ancora le chiavi senza prefisso e il
+    # runtime le usa davvero (ai_chiavi.py), quindi la pagina deve dichiararle
+    # configurate invece di mostrare campi vuoti che non lo sono.
+    for _chiave, _globale in ai_chiavi.CHIAVI_AI.items():
+        display_config[_globale] = ai_chiavi.valore_globale(config, _chiave, '')
     for _k in ('default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key'):
         display_config[_k + '_set'] = bool(display_config.get(_k))
 
@@ -849,11 +857,13 @@ def test_default_ai():
 
     save_config(config)
 
-    # Recupera chiavi attive (appena salvate o già presenti)
-    anthropic_key = config.get('default_anthropic_api_key', '')
-    gemini_key    = config.get('default_gemini_api_key', '')
-    openai_key    = config.get('default_openai_api_key', '')
-    base_url      = config.get('default_ai_local_base_url', '')
+    # Recupera i valori attivi (appena salvati, gia' presenti, o ereditati da una
+    # chiave legacy senza prefisso): si prova esattamente quello che userebbe il
+    # runtime, non solo quello che questa pagina ha appena scritto.
+    anthropic_key = ai_chiavi.valore_globale(config, 'anthropic_api_key', '')
+    gemini_key    = ai_chiavi.valore_globale(config, 'gemini_api_key', '')
+    openai_key    = ai_chiavi.valore_globale(config, 'openai_api_key', '')
+    base_url      = ai_chiavi.valore_globale(config, 'ai_local_base_url', '')
 
     try:
         if provider == 'anthropic':
