@@ -280,17 +280,37 @@ L'applicazione è accessibile da qualsiasi dispositivo sulla rete locale tramite
 
 ### Dipendenze Python
 
-Installate automaticamente da `requirements.txt`:
+Due file, due scopi. `requirements.txt` dichiara gli **intervalli** ammessi
+(ogni dipendenza ha un minimo e un massimo, cosi' nessuna major entra da sola);
+`requirements.lock.txt` dichiara le **versioni provate**, dipendenze indirette
+comprese. In esercizio si installa dal lock:
+
+```batch
+pip install -r requirements.lock.txt
+```
+
+Aggiornamento controllato: `pip install -U -r requirements.txt`, suite di test
+verde, `python aggiorna_lock.py` per riscrivere il lock, commit del lock
+insieme all'esito dei test. `python aggiorna_lock.py --verifica` esce con 1 se
+il lock non descrive piu' l'ambiente.
+
+Dipendenze dirette:
 
 | Pacchetto | Versione | Utilizzo |
 |---|---|---|
-| flask | >= 3.0 | Framework web |
-| anthropic | >= 0.40 | API Claude (AI) |
-| openpyxl | >= 3.1 | Lettura/scrittura Excel |
-| fpdf2 | >= 2.8 | Generazione PDF |
-| pdfplumber | >= 0.11 | Estrazione testo da PDF |
-| cryptography | >= 42.0 | Cifratura credenziali IMAP |
-| waitress | >= 3.0 | Server WSGI di produzione |
+| flask | >= 3.0, < 4.0 | Framework web |
+| anthropic | >= 0.40, < 1.0 | API Claude (AI) |
+| openpyxl | >= 3.1, < 4.0 | Lettura/scrittura Excel |
+| fpdf2 | >= 2.8, < 3.0 | Generazione PDF |
+| pdfplumber | >= 0.11, < 0.12 | Estrazione testo da PDF |
+| pypdf | >= 4.0, < 8.0 | Divisione dei PDF multipagina |
+| httpx | >= 0.27, < 1.0 | Chiamate ai provider AI locali |
+| cryptography | >= 42.0, < 47.0 | Cifratura credenziali IMAP/SMTP |
+| waitress | >= 3.0, < 4.0 | Server WSGI di produzione |
+| flask-wtf | >= 1.2, < 2.0 | Protezione CSRF |
+| qrcode[pil] | >= 7.4, < 9.0 | QR code degli apparecchi |
+| Pillow | >= 10.0, < 12.0 | Immagini, QR e icona di tray |
+| pystray | >= 0.19, < 0.20 | Icona nella tray di Windows |
 
 ---
 
@@ -1120,7 +1140,8 @@ MedInventory/
 |-- setup.sh                  # Setup iniziale (Linux)
 |-- install_service.bat       # Installazione servizio Windows (NSSM)
 |-- install_service.sh        # Installazione servizio Linux (systemd)
-|-- requirements.txt          # Dipendenze Python
+|-- requirements.txt          # Dipendenze dirette, a intervalli
+|-- requirements.lock.txt     # Versioni provate (generato da aggiorna_lock.py)
 |-- config.example.json       # Template configurazione
 |
 |-- templates/                # Template HTML (Jinja2)
@@ -1444,6 +1465,17 @@ formato che le versioni recenti non sanno piu' verificare -- capita sulle
 installazioni migrate da molto lontano, e in quel caso l'accesso risponde con un
 errore del server invece che con il rifiuto.
 
+**"Versione dello schema non dichiarata".** La diagnosi lo segnala quando il
+database ha `PRAGMA user_version = 0`: le tabelle sono quelle attuali, ma il
+file non dichiara la propria versione e ogni strumento deve dedurla dalla forma
+delle tabelle -- deduzioni diverse fanno apparire un database aggiornato come
+molto piu' vecchio, con migrazioni pendenti che non esistono. Non e' un guasto e
+non si ripara da solo: nessun comando riscrive `user_version` di nascosto. Il
+seguito e', nell'ordine, un backup verificato
+(`manutenzione.py backup`, poi l'azione Verifica), un avvio del programma oppure
+`manutenzione.py migra`, e infine di nuovo `manutenzione.py diagnosi`, che a
+quel punto deve tacere.
+
 ### Manutenzione da riga di comando
 
 ```batch
@@ -1490,5 +1522,5 @@ venv\Scripts\python seed.py
 
 ---
 
-*Documentazione MedInventory v2.8.2*
+*Documentazione MedInventory v2.8.4*
 *Studio Bergamaschi*

@@ -1176,9 +1176,9 @@ def test_colonne_file_import_include_gli_impianti():
 def test_versione_allineata():
     import json
     with open('config.example.json', encoding='utf-8') as f:
-        assert json.load(f)['version'] == '2.8.2'
+        assert json.load(f)['version'] == '2.8.4'
     import app as modulo_app
-    assert modulo_app.APP_VERSION == '2.8.2'
+    assert modulo_app.APP_VERSION == '2.8.4'
 
 
 def test_rimozione_struttura_con_impianti_firmati(app, ambiente):

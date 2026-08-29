@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MedInventory v2.8.2** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
+**MedInventory v2.8.4** (Custode_v2) — Italian-language web application for managing medical devices (*apparecchi elettromedicali*) in healthcare facilities. Multi-tenant: one deployment hosts several *strutture* (facilities), each with its own divisions, users, data and AI configuration. Built for Windows LAN deployment by Studio Bergamaschi.
 
 **Stack:** Flask 3.x + SQLite3 + HTMX + Bootstrap 5 + AI (Anthropic Claude / Google Gemini / OpenAI / Ollama / LM Studio)
 
@@ -140,6 +140,7 @@ not be able to widen it.
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
 | `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
 | `sicurezza_url.py` | URL validation for the local AI server: scheme, blocked networks after DNS resolution, ports, optional `ai_local_url_allowlist`. Flask-free |
+| `allegati.py` | Upload validation: magic bytes against the declared extension, empty files, zip-bomb ratio. Every upload route calls `allegati.verifica()`. Flask-free |
 | `coda_import.py` | Admission limit for background AI import analyses: global and per-facility caps, slot reserved before the upload is written. Not a durable queue. Flask-free |
 | `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
 | `posta.py` | The only place mail leaves from: system-wide SMTP resolution and sending |

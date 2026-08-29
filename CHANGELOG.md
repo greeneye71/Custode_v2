@@ -6,6 +6,96 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.8.4] - 2026-08-29
+
+Dieci rilievi dell'audit del 28/08 lavorati in sequenza: la semantica delle
+chiavi AI, il traffico durante ripristino e azzeramento, il backup che non era
+un backup, la validazione dei dati che arrivano dall'AI, le scritture
+multi-tabella, i thread di analisi senza tetto, gli asset da CDN senza CSP, gli
+allegati controllati solo per estensione, le dipendenze non riproducibili e un
+database che non dichiara la propria versione. Nessun cambio di schema —
+`PRAGMA user_version` resta 271.
+
+### Sicurezza
+- **Allegati accettati per estensione (M05).** Ogni rotta di upload guardava
+  solo il nome del file: `.pdf` bastava, qualunque cosa ci fosse dentro. Un file
+  eseguibile rinominato finiva in `uploads/` e restava scaricabile dalla scheda
+  che lo referenziava. Il nuovo modulo `allegati.py` (senza Flask) controlla i
+  primi 4 KB — firme di pdf, jpg, png, gif, webp, docx, xlsx, doc, xls, testo
+  per csv e txt — rifiuta i file vuoti e gli archivi con un rapporto di
+  espansione da zip bomb (oltre 200x, o piu' di 512 MB espansi). Passa per
+  `allegati.verifica()` ogni upload: foto e documenti degli apparecchi, verbali
+  di manutenzione, documenti delle verifiche, documenti e verbali degli
+  impianti, file dell'import e logo della struttura, ognuno con il proprio
+  messaggio di rifiuto. Anche gli allegati che arrivano dalla posta: il mittente
+  sceglie nome e content-type, e un allegato che si dichiarava PDF senza esserlo
+  entrava comunque in `uploads/` restando scaricabile dalla coda import; ora
+  viene scartato con una riga di log. La meta' `realpath` del rilievo era gia'
+  chiusa da `impianti.py::_percorso_allegato()` nella 2.8.2.
+- **Asset da CDN e nessuna Content-Security-Policy (M13).** Bootstrap, HTMX,
+  Bootstrap Icons e Chart.js arrivavano da tre CDN diversi senza SRI: chi
+  controlla quei domini — o la risoluzione DNS di una LAN ospedaliera — poteva
+  servire altro codice a ogni pagina, e un'installazione senza uscita verso
+  Internet restava senza interfaccia. Gli asset sono ora locali sotto
+  `static/vendor/` e le pagine non caricano piu' nulla da fuori. In piu'
+  `add_security_headers` invia una `Content-Security-Policy` con `default-src
+  'self'`, `frame-ancestors 'self'`, `object-src 'none'`, `base-uri 'self'` e
+  `form-action 'self'`, applicata anche a redirect e pagine di errore. Residuo
+  dichiarato: `'unsafe-inline'` resta per script e stili, i template ne fanno
+  uso diffuso e toglierlo e' un lavoro a se'.
+
+### Correzioni
+- **Una sola semantica per le chiavi AI (M02).** Vedi `ai_chiavi.py`: la mappa
+  fra il nome di struttura (`ai_provider`) e quello di sistema
+  (`default_ai_provider`) e l'ordine di risoluzione — override di struttura,
+  globale `default_*`, chiave storica senza prefisso, predefinito — stanno in un
+  modulo solo. Un override salvato come stringa vuota vale come assente, quindi
+  svuotare un campo nell'interfaccia riporta la struttura al valore globale, e
+  creare una struttura non scrive piu' alcuna riga AI: una riga copiata sarebbe
+  stata un override, e avrebbe inchiodato la struttura ai valori del giorno in
+  cui e' nata.
+- **Traffico fermato durante ripristino e azzeramento (A07).** `manutenzione_globale.py`
+  conta i lavori in corso, li drena a tempo e nega l'operazione se il traffico
+  non si ferma; le richieste nuove ricevono 503 con `Retry-After`.
+- **Archivio di ripristino completo e prova di restore (M12).** Un solo ZIP con
+  database, `uploads/`, configurazione, manifest SHA-256 e istruzioni, piu' la
+  verifica che vale come prova di ripristino documentata.
+- **Validazione di dominio condivisa (M14).** `validazione_dominio.py` applica ai
+  dati estratti dall'AI le stesse regole del form; una riga incoerente viene
+  respinta con il motivo invece di essere normalizzata in silenzio.
+- **Scritture multi-tabella in transazione (M03).** `models.transazione()`, con
+  rimozione compensativa dei file gia' copiati quando la transazione torna
+  indietro.
+- **Tetto alle analisi AI (M07).** `coda_import.py` limita le analisi
+  contemporanee, globali e per struttura; i due tetti sono politica di sistema e
+  si leggono solo dal config globale.
+- **Database che non dichiara la propria versione (B05).** Con `PRAGMA
+  user_version = 0` ogni strumento deve dedurre la versione dalla forma delle
+  tabelle, ed e' cosi' che un file gia' aggiornato si e' fatto riconoscere come
+  v1.1 con nove migrazioni pendenti. `manutenzione.py diagnosi` ora lo dice, con
+  il rimedio: backup verificato, poi un avvio del programma o `python
+  manutenzione.py migra`, infine di nuovo la diagnosi. Il controllo tace quando
+  ci sono migrazioni pendenti, che sono gia' un errore a se'. Nessuna scrittura
+  automatica di `user_version`.
+
+### Manutenzione
+- **Dipendenze riproducibili (B03).** `requirements.txt` dichiarava solo limiti
+  inferiori: un'installazione fatta oggi poteva risolvere versioni mai provate,
+  major comprese. Ora ogni dipendenza diretta ha un minimo e un massimo, e
+  `requirements.lock.txt` blocca le 44 versioni — indirette comprese — su cui la
+  suite e' verde. In esercizio si installa dal lock. Il file lo genera
+  `aggiorna_lock.py` (`--verifica` esce 1 se e' disallineato), e
+  `.github/workflows/dipendenze.yml` installa dal lock, esegue la suite e passa
+  `pip-audit` sulle versioni bloccate ogni lunedi': le CVE si valutano, non si
+  aggiornano alla cieca su un prodotto installato in ospedale.
+
+### Test
+`tests/test_allegati.py` (27), `tests/test_asset_locali.py` (21),
+`tests/test_dipendenze.py` (6), `tests/test_versione_schema.py` (9), oltre ai
+test aggiunti con le voci precedenti.
+
+---
+
 ## [2.8.2] - 2026-08-28
 
 Quattro difetti rimasti aperti dopo l'audit del 28/08: l'indirizzo del server AI

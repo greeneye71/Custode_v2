@@ -46,8 +46,8 @@ MedInventory è un'applicazione web per la gestione del parco *apparecchi elettr
 git clone <url-repo> MedInventory
 cd MedInventory
 
-# 2. Installa le dipendenze Python
-pip install -r requirements.txt
+# 2. Installa le dipendenze Python (in esercizio: le versioni provate)
+pip install -r requirements.lock.txt
 
 # 3. Crea la configurazione locale (personalizzare prima dell'avvio)
 cp config.local.example.json config.local.json
