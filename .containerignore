@@ -1,0 +1,38 @@
+# Stato e segreti dell'installazione: mai nell'immagine.
+config.json
+config.local.json
+config.json.bak_*
+data/
+uploads/
+backups/
+logs/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Sviluppo
+.git/
+.gitignore
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.claude/
+.worktrees/
+.superpowers/
+.idea/
+.vscode/
+tests/
+docs/
+migliorie/
+AUDIT_*.md
+Cartel1.xlsx
+NDH6SA~M
+*.tmp
+*.log
+
+# Solo Windows
+launcher.pyw
+*.bat
