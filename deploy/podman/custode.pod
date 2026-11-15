@@ -1,0 +1,11 @@
+[Unit]
+Description=Pod Custode (web, tunnel e proxy TLS per la LAN)
+
+[Pod]
+PodName=custode
+# Unica porta pubblicata: il proxy TLS. L'app ascolta su 127.0.0.1:5000
+# dentro il pod e da fuori non si raggiunge.
+PublishPort=443:443
+
+[Install]
+WantedBy=default.target
