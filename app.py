@@ -711,6 +711,20 @@ def create_app():
     def health():
         return {'status': 'ok', 'app': config.get('app_name', 'MedInventory')}
 
+    @app.route('/health/ready')
+    def health_ready():
+        # Prontezza per HealthCmd del container: il database si apre e
+        # risponde. Nessuna autenticazione e nessun dettaglio nella risposta;
+        # la causa va solo nel log.
+        import models
+        try:
+            models.get_db().execute('SELECT 1').fetchone()
+        except Exception as e:
+            logging.getLogger('medinventory').warning(
+                f'/health/ready: database non pronto: {e}')
+            return {'status': 'errore'}, 503
+        return {'status': 'ok'}
+
     # ---------------------------------------------------------------------------
     # Serve uploaded files
     # ---------------------------------------------------------------------------
