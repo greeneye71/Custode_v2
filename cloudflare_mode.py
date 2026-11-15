@@ -33,9 +33,10 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CONFIG_LOCAL   = os.path.join(BASE_DIR, 'config.local.json')
-CONFIG_EXAMPLE = os.path.join(BASE_DIR, 'config.local.example.json')
+import percorsi
+
+CONFIG_LOCAL   = percorsi.percorso('config.local.json')
+CONFIG_EXAMPLE = percorsi.modello('config.local.example.json')
 
 # Percorsi standard del file di configurazione cloudflared
 _CF_CONFIG_PATHS = [

@@ -20,6 +20,8 @@ app_dir = os.path.dirname(os.path.abspath(__file__))
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
 
+import percorsi
+
 from app import create_app
 
 
@@ -71,7 +73,7 @@ def main():
     config = app.config['APP_CONFIG']
 
     # Setup logging
-    log_dir = os.path.join(app_dir, 'logs')
+    log_dir = percorsi.percorso('logs')
     setup_logging(log_dir)
 
     logger = logging.getLogger('medinventory')

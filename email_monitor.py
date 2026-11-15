@@ -124,6 +124,8 @@ def check_emails_for_division(email_cfg, app_config, db_path):
         # il resto: uploads/email/ era fuori dal perimetro del tenant, e
         # /uploads/<path> isola soltanto i percorsi che iniziano per strutture/.
         from models import upload_subdir as _upload_subdir
+        # Gli upload sono <cartella del db>/../uploads: vale finche' database_path e'
+        # data/<file>, cosa che deploy/podman/config_container.py garantisce nel container.
         _uploads_base = os.path.normpath(
             os.path.join(os.path.dirname(os.path.abspath(db_path)), '..', 'uploads')
         )

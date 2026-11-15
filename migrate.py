@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import os
+import percorsi
 import re
 import shutil
 import sqlite3
@@ -113,7 +114,7 @@ def run_sql(conn, sql, desc=''):
 # ---------------------------------------------------------------------------
 
 def load_db_path(explicit_path=None):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = percorsi.radice()
 
     if explicit_path:
         return os.path.abspath(explicit_path)
@@ -136,7 +137,7 @@ def load_db_path(explicit_path=None):
     return os.path.join(base_dir, 'data', 'database.sqlite')
 
 def load_config():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = percorsi.radice()
     for cfg_name in ('config.local.json', 'config.json'):
         cfg_path = os.path.join(base_dir, cfg_name)
         if os.path.exists(cfg_path):
@@ -400,7 +401,7 @@ def _apply_v1_3(conn, config):
         ok("  colonna verbale_path aggiunta a manutenzioni")
 
         # Crea cartella uploads/verbali
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = percorsi.radice()
         verbali_dir = os.path.join(base_dir, 'uploads', 'verbali')
         os.makedirs(verbali_dir, exist_ok=True)
         ok(f'  directory uploads/verbali creata')
@@ -455,7 +456,7 @@ CREATE INDEX IF NOT EXISTS idx_import_history_created ON import_history(created_
     conn.commit()
     ok("  import_history aggiornato con 'verbale_manutenzione'")
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = percorsi.radice()
     for subdir in ['import', 'verbali', 'verifiche']:
         path = os.path.join(base_dir, 'uploads', subdir)
         os.makedirs(path, exist_ok=True)
@@ -867,7 +868,7 @@ def _apply_v2_0(conn, config):
     conn.commit()
 
     # Config locale
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = percorsi.radice()
     local_cfg_path = os.path.join(base_dir, 'config.local.json')
     if os.path.exists(local_cfg_path):
         with open(local_cfg_path, 'r', encoding='utf-8') as f:

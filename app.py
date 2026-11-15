@@ -10,6 +10,7 @@ import os
 import json
 import shutil
 import secrets
+import percorsi
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
@@ -61,13 +62,12 @@ def _setup_logging(log_dir):
 # Configuration helpers
 # ---------------------------------------------------------------------------
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_setup_logging(os.path.join(_BASE_DIR, 'logs'))
+_setup_logging(percorsi.percorso('logs'))
 
-CONFIG_PATH         = os.path.join(_BASE_DIR, 'config.json')
-LOCAL_CONFIG_PATH   = os.path.join(_BASE_DIR, 'config.local.json')
-LOCAL_EXAMPLE_PATH  = os.path.join(_BASE_DIR, 'config.local.example.json')
-EXAMPLE_CONFIG_PATH = os.path.join(_BASE_DIR, 'config.example.json')
+CONFIG_PATH         = percorsi.percorso('config.json')
+LOCAL_CONFIG_PATH   = percorsi.percorso('config.local.json')
+LOCAL_EXAMPLE_PATH  = percorsi.modello('config.local.example.json')
+EXAMPLE_CONFIG_PATH = percorsi.modello('config.example.json')
 
 # Campi che appartengono alla configurazione locale (mai sovrascritta dagli aggiornamenti).
 # config.json contiene solo i default di sistema (version, paths).
@@ -192,7 +192,7 @@ def check_version_update(config):
     config['version'] = APP_VERSION
 
     # Scrivi file sentinella per notificare il primo admin al login
-    notice_path = os.path.join(_BASE_DIR, 'data', '.version_notice')
+    notice_path = percorsi.percorso('data', '.version_notice')
     os.makedirs(os.path.dirname(notice_path), exist_ok=True)
     with open(notice_path, 'w', encoding='utf-8') as f:
         json.dump({
@@ -227,15 +227,15 @@ def create_app():
     app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 ora
 
     app.config['DATABASE_PATH'] = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        percorsi.radice(),
         config.get('database_path', 'data/database.sqlite')
     )
     app.config['UPLOADS_PATH'] = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        percorsi.radice(),
         config.get('uploads_path', 'uploads')
     )
     app.config['BACKUPS_PATH'] = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
+        percorsi.radice(),
         config.get('backups_path', 'backups')
     )
     app.config['APP_CONFIG'] = config

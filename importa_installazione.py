@@ -24,13 +24,12 @@ prendono un default, colonne sconosciute vengono segnalate e ignorate.
 import argparse
 import json
 import os
+import percorsi
 import shutil
 import sqlite3
 import sys
 import tempfile
 from datetime import datetime
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Forza UTF-8 su Windows (nomi di struttura e messaggi contengono accenti)
 if hasattr(sys.stdout, 'reconfigure'):
@@ -1410,7 +1409,7 @@ Esempi:
                    help="Nome della struttura da creare (default: dedotto dal config sorgente)")
     g.add_argument('--in-struttura', type=int, metavar='ID',
                    help="Importa dentro una struttura già esistente invece di crearne una")
-    g.add_argument('--target', metavar='DIR', default=BASE_DIR,
+    g.add_argument('--target', metavar='DIR', default=percorsi.radice(),
                    help="Installazione di destinazione (default: questa)")
 
     g = p.add_argument_group('cosa importare')

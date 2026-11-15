@@ -21,8 +21,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-CONFIG_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.local.json')
-CONFIG_EXAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.local.example.json')
+import percorsi
+
+CONFIG_LOCAL = percorsi.percorso('config.local.json')
+CONFIG_EXAMPLE = percorsi.modello('config.local.example.json')
 
 
 def leggi_config():

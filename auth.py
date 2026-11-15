@@ -6,6 +6,7 @@ Handles login, logout, password change, session management, and access decorator
 import json
 import logging
 import os
+import percorsi
 import uuid
 from functools import wraps
 
@@ -56,9 +57,7 @@ def _check_version_notice():
     """Se esiste il file sentinella di aggiornamento versione, mostra un flash
     informativo all'admin e poi elimina il file (notifica una volta sola).
     """
-    notice_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'data', '.version_notice'
-    )
+    notice_path = percorsi.percorso('data', '.version_notice')
     if not os.path.exists(notice_path):
         return
     try:

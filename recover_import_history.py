@@ -15,6 +15,7 @@ Eseguire una sola volta:
 import sqlite3
 import sys
 import os
+import percorsi
 import json
 
 # Su Windows la console non è UTF-8: senza questo, stampare accenti o
@@ -160,8 +161,9 @@ def recover(db_path):
 
 
 if __name__ == '__main__':
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+    config_path = percorsi.percorso('config.json')
     with open(config_path, 'r') as f:
         config = json.load(f)
-    db_path = config.get('database_path', 'data/database.sqlite')
+    db_path = os.path.join(percorsi.radice(),
+                           config.get('database_path', 'data/database.sqlite'))
     recover(db_path)
