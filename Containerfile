@@ -17,7 +17,8 @@ RUN grep -vi '^pystray==' /tmp/requirements.lock.txt > /tmp/lock-container.txt \
     && rm /tmp/requirements.lock.txt /tmp/lock-container.txt
 
 COPY . /app
-RUN mkdir -p /stato
+RUN chmod +x deploy/podman/custode \
+    && mkdir -p /stato
 
 # Tutto lo stato modificabile vive qui (percorsi.py): volume e backup del Quadlet.
 ENV MEDINVENTORY_RADICE=/stato \

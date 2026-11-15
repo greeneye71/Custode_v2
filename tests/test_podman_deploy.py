@@ -31,11 +31,6 @@ def _leggi(relativo: str) -> str:
     return (RADICE / relativo).read_text(encoding="utf-8")
 
 
-def _bash(*args, **kwargs):
-    """Esegue `bash <args>`; salta il test se non c'è una bash vera."""
-    if BASH is None:
-        pytest.skip("bash non disponibile")
-    return subprocess.run([BASH, *args], capture_output=True, text=True, **kwargs)
 
 
 def test_containerfile_parte_da_fedora_e_non_fissa_il_comando():
@@ -237,3 +232,142 @@ def test_timer_diagnosi_giornaliero():
     assert "Persistent=true" in righe
     assert "WantedBy=timers.target" in righe
     assert not [r for r in righe if "custode-web" in r]
+
+
+# --- Task 8: wrapper `custode` -------------------------------------------------
+
+WRAPPER = PODMAN + "custode"
+
+SCRIPT_D7 = (
+    "manutenzione.py", "migrate.py", "toggle_modalita.py", "pulisci_uploads.py",
+    "importa_installazione.py", "crea_superadmin.py", "seed.py",
+    "cloudflare_mode.py", "recover_import_history.py",
+)
+
+
+def _bash(script, chiamata, *argomenti):
+    """Carica uno script con --solo-funzioni e chiama una sua funzione pura.
+
+    Gli argomenti arrivano come $1, $2...: mai interpolati nel testo del comando.
+    Percorso completo di bash: su Windows "bash" nudo risolve lo stub WSL.
+    """
+    import os
+    ambiente = dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
+    return subprocess.run(
+        [BASH, "-c", f". ./{script} --solo-funzioni; {chiamata}", "_", *argomenti],
+        capture_output=True, text=True, cwd=RADICE, env=ambiente,
+    )
+
+
+def _corpo(testo, nome):
+    """Corpo di una funzione bash scritta come `nome() {` ... `}` a inizio riga."""
+    trovato = re.search(rf"^{nome}\(\) \{{\n(.*?)^\}}", testo, re.S | re.M)
+    assert trovato, f"funzione {nome} non trovata"
+    return trovato.group(1)
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+def test_wrapper_e_bash_valido():
+    subprocess.run([BASH, "-n", WRAPPER], check=True, cwd=RADICE)
+
+
+def test_wrapper_lista_chiusa_come_d7():
+    testo = _leggi(WRAPPER)
+    riga = re.search(r'^SCRIPT_AMMESSI="([^"]*)"$', testo, re.M)
+    assert riga, "SCRIPT_AMMESSI deve stare su una riga sola"
+    assert sorted(riga.group(1).split()) == sorted(SCRIPT_D7)
+    for nome in SCRIPT_D7:
+        assert (RADICE / nome).is_file(), f"{nome} non esiste nel repository"
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("nome", SCRIPT_D7)
+def test_wrapper_script_ammesso_accetta(nome):
+    assert _bash(WRAPPER, 'script_ammesso "$1"', nome).returncode == 0
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("nome", [
+    "app.py", "run_production.py", "../manutenzione.py", "/app/manutenzione.py",
+    "manutenzione", "", "manutenzione.py; id", "MANUTENZIONE.PY",
+])
+def test_wrapper_script_ammesso_rifiuta(nome):
+    # 1 esatto: 127 vorrebbe dire "funzione non definita", non "rifiutato".
+    assert _bash(WRAPPER, 'script_ammesso "$1"', nome).returncode == 1
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("argomenti, riavvia", [
+    (["toggle_modalita.py"], True),
+    (["toggle_modalita.py", "--single"], True),
+    (["toggle_modalita.py", "--multi"], True),
+    (["toggle_modalita.py", "--status"], False),
+    (["cloudflare_mode.py", "--on"], True),
+    (["cloudflare_mode.py", "--off"], True),
+    (["cloudflare_mode.py", "--status"], False),
+    (["cloudflare_mode.py", "--test"], False),
+    (["cloudflare_mode.py", "--test", "--hostname", "custode.example.it"], False),
+    (["manutenzione.py", "stato"], False),
+    (["migrate.py", "--yes"], False),
+])
+def test_wrapper_richiede_riavvio(argomenti, riavvia):
+    esito = _bash(WRAPPER, 'richiede_riavvio "$@"', *argomenti)
+    assert esito.returncode == (0 if riavvia else 1), esito.stderr
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+def test_esterna_non_rietichetta_mai():
+    esito = _bash(WRAPPER, 'argomenti_esterna "$1"', "/srv/altra-installazione")
+    assert esito.returncode == 0, esito.stderr
+    argomenti = esito.stdout.splitlines()
+    assert argomenti[:2] == ["--security-opt", "label=disable"]
+    montaggi = [argomenti[i + 1] for i, a in enumerate(argomenti) if a == "-v"]
+    assert montaggi == [
+        "custode-stato:/stato",
+        "/var/backups/custode:/stato/backups",
+        "/srv/altra-installazione:/esterna:ro",
+    ]
+    for montaggio in montaggi:
+        opzioni = ",".join(montaggio.split(":")[2:]).split(",")
+        assert "z" not in opzioni and "Z" not in opzioni, montaggio
+    # E nel sorgente: il solo relabel del wrapper è quello di `fermo`, a pod fermo.
+    testo = _leggi(WRAPPER)
+    assert ":z" not in testo
+    assert testo.count(":Z") == 1
+    assert ":Z" in _corpo(testo, "esegui_a_parte")
+    assert "label=disable" not in _corpo(testo, "esegui_a_parte")
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("cartella", ["relativa/dir", "/srv/a:Z", "/srv/a,b", "", "/"])
+def test_wrapper_esterna_rifiuta_cartelle_ambigue(cartella):
+    # ":" e "," aggiungerebbero opzioni al montaggio: è da lì che entrerebbe un relabel.
+    esito = _bash(WRAPPER, 'argomenti_esterna "$1"', cartella)
+    assert esito.returncode == 1 and esito.stdout == ""
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("argomenti, scrive", [
+    (["importa_installazione.py", "/esterna"], True),
+    (["importa_installazione.py", "/esterna", "--struttura-nome", "Clinica"], True),
+    (["importa_installazione.py", "/esterna", "--dry-run"], False),
+    (["importa_installazione.py", "/esterna", "--struttura-nome", "Clinica", "--dry-run"], False),
+    (["manutenzione.py", "--db", "/esterna/data/database.sqlite", "stato"], False),
+])
+def test_wrapper_esterna_scrive(argomenti, scrive):
+    esito = _bash(WRAPPER, 'esterna_scrive "$@"', *argomenti)
+    assert esito.returncode == (0 if scrive else 1), esito.stderr
+
+
+def test_wrapper_non_nomina_la_ca_e_non_traccia():
+    testo = _leggi(WRAPPER)
+    for vietato in ("ca.key", "minventory-ca", "set -x", "xtrace", "TUNNEL_TOKEN"):
+        assert vietato not in testo, vietato
+
+
+def test_wrapper_riaccende_sempre_il_pod():
+    corpo = _corpo(_leggi(WRAPPER), "con_pod_fermo")
+    # Il trap si arma prima di fermare: se anche lo stop fallisce, il pod riparte.
+    assert corpo.index("trap riaccendi_pod EXIT") < corpo.index('stop "$POD_SERVICE"')
+    assert '"$@" || rc=$?' in corpo
+    assert 'return "$rc"' in corpo

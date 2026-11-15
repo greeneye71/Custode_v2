@@ -1,0 +1,3 @@
+# Script bash del deploy in container: sempre LF, anche su Windows.
+deploy/podman/custode   text eol=lf
+deploy/podman/*.sh      text eol=lf

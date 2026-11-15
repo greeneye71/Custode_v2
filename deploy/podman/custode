@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+# custode - esegue le CLI di manutenzione di MedInventory dentro il container.
+#
+#   sudo custode <script.py> [argomenti]        nel container acceso (podman exec)
+#   sudo custode manutenzione [argomenti]       scorciatoia per manutenzione.py
+#   sudo custode fermo <script.py> [argomenti]  a pod fermo; il pod riparte sempre
+#   sudo custode esterna <cartella> <script.py> [argomenti]
+#                                               con un'altra installazione montata
+#                                               in sola lettura, mai rietichettata
+#
+# Con --solo-funzioni come primo argomento definisce le funzioni e termina:
+# serve ai test, che chiamano le funzioni pure senza Podman.
+set -eu
+
+APP_USER=custode
+POD_SERVICE=custode-pod.service
+WEB=custode-web
+IMAGE=localhost/custode:latest
+VOLUME_STATO=custode-stato
+BACKUP_DIR=/var/backups/custode
+PUNTO_ESTERNA=/esterna
+SCRIPT_AMMESSI="manutenzione.py migrate.py toggle_modalita.py pulisci_uploads.py importa_installazione.py crea_superadmin.py seed.py cloudflare_mode.py recover_import_history.py"
+SCRIPT_ESTERNA="importa_installazione.py manutenzione.py"
+MONTAGGI=()
+
+err() {
+    printf 'ERRORE: %s\n' "$*" >&2
+}
+
+uso() {
+    cat >&2 <<EOF
+Uso:
+  sudo custode <script.py> [argomenti]         nel container acceso
+  sudo custode manutenzione [argomenti]        = manutenzione.py
+  sudo custode fermo <script.py> [argomenti]   a pod fermo (ripristino, migrazione)
+  sudo custode esterna <cartella> <script.py> [argomenti]
+                                               un'altra installazione in sola lettura
+
+Script ammessi: $SCRIPT_AMMESSI
+Con 'esterna':  $SCRIPT_ESTERNA
+EOF
+}
+
+as_custode() {
+    (cd / && runuser -u "$APP_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$APP_USER")" "$@")
+}
+
+user_systemctl() {
+    systemctl --user -M "$APP_USER@" "$@"
+}
+
+# --- funzioni pure (sotto test) -------------------------------------------------
+
+in_lista() {
+    # in_lista <nome> <lista separata da spazi>: confronto esatto, parola per parola.
+    local nome=$1 voce
+    for voce in $2; do
+        if [ "$nome" = "$voce" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+script_ammesso() {
+    # Lista chiusa (D7). Confronto esatto: niente percorsi, niente maiuscole,
+    # niente nome senza estensione.
+    in_lista "${1:-}" "$SCRIPT_AMMESSI"
+}
+
+nome_script() {
+    # L'unica scorciatoia: "manutenzione" sta per manutenzione.py.
+    if [ "${1:-}" = "manutenzione" ]; then
+        printf 'manutenzione.py\n'
+    else
+        printf '%s\n' "${1:-}"
+    fi
+}
+
+richiede_riavvio() {
+    # 0 se dopo lo script la configurazione letta all'avvio è cambiata.
+    local script=${1:-} argomento
+    if [ $# -gt 0 ]; then
+        shift
+    fi
+    case "$script" in
+        toggle_modalita.py)
+            for argomento in "$@"; do
+                if [ "$argomento" = "--status" ]; then
+                    return 1
+                fi
+            done
+            return 0
+            ;;
+        cloudflare_mode.py)
+            for argomento in "$@"; do
+                case "$argomento" in
+                    --on|--off) return 0 ;;
+                esac
+            done
+            return 1
+            ;;
+    esac
+    return 1
+}
+
+esterna_scrive() {
+    # 0 se l'esecuzione scrive nel database di Custode: solo l'importazione vera.
+    local script=${1:-} argomento
+    if [ "$script" != "importa_installazione.py" ]; then
+        return 1
+    fi
+    shift
+    for argomento in "$@"; do
+        if [ "$argomento" = "--dry-run" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+argomenti_esterna() {
+    # Argomenti di `podman run` per montare un'installazione altrui, uno per riga.
+    # Etichette disattivate per l'intero container e nessun suffisso di relabel
+    # su nessun montaggio: la cartella altrui non va rietichettata, e nemmeno la
+    # cartella dei backup, che custode-web potrebbe avere in uso.
+    local cartella=${1:-}
+    case "$cartella" in
+        /?*) ;;
+        *)
+            err "la cartella deve essere un percorso assoluto diverso da /"
+            return 1
+            ;;
+    esac
+    case "$cartella" in
+        *:*|*,*|*$'\n'*)
+            err "la cartella non può contenere ':' ',' o un a capo: finirebbero nelle opzioni del montaggio"
+            return 1
+            ;;
+    esac
+    printf '%s\n' \
+        --security-opt label=disable \
+        -v "$VOLUME_STATO:/stato" \
+        -v "$BACKUP_DIR:/stato/backups" \
+        -v "$cartella:$PUNTO_ESTERNA:ro"
+}
+
+# --- esecuzione -----------------------------------------------------------------
+
+opzione_tty() {
+    # -t solo con un terminale vero: sotto cron o in una pipe podman rifiuterebbe.
+    if [ -t 0 ] && [ -t 1 ]; then
+        printf -- '-t\n'
+    fi
+}
+
+richiedi_ammesso() {
+    if ! script_ammesso "$1"; then
+        err "script non ammesso: '$1'"
+        uso
+        return 2
+    fi
+}
+
+riaccendi_pod() {
+    echo "Riavvio $POD_SERVICE..." >&2
+    user_systemctl start "$POD_SERVICE" \
+        || err "il pod non è ripartito: sudo systemctl --user -M $APP_USER@ status $POD_SERVICE"
+}
+
+con_pod_fermo() {
+    # Esegue "$@" a pod fermo e lo riaccende sempre: se "$@" fallisce, se lo stop
+    # fallisce, se arriva un segnale. Restituisce il codice di uscita di "$@".
+    local rc=0
+    trap riaccendi_pod EXIT
+    trap 'exit 130' INT TERM
+    echo "Fermo $POD_SERVICE..." >&2
+    user_systemctl stop "$POD_SERVICE"
+    "$@" || rc=$?
+    return "$rc"
+}
+
+esegui_a_parte() {
+    # Stessi volumi di custode-web. A pod fermo il relabel privato della cartella
+    # dei backup non toglie l'accesso a nessuno; al riavvio custode-web la riprende.
+    local script=$1
+    shift
+    # shellcheck disable=SC2046
+    as_custode podman run --rm -i $(opzione_tty) \
+        -v "$VOLUME_STATO:/stato" \
+        -v "$BACKUP_DIR:/stato/backups:Z" \
+        -w /app "$IMAGE" python3 "/app/$script" "$@"
+}
+
+esegui_esterna() {
+    local script=$1
+    shift
+    # shellcheck disable=SC2046
+    as_custode podman run --rm -i $(opzione_tty) "${MONTAGGI[@]}" \
+        -w /app "$IMAGE" python3 "/app/$script" "$@"
+}
+
+cmd_acceso() {
+    local script rc=0
+    script=$(nome_script "${1:-}")
+    shift
+    richiedi_ammesso "$script"
+    # shellcheck disable=SC2046
+    as_custode podman exec -i $(opzione_tty) -w /app "$WEB" python3 "/app/$script" "$@" || rc=$?
+    if [ "$rc" -eq 0 ] && richiede_riavvio "$script" "$@"; then
+        echo "La modifica vale dal prossimo avvio: riavvio $POD_SERVICE..." >&2
+        user_systemctl restart "$POD_SERVICE"
+    fi
+    return "$rc"
+}
+
+cmd_fermo() {
+    local script
+    if [ $# -eq 0 ]; then
+        uso
+        return 2
+    fi
+    script=$(nome_script "$1")
+    shift
+    richiedi_ammesso "$script"
+    con_pod_fermo esegui_a_parte "$script" "$@"
+}
+
+cmd_esterna() {
+    local cartella script elenco
+    if [ $# -lt 2 ]; then
+        uso
+        return 2
+    fi
+    cartella=$1
+    script=$(nome_script "$2")
+    shift 2
+    if ! in_lista "$script" "$SCRIPT_ESTERNA"; then
+        err "con 'esterna' si usano solo: $SCRIPT_ESTERNA"
+        return 2
+    fi
+    if [ ! -d "$cartella" ]; then
+        err "cartella inesistente: $cartella"
+        return 1
+    fi
+    cartella=$(cd "$cartella" && pwd -P)
+    if ! as_custode test -r "$cartella" -a -x "$cartella"; then
+        err "l'utente $APP_USER non può leggere $cartella."
+        err "Dagli la sola lettura (setfacl -R -m u:$APP_USER:rX \"$cartella\") oppure,"
+        err "per una migrazione completa, usa: configura.sh importa"
+        return 1
+    fi
+    elenco=$(argomenti_esterna "$cartella")
+    mapfile -t MONTAGGI <<<"$elenco"
+    # Il percorso interno lo aggiunge il wrapper: l'operatore non lo scrive mai.
+    case "$script" in
+        importa_installazione.py) set -- "$PUNTO_ESTERNA" "$@" ;;
+        manutenzione.py)          set -- --db "$PUNTO_ESTERNA/data/database.sqlite" "$@" ;;
+    esac
+    if esterna_scrive "$script" "$@"; then
+        con_pod_fermo esegui_esterna "$script" "$@"
+    else
+        esegui_esterna "$script" "$@"
+    fi
+}
+
+principale() {
+    case "${1:-}" in
+        ""|-h|--help|aiuto)
+            uso
+            return 2
+            ;;
+        fermo)
+            shift
+            cmd_fermo "$@"
+            ;;
+        esterna)
+            shift
+            cmd_esterna "$@"
+            ;;
+        *)
+            cmd_acceso "$@"
+            ;;
+    esac
+}
+
+if [ "${1:-}" = "--solo-funzioni" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+    err "Esegui con: sudo custode ..."
+    exit 1
+fi
+
+principale "$@"
