@@ -19,7 +19,7 @@ def _trova_bash():
     if git_bash.exists():
         return str(git_bash)
     trovata = shutil.which("bash")
-    if trovata and not re.search(r"[\/](System32|WindowsApps)[\/]", trovata, re.I):
+    if trovata and not re.search(r"[\\/](System32|WindowsApps)[\\/]", trovata, re.I):
         return trovata
     return None
 
