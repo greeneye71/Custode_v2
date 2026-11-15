@@ -147,12 +147,10 @@ argomenti_esterna() {
 
 # --- esecuzione -----------------------------------------------------------------
 
-opzione_tty() {
-    # -t solo con un terminale vero: sotto cron o in una pipe podman rifiuterebbe.
-    if [ -t 0 ] && [ -t 1 ]; then
-        printf -- '-t\n'
-    fi
-}
+# -t solo con un terminale vero: sotto cron o in una pipe podman rifiuterebbe.
+# Si decide una volta in principale(), fuori da ogni $(...): li' fd 1 e' la pipe
+# di cattura e il test darebbe sempre falso, lasciando getpass senza pty.
+TTY=()
 
 richiedi_ammesso() {
     if ! script_ammesso "$1"; then
@@ -185,8 +183,7 @@ esegui_a_parte() {
     # dei backup non toglie l'accesso a nessuno; al riavvio custode-web la riprende.
     local script=$1
     shift
-    # shellcheck disable=SC2046
-    as_custode podman run --rm -i $(opzione_tty) \
+    as_custode podman run --rm -i "${TTY[@]}" \
         -v "$VOLUME_STATO:/stato" \
         -v "$BACKUP_DIR:/stato/backups:Z" \
         -w /app "$IMAGE" python3 "/app/$script" "$@"
@@ -195,8 +192,7 @@ esegui_a_parte() {
 esegui_esterna() {
     local script=$1
     shift
-    # shellcheck disable=SC2046
-    as_custode podman run --rm -i $(opzione_tty) "${MONTAGGI[@]}" \
+    as_custode podman run --rm -i "${TTY[@]}" "${MONTAGGI[@]}" \
         -w /app "$IMAGE" python3 "/app/$script" "$@"
 }
 
@@ -205,8 +201,7 @@ cmd_acceso() {
     script=$(nome_script "${1:-}")
     shift
     richiedi_ammesso "$script"
-    # shellcheck disable=SC2046
-    as_custode podman exec -i $(opzione_tty) -w /app "$WEB" python3 "/app/$script" "$@" || rc=$?
+    as_custode podman exec -i "${TTY[@]}" -w /app "$WEB" python3 "/app/$script" "$@" || rc=$?
     if [ "$rc" -eq 0 ] && richiede_riavvio "$script" "$@"; then
         echo "La modifica vale dal prossimo avvio: riavvio $POD_SERVICE..." >&2
         user_systemctl restart "$POD_SERVICE"
@@ -265,6 +260,9 @@ cmd_esterna() {
 }
 
 principale() {
+    if [ -t 0 ] && [ -t 1 ]; then
+        TTY=(-t)
+    fi
     case "${1:-}" in
         ""|-h|--help|aiuto)
             uso

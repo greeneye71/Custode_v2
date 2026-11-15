@@ -371,3 +371,23 @@ def test_wrapper_riaccende_sempre_il_pod():
     assert corpo.index("trap riaccendi_pod EXIT") < corpo.index('stop "$POD_SERVICE"')
     assert '"$@" || rc=$?' in corpo
     assert 'return "$rc"' in corpo
+
+
+def test_wrapper_tty_deciso_fuori_dalla_sostituzione_di_comando():
+    # In $(...) fd 1 e' la pipe di cattura: [ -t 1 ] sarebbe sempre falso e
+    # getpass (utenti azzera, menu) girerebbe senza pty, facendo eco alla password.
+    testo = _leggi(WRAPPER)
+    assert "opzione_tty" not in testo
+    assert "$(opzione_tty" not in testo
+    assert "TTY=(-t)" in testo
+    assert '"${TTY[@]}"' in testo
+    assert "shellcheck disable=SC2046" not in testo
+
+
+def test_wrapper_tty_vuoto_senza_terminale():
+    # Caricato con --solo-funzioni, fuori da un terminale, TTY e' un array vuoto
+    # e la sua espansione non rompe set -u.
+    esito = _bash(WRAPPER, 'echo "n=${#TTY[@]}"; echo x "${TTY[@]}" y')
+    assert esito.returncode == 0, esito.stderr
+    assert "n=0" in esito.stdout
+    assert "x y" in esito.stdout
