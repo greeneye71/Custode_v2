@@ -1176,9 +1176,16 @@ def test_colonne_file_import_include_gli_impianti():
 def test_versione_allineata():
     import json
     with open('config.example.json', encoding='utf-8') as f:
-        assert json.load(f)['version'] == '2.8.4'
+        assert json.load(f)['version'] == '2.9.0'
     import app as modulo_app
-    assert modulo_app.APP_VERSION == '2.8.4'
+    assert modulo_app.APP_VERSION == '2.9.0'
+
+
+def test_la_2_9_0_non_alza_la_versione_dello_schema():
+    """La 2.9.0 cambia il modo di installare, non il database: un numero
+    piu' alto dichiarerebbe tabelle che non esistono."""
+    from schema_impianti import SCHEMA_VERSION_IMPIANTI
+    assert SCHEMA_VERSION_IMPIANTI == 271
 
 
 def test_rimozione_struttura_con_impianti_firmati(app, ambiente):

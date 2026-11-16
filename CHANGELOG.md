@@ -6,6 +6,71 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [2.9.0] - 2026-11-15
+
+Installazione in container. Su Fedora MedInventory può girare in un pod Podman
+rootless gestito da systemd tramite Quadlet: applicazione, nginx con TLS per la
+rete locale e tunnel Cloudflare ripartono da soli dopo un riavvio. Le
+installazioni esistenti (Windows, servizio systemd) continuano a funzionare
+senza modifiche: nulla di ciò che segue è obbligatorio per chi non migra.
+Nessun cambio di schema - `PRAGMA user_version` resta 271.
+
+### Aggiunte
+
+- **Stato separato dai sorgenti.** Il nuovo modulo `percorsi.py` è l'unico
+  punto che decide dove stanno database, allegati, backup e configurazione.
+  Con la variabile `MEDINVENTORY_RADICE` lo stato vive fuori dalla cartella
+  del codice; senza, tutto resta dov'era.
+- **Immagine e Quadlet.** `Containerfile` e `deploy/podman/`: pod `custode`
+  con `custode-web`, `custode-lan` e `custode-tunnel`, volume `custode-stato`.
+  L'unica porta pubblicata è la 443; l'applicazione ascolta solo dentro il pod.
+- **`/health/ready`.** Verifica di prontezza senza autenticazione: apre il
+  database e risponde `200` o `503`, senza esporre dati. `/api/health` resta
+  com'era.
+- **Comando `custode`.** Le CLI di manutenzione (`manutenzione.py`,
+  `migrate.py`, `importa_installazione.py` e le altre) si usano dall'host
+  attraverso un wrapper, anche ad applicazione ferma (`custode fermo`) e su
+  un'altra installazione (`custode esterna`).
+- **`configura.sh`.** Installazione, token del tunnel, certificato per la LAN,
+  importazione di un'installazione esistente, stato, aggiornamento e
+  disinstallazione da un solo script.
+- **Diagnosi periodica.** Un timer esegue `manutenzione.py diagnosi` e rende
+  visibile un esito negativo nello stato del servizio; non riaccende
+  l'applicazione quando è stata fermata apposta.
+- **`cloudflare_mode.py --test --hostname`.** Nel container la diagnostica
+  salta i controlli su cloudflared dell'host, dice dove leggere i log del
+  tunnel e prende il nome pubblico dall'opzione `--hostname`.
+
+### Sicurezza
+
+- **Token del tunnel solo come secret.** Viene chiesto con input nascosto e
+  salvato come `podman secret`: non passa dalla riga di comando, non finisce
+  in un file né nei log.
+- **Chiave della CA fuori dai container.** `ca.key` resta in
+  `/etc/pki/minventory-ca`; al container arrivano solo certificato e chiave
+  del server.
+- **Intestazioni inoltrate riscritte.** nginx sovrascrive `X-Forwarded-For`,
+  `X-Forwarded-Proto` e `X-Forwarded-Host`: un client della LAN non può
+  presentarsi con un indirizzo o uno schema scelti da lui.
+- **Effetto collaterale da conoscere.** Per aprire la 443 senza privilegi
+  l'installazione imposta `net.ipv4.ip_unprivileged_port_start=443`: su
+  quell'host qualunque utente può aprire porte da 443 in su. È descritto in
+  `docs/DEPLOYMENT.md`.
+
+### Modifiche
+
+- **Arresto pulito.** `run_production.py` gestisce `SIGTERM`: ferma lo
+  scheduler e chiude il server entro il tempo concesso da `podman stop`.
+
+### Documentazione
+
+- **`docs/DEPLOYMENT.md`.** Prima installazione, migrazione con l'ordine dei
+  passi e il rollback, certificato, log, backup, aggiornamento.
+- **`CLAUDE.md`, `AGENTS.md`.** Il server di produzione usa 8 thread, non 4
+  come era scritto.
+
+---
+
 ## [2.8.4] - 2026-08-29
 
 Dieci rilievi dell'audit del 28/08 lavorati in sequenza: la semantica delle
