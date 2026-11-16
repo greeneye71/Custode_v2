@@ -22,6 +22,7 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from flask import (Flask, g, session, redirect, url_for, render_template,
                    request, current_app, jsonify)
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf.csrf import CSRFProtect
 
@@ -204,6 +205,69 @@ def check_version_update(config):
 
 
 # ---------------------------------------------------------------------------
+# Impronta dei file statici (cache-busting)
+# ---------------------------------------------------------------------------
+
+# percorso assoluto -> (mtime_ns, dimensione, impronta). Il contenuto si rilegge
+# solo quando il file cambia data o dimensione, non a ogni url_for().
+_impronte_statici = {}
+
+
+def impronta_statico(cartella, nome):
+    """Prime 12 cifre esadecimali dello SHA-256 del file statico `nome`.
+
+    None se il nome esce dalla cartella o il file non esiste: l'URL resta
+    senza versione, e quindi senza cache lunga, invece di far fallire la
+    pagina.
+    """
+    from werkzeug.security import safe_join
+    if not cartella:
+        return None
+    percorso = safe_join(cartella, nome)
+    if not percorso:
+        return None
+    percorso = os.path.abspath(percorso)
+    try:
+        st = os.stat(percorso)
+    except OSError:
+        return None
+    if not os.path.isfile(percorso):
+        return None
+    chiave = (st.st_mtime_ns, st.st_size)
+    noto = _impronte_statici.get(percorso)
+    if noto and noto[0] == chiave:
+        return noto[1]
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(percorso, 'rb') as f:
+            for blocco in iter(lambda: f.read(65536), b''):
+                h.update(blocco)
+    except OSError:
+        return None
+    token = h.hexdigest()[:12]
+    _impronte_statici[percorso] = (chiave, token)
+    return token
+
+
+class SessioneSenzaStatici(SecureCookieSessionInterface):
+    """Non rinnova il cookie di sessione sulle risposte dei file statici.
+
+    La sessione e' permanente (auth.py), e Flask con
+    SESSION_REFRESH_EACH_REQUEST la riscrive a ogni risposta, statici compresi:
+    Set-Cookie e Vary: Cookie che impediscono a Cloudflare di mettere in cache
+    CSS e JS. Le pagine continuano a rinnovarla, quindi la scadenza scorrevole
+    resta quella di prima; uno statico non modifica mai la sessione, e se mai
+    lo facesse il salvataggio avverrebbe comunque.
+    """
+
+    def save_session(self, app, session, response):
+        if request.endpoint == 'static' and not session.modified:
+            return
+        super().save_session(app, session, response)
+
+
+# ---------------------------------------------------------------------------
 # Application factory
 # ---------------------------------------------------------------------------
 
@@ -220,6 +284,7 @@ def create_app():
 
     # Flask config
     app.secret_key = config['secret_key']
+    app.session_interface = SessioneSenzaStatici()
 
     # CSRF protection
     csrf = CSRFProtect()
@@ -399,6 +464,39 @@ def create_app():
             response.headers['Strict-Transport-Security'] = (
                 'max-age=31536000; includeSubDomains'
             )
+        return response
+
+    # ---------------------------------------------------------------------------
+    # File statici: versione nell'URL e cache lunga
+    # ---------------------------------------------------------------------------
+    # url_for('static', filename=X) produce /static/X?v=<impronta del
+    # contenuto>, senza toccare i template. Un URL versionato non cambia mai
+    # contenuto (un file modificato ha un'altra impronta, quindi un altro URL),
+    # e si puo' dichiarare immutabile per un anno: dietro il tunnel Cloudflare
+    # lo serve la cache invece di rivalidarlo con un giro fino al server.
+    #
+    # Non si usa SEND_FILE_MAX_AGE_DEFAULT ne' get_send_file_max_age: in Flask
+    # pilotano anche send_file/send_from_directory di /uploads, verbali,
+    # documenti ed export, che sono file privati di una struttura e non devono
+    # mai diventare cacheabili da un proxy condiviso.
+    @app.url_defaults
+    def versione_statici(endpoint, values):
+        if endpoint != 'static' or 'v' in values:
+            return
+        nome = values.get('filename')
+        if not nome:
+            return
+        token = impronta_statico(app.static_folder, nome)
+        if token:
+            values['v'] = token
+
+    @app.after_request
+    def cache_statici_versionati(response):
+        if (request.endpoint == 'static'
+                and response.status_code in (200, 304)
+                and request.args.get('v')):
+            response.headers['Cache-Control'] = (
+                'public, max-age=31536000, immutable')
         return response
 
     # ---------------------------------------------------------------------------

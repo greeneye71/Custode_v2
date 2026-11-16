@@ -6,6 +6,32 @@ Versioning basato su [Semantic Versioning](https://semver.org/lang/it/).
 
 ---
 
+## [Non rilasciato]
+
+### Prestazioni
+
+- **Cache dei file statici dietro il tunnel.** Ogni CSS, JS e immagine di
+  `static/` veniva rivalidato a ogni pagina (`Cache-Control: no-cache`), un
+  giro fino al server di circa 110 ms per file attraverso Cloudflare. Ora
+  `url_for('static', ...)` aggiunge da solo `?v=<impronta del contenuto>`,
+  senza modifiche ai template, e gli URL versionati escono con
+  `public, max-age=31536000, immutable`: dopo un aggiornamento l'impronta
+  cambia e il browser scarica il file nuovo. Gli statici senza `v` si
+  comportano come prima. I font richiamati con `url()` relativo dentro i CSS
+  di terze parti (bootstrap-icons, inter) restano senza versione.
+- **Niente cookie sugli statici.** La sessione permanente veniva riscritta
+  anche sulle risposte dei file statici (`Set-Cookie`, `Vary: Cookie`), che
+  Cloudflare non mette in cache. Ora la rinnovano solo le pagine; la scadenza
+  scorrevole non cambia.
+
+### Sicurezza
+
+- `SEND_FILE_MAX_AGE_DEFAULT` resta non impostato di proposito: guida anche
+  `/uploads`, verbali, documenti ed export, file privati di una struttura che
+  un proxy condiviso non deve mai conservare. Un test lo verifica.
+
+---
+
 ## [2.9.0] - 2026-11-15
 
 Installazione in container. Su Fedora MedInventory può girare in un pod Podman
