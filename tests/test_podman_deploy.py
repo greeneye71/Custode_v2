@@ -185,7 +185,7 @@ def test_nginx_sovrascrive_le_intestazioni_inoltrate():
     # L'app si fida di un solo salto: nginx scrive ciò che ha visto, non accoda.
     assert "proxy_set_header X-Forwarded-For $remote_addr;" in righe
     assert "proxy_set_header X-Forwarded-Proto $scheme;" in righe
-    assert "proxy_set_header X-Forwarded-Host $host;" in righe
+    assert "proxy_set_header X-Forwarded-Host $http_host;" in righe
     assert "$proxy_add_x_forwarded_for" not in testo
     assert "$http_x_forwarded" not in testo
     for intestazione in ("X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"):
@@ -209,6 +209,16 @@ def test_nginx_reindirizza_http_in_chiaro_sulla_porta_tls():
     # digitata dal client (8443 dell'host), che dentro il pod non si vede.
     assert "error_page 497 =301 https://$http_host$request_uri;" in righe
     assert not any("$server_port" in r for r in righe)
+
+
+def test_nginx_passa_host_con_la_porta_all_app():
+    righe = _righe(PODMAN + "custode-lan.conf")
+    # $host perde la porta: il referrer https://ip:8443/... non coinciderebbe
+    # con l'host visto dall'app e Flask-WTF risponderebbe 400 a ogni POST.
+    assert "proxy_set_header Host $http_host;" in righe
+    assert "proxy_set_header X-Forwarded-Host $http_host;" in righe
+    assert "proxy_set_header Host $host;" not in righe
+    assert "proxy_set_header X-Forwarded-Host $host;" not in righe
 
 
 def test_nessun_quadlet_nomina_la_ca():
