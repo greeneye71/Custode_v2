@@ -1,0 +1,64 @@
+# MedInventory - versioni bloccate (B03)
+# by Studio Bergamaschi
+#
+# File generato da aggiorna_lock.py: non modificarlo a mano.
+#
+# requirements.txt dichiara gli intervalli ammessi; questo file dichiara le
+# versioni con cui il programma e' stato effettivamente provato, dipendenze
+# indirette comprese. In esercizio si installa da qui:
+#
+#     pip install -r requirements.lock.txt
+#
+# Aggiornamento controllato:
+#   1. pip install -U -r requirements.txt
+#   2. python -m pytest tests/ -q       (deve essere verde)
+#   3. python aggiorna_lock.py          (riscrive questo file)
+#   4. commit del lock insieme all'esito dei test
+#
+# Ogni riga e' un pin esatto: nessun '>=' qui dentro, altrimenti il file non
+# blocca niente. tests/test_dipendenze.py lo verifica.
+
+annotated-types==0.7.0
+anthropic==0.79.0
+anyio==4.12.1
+blinker==1.9.0
+certifi==2025.4.26
+cffi==2.0.0
+charset-normalizer==3.4.2
+click==8.3.1
+colorama==0.4.6
+cryptography==45.0.3
+defusedxml==0.7.1
+distro==1.9.0
+docstring-parser==0.17.0
+et-xmlfile==2.0.0
+flask==3.1.2
+flask-wtf==1.3.0
+fonttools==4.61.1
+fpdf2==2.8.5
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.10
+itsdangerous==2.2.0
+jinja2==3.1.6
+jiter==0.13.0
+markupsafe==3.0.2
+openpyxl==3.1.5
+pdfminer.six==20251230
+pdfplumber==0.11.9
+pillow==11.1.0
+pycparser==2.22
+pydantic==2.12.5
+pydantic-core==2.41.5
+pypdf==6.9.2
+pypdfium2==5.4.0
+pystray==0.19.5
+qrcode==8.2
+six==1.17.0
+sniffio==1.3.1
+typing-extensions==4.15.0
+typing-inspection==0.4.2
+waitress==3.0.2
+werkzeug==3.1.5
+wtforms==3.2.2

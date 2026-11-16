@@ -200,37 +200,20 @@ def scadenzario_excel():
     """Export scadenzario to Excel."""
     from export_service import export_scadenzario_excel
 
-    div = getattr(g, 'divisione_attiva', None)
-    if div and div.get('id') != 'tutte':
-        scadenze = query_all(
-            """SELECT ps.*, d.nome as divisione_nome
-               FROM prossime_scadenze ps
-               LEFT JOIN divisioni d ON ps.divisione_id = d.id
-               WHERE ps.divisione_id = ?
-               ORDER BY ps.prossima_scadenza ASC""",
-            [div['id']]
-        )
-    elif getattr(g, 'user', {}).get('ruolo') == 'admin':
-        scadenze = query_all(
-            """SELECT ps.*, d.nome as divisione_nome
-               FROM prossime_scadenze ps
-               LEFT JOIN divisioni d ON ps.divisione_id = d.id
-               ORDER BY ps.prossima_scadenza ASC"""
-        )
-    else:
-        ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-        if ids:
-            ph = ','.join('?' * len(ids))
-            scadenze = query_all(
-                f"""SELECT ps.*, d.nome as divisione_nome
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   WHERE ps.divisione_id IN ({ph})
-                   ORDER BY ps.prossima_scadenza ASC""",
-                ids
-            )
-        else:
-            scadenze = []
+    # Lo scope passa da filtro_divisione(), come le altre cinque export. I tre
+    # rami scritti a mano che stavano qui avevano il difetto che filtro_divisione
+    # e' nato per chiudere: il ramo 'admin' interrogava la vista senza alcun
+    # filtro, e un admin di una struttura scaricava lo scadenzario di tutte.
+    # La vista espone struttura_id, quindi l'alias 'ps' basta.
+    div_clause, div_params = filtro_divisione('ps')
+    scadenze = query_all(
+        f"""SELECT ps.*, d.nome as divisione_nome
+            FROM prossime_scadenze ps
+            LEFT JOIN divisioni d ON ps.divisione_id = d.id
+            WHERE 1=1 {div_clause}
+            ORDER BY ps.prossima_scadenza ASC""",
+        div_params
+    )
 
     divisione_nome = _get_divisione_nome()
     buffer = export_scadenzario_excel(scadenze, divisione_nome)
@@ -249,37 +232,16 @@ def scadenzario_pdf():
     """Export scadenzario to PDF."""
     from export_service import export_scadenzario_pdf
 
-    div = getattr(g, 'divisione_attiva', None)
-    if div and div.get('id') != 'tutte':
-        scadenze = query_all(
-            """SELECT ps.*, d.nome as divisione_nome
-               FROM prossime_scadenze ps
-               LEFT JOIN divisioni d ON ps.divisione_id = d.id
-               WHERE ps.divisione_id = ?
-               ORDER BY ps.prossima_scadenza ASC""",
-            [div['id']]
-        )
-    elif getattr(g, 'user', {}).get('ruolo') == 'admin':
-        scadenze = query_all(
-            """SELECT ps.*, d.nome as divisione_nome
-               FROM prossime_scadenze ps
-               LEFT JOIN divisioni d ON ps.divisione_id = d.id
-               ORDER BY ps.prossima_scadenza ASC"""
-        )
-    else:
-        ids = [d['id'] for d in getattr(g, 'divisioni', [])]
-        if ids:
-            ph = ','.join('?' * len(ids))
-            scadenze = query_all(
-                f"""SELECT ps.*, d.nome as divisione_nome
-                   FROM prossime_scadenze ps
-                   LEFT JOIN divisioni d ON ps.divisione_id = d.id
-                   WHERE ps.divisione_id IN ({ph})
-                   ORDER BY ps.prossima_scadenza ASC""",
-                ids
-            )
-        else:
-            scadenze = []
+    # Stesso scope di scadenzario_excel: vedi la nota li' sopra.
+    div_clause, div_params = filtro_divisione('ps')
+    scadenze = query_all(
+        f"""SELECT ps.*, d.nome as divisione_nome
+            FROM prossime_scadenze ps
+            LEFT JOIN divisioni d ON ps.divisione_id = d.id
+            WHERE 1=1 {div_clause}
+            ORDER BY ps.prossima_scadenza ASC""",
+        div_params
+    )
 
     config = current_app.config['APP_CONFIG']
     divisione_nome = _get_divisione_nome()

@@ -1,0 +1,28 @@
+[Unit]
+Description=Custode interfaccia web
+
+[Container]
+Image=localhost/custode:latest
+Pod=custode.pod
+ContainerName=custode-web
+Exec=python3 /app/run_production.py
+Environment=MEDINVENTORY_RADICE=/stato
+# Scadenze, digest e nomi dei backup usano l'ora locale dell'host.
+Timezone=local
+# Prima il volume, poi la cartella dell'host che gli si sovrappone:
+# i backup sopravvivono alla cancellazione del volume.
+Volume=custode-stato.volume:/stato
+Volume=/var/backups/custode:/stato/backups:Z
+HealthCmd=python3 -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:5000/health/ready',timeout=3)"
+HealthInterval=30s
+HealthStartPeriod=60s
+# L'unità risulta avviata solo quando l'app risponde: tunnel e proxy la aspettano.
+# Nessun riavvio su controllo fallito: durante un ripristino il 503 è voluto.
+Notify=healthy
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -3,7 +3,7 @@
 {% block title %}Dashboard - {{ app_name }}{% endblock %}
 
 {% block head_extra %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
 {% endblock %}
 
 {% block content %}
@@ -139,15 +139,15 @@
             {% if scadenze_imminenti %}
             <div class="list-group list-group-flush">
                 {% for s in scadenze_imminenti %}
-                <a href="{{ url_for('apparecchi.dettaglio', id=s.apparecchio_id) }}"
+                <a href="{% if s.origine == 'impianto' %}{{ url_for('impianti.dettaglio', impianto_id=s.oggetto_id) }}{% else %}{{ url_for('apparecchi.dettaglio', id=s.oggetto_id) }}{% endif %}"
                    class="list-group-item list-group-item-action py-2">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <div class="fw-medium" style="font-size: 0.85rem;">
-                                {{ s.marca }} {{ s.modello }}
+                                {% if s.origine == 'impianto' %}<i class="bi bi-building-gear me-1"></i>{% else %}<i class="bi bi-heart-pulse me-1"></i>{% endif %}{{ s.oggetto }}
                             </div>
                             <small class="text-muted">
-                                {{ s.matricola }} &middot; {{ s.tipo_manutenzione|capitalize }}
+                                {{ s.dettaglio }} &middot; {{ s.tipo|capitalize }}
                             </small>
                         </div>
                         <div class="text-end">
@@ -291,7 +291,7 @@
     };
 
     // Chart 1: Apparecchi per Classificazione (Doughnut)
-    const dataClass = JSON.parse('{{ chart_classificazione_json|safe }}');
+    const dataClass = {{ chart_classificazione|tojson }};
     if (dataClass.length > 0) {
         new Chart(document.getElementById('chartClassificazione'), {
             type: 'doughnut',
@@ -318,7 +318,7 @@
     }
 
     // Chart 2: Costi Mensili (Line)
-    const dataCosti = JSON.parse('{{ chart_costi_json|safe }}');
+    const dataCosti = {{ chart_costi|tojson }};
     if (dataCosti.length > 0) {
         new Chart(document.getElementById('chartCosti'), {
             type: 'line',
@@ -350,7 +350,7 @@
     }
 
     // Chart 4: Stato Verifiche Elettriche (Doughnut)
-    const dataVerifiche = JSON.parse('{{ chart_verifiche_json|safe }}');
+    const dataVerifiche = {{ chart_verifiche|tojson }};
     const verificheColors = {
         'Scaduta': chartColors.red,
         'Nessuna': chartColors.gray,
@@ -383,7 +383,7 @@
     }
 
     // Chart 3: Interventi per Tipo (Bar)
-    const dataTipi = JSON.parse('{{ chart_tipi_json|safe }}');
+    const dataTipi = {{ chart_tipi|tojson }};
     const tipoColors = {
         'preventiva': chartColors.blue,
         'correttiva': chartColors.red,

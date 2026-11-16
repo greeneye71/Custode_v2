@@ -29,6 +29,15 @@
         <span id="ai_status_badge"></span>
       </div>
       <div class="card-body">
+        {# I campi non compilati qui mostrano il valore della configurazione di
+           sistema, che e' quello davvero usato finche' la struttura non salva
+           un proprio valore. Chi lascia il campo vuoto resta agganciato al
+           default e ne segue le modifiche future. #}
+        <div class="alert alert-light border small py-2">
+          <i class="bi bi-info-circle me-1"></i>
+          Le impostazioni lasciate vuote seguono la configurazione di sistema:
+          se cambia il default, cambia anche qui.
+        </div>
         <div class="row g-3">
 
           <div class="col-md-4">
@@ -36,50 +45,63 @@
             <select class="form-select" id="struttura_ai_provider" onchange="toggleStrutturaAIFields()">
               {% for prov_id, prov_label in ai_providers %}
               <option value="{{ prov_id }}"
-                      {% if cfg.get('ai_provider', 'anthropic') == prov_id %}selected{% endif %}>
+                      {% if cfg_ai.get('ai_provider') == prov_id %}selected{% endif %}>
                 {{ prov_label }}
               </option>
               {% endfor %}
             </select>
+            {% if 'ai_provider' in cfg_ai_ereditate %}
+            <div class="form-text">Dalla configurazione di sistema</div>
+            {% endif %}
           </div>
 
           <div class="col-md-8" id="struttura_anthropic_key">
             <label class="form-label">Anthropic API Key</label>
             <input type="password" class="form-control" id="ai_api_key"
-                   placeholder="{% if cfg.get('anthropic_api_key') %}Configurata — lascia vuoto per non modificare{% else %}sk-ant-api...{% endif %}">
+                   placeholder="{% if cfg.get('anthropic_api_key') %}Configurata — lascia vuoto per non modificare{% elif cfg_ai.get('anthropic_api_key') %}Dalla configurazione di sistema — lascia vuoto per continuare a usarla{% else %}sk-ant-api...{% endif %}">
           </div>
 
           <div class="col-md-8" id="struttura_gemini_key" style="display:none;">
             <label class="form-label">Google Gemini API Key</label>
             <input type="password" class="form-control" id="ai_gemini_key"
-                   placeholder="{% if cfg.get('gemini_api_key') %}Configurata — lascia vuoto per non modificare{% else %}AIza...{% endif %}">
+                   placeholder="{% if cfg.get('gemini_api_key') %}Configurata — lascia vuoto per non modificare{% elif cfg_ai.get('gemini_api_key') %}Dalla configurazione di sistema — lascia vuoto per continuare a usarla{% else %}AIza...{% endif %}">
           </div>
 
           <div class="col-md-8" id="struttura_openai_key" style="display:none;">
             <label class="form-label">OpenAI API Key</label>
             <input type="password" class="form-control" id="ai_openai_key"
-                   placeholder="{% if cfg.get('openai_api_key') %}Configurata — lascia vuoto per non modificare{% else %}sk-...{% endif %}">
+                   placeholder="{% if cfg.get('openai_api_key') %}Configurata — lascia vuoto per non modificare{% elif cfg_ai.get('openai_api_key') %}Dalla configurazione di sistema — lascia vuoto per continuare a usarla{% else %}sk-...{% endif %}">
           </div>
 
+          {# Il valore ereditato sta nel placeholder e non nel value: cosi' chi
+             salva senza toccare il campo non se lo ricopia addosso come
+             override, restando agganciato al default di sistema. #}
           <div class="col-md-6" id="struttura_local_url" style="display:none;">
             <label class="form-label">URL Server AI</label>
             <input type="text" class="form-control" id="ai_local_base_url"
-                   value="{{ cfg.get('ai_local_base_url', '') }}"
-                   placeholder="http://localhost:11434">
-            <div class="form-text">Senza <code>/v1</code> finale</div>
+                   value="{% if 'ai_local_base_url' not in cfg_ai_ereditate %}{{ cfg_ai.get('ai_local_base_url', '') }}{% endif %}"
+                   placeholder="{{ cfg_ai.get('ai_local_base_url') or 'http://localhost:11434' }}">
+            <div class="form-text">
+              Senza <code>/v1</code> finale{% if 'ai_local_base_url' in cfg_ai_ereditate %} — dalla configurazione di sistema{% endif %}
+            </div>
           </div>
 
           <div class="col-md-6" id="struttura_local_model" style="display:none;">
             <label class="form-label">Modello AI locale</label>
             <input type="text" class="form-control" id="ai_local_model"
-                   value="{{ cfg.get('ai_local_model', '') }}"
-                   placeholder="Es. llama3.2">
+                   value="{% if 'ai_local_model' not in cfg_ai_ereditate %}{{ cfg_ai.get('ai_local_model', '') }}{% endif %}"
+                   placeholder="{{ cfg_ai.get('ai_local_model') or 'Es. llama3.2' }}">
+            {% if 'ai_local_model' in cfg_ai_ereditate and cfg_ai.get('ai_local_model') %}
+            <div class="form-text">Dalla configurazione di sistema</div>
+            {% endif %}
           </div>
 
           <div class="col-md-6">
             <label class="form-label">Modello Import Inventario</label>
             <select class="form-select" id="ai_import_model">
-              {% if cfg.get('ai_import_model') %}
+              {% if 'ai_import_model' in cfg_ai_ereditate and cfg_ai.get('ai_import_model') %}
+              <option value="" selected>{{ cfg_ai.get('ai_import_model') }} — dalla configurazione di sistema</option>
+              {% elif cfg.get('ai_import_model') %}
               <option value="{{ cfg.get('ai_import_model') }}" selected>{{ cfg.get('ai_import_model') }}</option>
               {% else %}
               <option value="">— esegui il test per vedere i modelli disponibili —</option>
@@ -90,7 +112,9 @@
           <div class="col-md-6">
             <label class="form-label">Modello Email e Verifiche</label>
             <select class="form-select" id="ai_email_model">
-              {% if cfg.get('ai_email_model') %}
+              {% if 'ai_email_model' in cfg_ai_ereditate and cfg_ai.get('ai_email_model') %}
+              <option value="" selected>{{ cfg_ai.get('ai_email_model') }} — dalla configurazione di sistema</option>
+              {% elif cfg.get('ai_email_model') %}
               <option value="{{ cfg.get('ai_email_model') }}" selected>{{ cfg.get('ai_email_model') }}</option>
               {% else %}
               <option value="">— esegui il test per vedere i modelli disponibili —</option>
@@ -181,6 +205,22 @@
                 <option value="settimanale" {% if cfg.get('report_frequenza') == 'settimanale' %}selected{% endif %}>Settimanale</option>
                 <option value="mensile"     {% if cfg.get('report_frequenza') == 'mensile' %}selected{% endif %}>Mensile</option>
               </select>
+            </div>
+
+            <div class="col-12">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="avvisi_impianti_attivi"
+                       id="avvisi_impianti_attivi" value="1"
+                       {% if cfg.get('avvisi_impianti_attivi', '1') != '0' %}checked{% endif %}>
+                <label class="form-check-label" for="avvisi_impianti_attivi">
+                  Invia gli avvisi di scadenza degli impianti
+                </label>
+                <div class="form-text">
+                  Attivi per default: la casella spuntata non e&#39; una scelta, e&#39;
+                  l&#39;assenza di chiave. Il formato e la frequenza sono gli stessi
+                  degli avvisi sugli apparecchi, qui sopra.
+                </div>
+              </div>
             </div>
 
             {# La casella non ha name: senza, non finisce nel POST nemmeno se
@@ -281,13 +321,13 @@ function testSalvaAI() {
         var div = document.getElementById('ai_test_result');
         div.style.display = '';
         if (result.ok) {
-            div.innerHTML = '<div class="alert alert-success py-2 mb-0"><i class="bi bi-check-circle me-1"></i>' + result.message + '</div>';
+            mostraEsitoAi(div, true, result.message);
             if (result.models && result.models.length > 0) {
                 populateModelSelect('ai_import_model', result.models, payload.ai_import_model);
                 populateModelSelect('ai_email_model',  result.models, payload.ai_email_model);
             }
         } else {
-            div.innerHTML = '<div class="alert alert-danger py-2 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>' + result.message + '</div>';
+            mostraEsitoAi(div, false, result.message);
         }
     })
     .catch(function(err) {
@@ -296,8 +336,24 @@ function testSalvaAI() {
         document.getElementById('btn_test_salva').disabled   = false;
         var div = document.getElementById('ai_test_result');
         div.style.display = '';
-        div.innerHTML = '<div class="alert alert-danger py-2 mb-0">Errore di rete: ' + err + '</div>';
+        mostraEsitoAi(div, false, 'Errore di rete: ' + err);
     });
+}
+
+function mostraEsitoAi(div, ok, messaggio) {
+    // Il messaggio arriva dal provider AI o dalla rete: va inserito come
+    // testo, mai come HTML, altrimenti una risposta remota diventa markup
+    // eseguito dentro la pagina di configurazione (XSS).
+    div.textContent = '';
+    var riquadro = document.createElement('div');
+    riquadro.className = ok ? 'alert alert-success py-2 mb-0'
+                            : 'alert alert-danger py-2 mb-0';
+    var icona = document.createElement('i');
+    icona.className = ok ? 'bi bi-check-circle me-1'
+                         : 'bi bi-exclamation-triangle me-1';
+    riquadro.appendChild(icona);
+    riquadro.appendChild(document.createTextNode(messaggio));
+    div.appendChild(riquadro);
 }
 
 function populateModelSelect(selectId, models, currentValue) {

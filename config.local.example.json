@@ -14,19 +14,23 @@
   "single_struttura": false,
 
   "backup_retention": 4,
+  "archivio_retention": 2,
 
-  "ai_provider": "anthropic",
+  "default_ai_provider": "anthropic",
 
-  "anthropic_api_key": "",
-  "ai_import_model": "claude-sonnet-4-6",
-  "ai_email_model": "claude-haiku-4-5-20251001",
-  "ai_verifiche_model": "claude-haiku-4-5-20251001",
+  "default_anthropic_api_key": "",
+  "default_ai_import_model": "claude-sonnet-4-6",
+  "default_ai_email_model": "claude-haiku-4-5-20251001",
 
-  "gemini_api_key": "",
-  "openai_api_key": "",
+  "default_gemini_api_key": "",
+  "default_openai_api_key": "",
 
-  "ai_local_base_url": "",
-  "ai_local_model": "",
+  "default_ai_local_base_url": "",
+  "default_ai_local_model": "",
+  "ai_local_url_allowlist": [],
+
+  "import_max_analisi": 4,
+  "import_max_analisi_struttura": 3,
 
   "email_check_interval_minutes": 15,
   "imap_enabled": false,
@@ -45,5 +49,6 @@
   "smtp_use_tls": true,
 
   "cloudflare_mode": false,
-  "force_https": false
+  "force_https": false,
+  "behind_proxy": false
 }

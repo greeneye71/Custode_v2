@@ -24,6 +24,7 @@ referenziati e' considerato orfano. Due conseguenze:
 import argparse
 import json
 import os
+import percorsi
 import sqlite3
 import sys
 
@@ -140,7 +141,7 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     radice = os.path.abspath(args.target) if args.target else \
-        os.path.dirname(os.path.abspath(__file__))
+        percorsi.radice()
     config = carica_config(radice)
 
     db_path = os.path.join(radice, config.get('database_path', DB_PATH_PREDEFINITO))

@@ -2,6 +2,10 @@
 import pytest
 from werkzeug.security import generate_password_hash
 
+# I loghi di prova devono cominciare come un PNG vero: da 2.8.4 le rotte di
+# upload verificano il contenuto e non solo l'estensione (M05).
+PNG = b'\x89PNG\r\n\x1a\n'
+
 
 @pytest.fixture
 def dati(app):
@@ -316,7 +320,7 @@ def test_caricare_un_nuovo_logo_cancella_il_precedente(client, app, dati):
     entra(client, 'super@x.it')
 
     primo = client.post(f"/strutture/{dati['s']}/logo",
-                         data={'logo': (io.BytesIO(b'primo logo'), 'primo.png')},
+                         data={'logo': (io.BytesIO(PNG + b'primo logo'), 'primo.png')},
                          content_type='multipart/form-data', follow_redirects=True)
     assert primo.status_code == 200
 
@@ -327,7 +331,7 @@ def test_caricare_un_nuovo_logo_cancella_il_precedente(client, app, dati):
     assert os.path.isfile(percorso_primo)
 
     secondo = client.post(f"/strutture/{dati['s']}/logo",
-                          data={'logo': (io.BytesIO(b'secondo logo'), 'secondo.png')},
+                          data={'logo': (io.BytesIO(PNG + b'secondo logo'), 'secondo.png')},
                           content_type='multipart/form-data', follow_redirects=True)
     assert secondo.status_code == 200
 
@@ -348,7 +352,7 @@ def test_caricare_il_primo_logo_non_tenta_di_cancellare_nulla(client, app, dati)
 
     entra(client, 'super@x.it')
     risposta = client.post(f"/strutture/{dati['s']}/logo",
-                           data={'logo': (io.BytesIO(b'unico logo'), 'unico.png')},
+                           data={'logo': (io.BytesIO(PNG + b'unico logo'), 'unico.png')},
                            content_type='multipart/form-data', follow_redirects=True)
     assert risposta.status_code == 200
     assert 'Logo aggiornato' in risposta.get_data(as_text=True)

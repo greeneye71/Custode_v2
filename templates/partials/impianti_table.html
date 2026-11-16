@@ -1,0 +1,22 @@
+<table class="table table-hover align-middle">
+  <thead>
+    <tr>
+      <th>Nome</th><th>Tipo</th><th>Divisione</th><th>Ubicazione</th>
+      <th>Stato</th><th>Prossima scadenza</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for i in impianti %}
+    <tr>
+      <td><a href="{{ url_for('impianti.dettaglio', impianto_id=i.id) }}">{{ i.nome }}</a></td>
+      <td>{{ i.tipo_custom or i.tipo|replace('_', ' ')|capitalize }}</td>
+      <td>{{ i.divisione_nome or '-' }}</td>
+      <td>{{ i.ubicazione or '-' }}</td>
+      <td>{{ i.stato|replace('_', ' ')|capitalize }}</td>
+      <td>{{ i.prima_scadenza or '-' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="text-muted text-center">Nessun impianto.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

@@ -25,10 +25,19 @@ RIFERIMENTI_UTENTE = (
     ('documenti', 'uploaded_by'),
     ('import_history', 'imported_by'),
     ('api_tokens', 'created_by'),
+    # Impianti: stesse FK senza ON DELETE. Vanno liberate qui e non lasciate
+    # alla cascata di strutture, perche' rimuovi_strutture() cancella gli
+    # utenti (passo 6) PRIMA della struttura (passo 7): quando la cascata
+    # porterebbe via gli impianti, l'utente e' gia' sparito da un pezzo.
+    ('impianti', 'created_by'),
+    ('impianti', 'updated_by'),
+    ('impianti_documenti', 'uploaded_by'),
+    ('impianti_interventi', 'created_by'),
 )
 
 CHIAVI_CONTEGGIO = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
-                    'accessori', 'import', 'divisioni', 'utenti', 'strutture')
+                    'accessori', 'import', 'divisioni', 'utenti', 'strutture',
+                    'manutentori', 'impianti')
 
 # Tabelle che importa_installazione.py dichiara esplicitamente di non
 # importare (vedi CLAUDE.md): appartengono al deployment sorgente (sessioni
@@ -37,7 +46,8 @@ CHIAVI_CONTEGGIO = ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
 # lo stesso in entrambe le direzioni: se l'importatore non le legge,
 # l'esportatore non deve portarle in un archivio consegnabile.
 TABELLE_DEPLOYMENT_SORGENTE = ('sessioni', 'login_attempts', 'api_tokens',
-                              'email_config', 'import_preview')
+                              'email_config', 'import_preview',
+                              'impianti_avvisi_inviati')
 
 # Colonna che contiene un percorso relativo di un allegato, per tabella, con
 # la condizione che la lega alla struttura. Serve sia a contenuto_struttura
@@ -53,6 +63,10 @@ COLONNE_ALLEGATI = (
     ('verifiche', 'documento_path',
      'apparecchio_id IN (SELECT id FROM apparecchi WHERE struttura_id = ?)'),
     ('import_history', 'filepath', 'struttura_id = ?'),
+    ('impianti_documenti', 'filepath',
+     'impianto_id IN (SELECT id FROM impianti WHERE struttura_id = ?)'),
+    ('impianti_interventi', 'verbale_path',
+     'impianto_id IN (SELECT id FROM impianti WHERE struttura_id = ?)'),
     # strutture non ha una colonna struttura_id: E' la struttura, la
     # condizione e' sulla sua stessa chiave primaria.
     ('strutture', 'logo_path', 'id = ?'),
@@ -192,6 +206,12 @@ def rimuovi_strutture(conn, ids):
     conteggi['divisioni'] = conta(f"SELECT COUNT(*) FROM divisioni WHERE struttura_id IN ({seg})")
     conteggi['utenti'] = conta(f"SELECT COUNT(*) FROM utenti WHERE struttura_id IN ({seg})")
     conteggi['strutture'] = conta(f"SELECT COUNT(*) FROM strutture WHERE id IN ({seg})")
+    # Impianti e manutentori vanno via in cascata al passo 7, quindi non hanno
+    # un DELETE proprio: il conteggio serve lo stesso, perche' chi conferma una
+    # cancellazione irreversibile deve leggere che porta via anche il registro
+    # impianti, e il log dell'operazione deve poterlo dire dopo.
+    conteggi['manutentori'] = conta(f"SELECT COUNT(*) FROM manutentori WHERE struttura_id IN ({seg})")
+    conteggi['impianti'] = conta(f"SELECT COUNT(*) FROM impianti WHERE struttura_id IN ({seg})")
 
     # 1. import_history: la FK verso strutture non ha ON DELETE e bloccherebbe.
     #    import_preview va in cascata (import_id -> import_history ON DELETE CASCADE).
@@ -291,6 +311,9 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
         return conn.execute(sql, (struttura_id,)).fetchone()[0]
 
     figli = "SELECT id FROM apparecchi WHERE struttura_id = ?"
+    # Le tabelle figlie degli impianti non portano struttura_id: si passa
+    # sempre da impianti, l'unica che la porta.
+    impianti_figli = "SELECT id FROM impianti WHERE struttura_id = ?"
     contenuto = {
         'apparecchi': conta("SELECT COUNT(*) FROM apparecchi WHERE struttura_id = ?"),
         'manutenzioni': conta(f"SELECT COUNT(*) FROM manutenzioni WHERE apparecchio_id IN ({figli})"),
@@ -302,6 +325,16 @@ def contenuto_struttura(conn, struttura_id, uploads_base, single_struttura=False
         'utenti': conta("SELECT COUNT(*) FROM utenti WHERE struttura_id = ? "
                         "AND eliminato_il IS NULL"),
         'tecnici': conta("SELECT COUNT(*) FROM tecnici_strutture WHERE struttura_id = ?"),
+        'manutentori': conta("SELECT COUNT(*) FROM manutentori WHERE struttura_id = ?"),
+        'impianti': conta("SELECT COUNT(*) FROM impianti WHERE struttura_id = ?"),
+        'impianti_componenti': conta(
+            f"SELECT COUNT(*) FROM impianti_componenti WHERE impianto_id IN ({impianti_figli})"),
+        'impianti_documenti': conta(
+            f"SELECT COUNT(*) FROM impianti_documenti WHERE impianto_id IN ({impianti_figli})"),
+        'impianti_scadenze': conta(
+            f"SELECT COUNT(*) FROM impianti_scadenze WHERE impianto_id IN ({impianti_figli})"),
+        'impianti_interventi': conta(
+            f"SELECT COUNT(*) FROM impianti_interventi WHERE impianto_id IN ({impianti_figli})"),
     }
 
     numero, byte = 0, 0
@@ -687,9 +720,12 @@ def esporta_struttura(db_path, uploads_base, struttura_id, cartella_archivi,
                 f.write(f"Struttura:  {nome} (id {struttura_id})\n")
                 f.write(f"Esportata:  {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n")
                 for chiave in ('apparecchi', 'manutenzioni', 'verifiche', 'documenti',
-                               'accessori', 'import', 'divisioni', 'utenti', 'tecnici', 'file'):
-                    f.write(f"  {chiave:14} {contenuto[chiave]}\n")
-                f.write(f"  {'byte':14} {contenuto['byte']}\n\n")
+                               'accessori', 'import', 'divisioni', 'utenti', 'tecnici',
+                               'manutentori', 'impianti', 'impianti_componenti',
+                               'impianti_documenti', 'impianti_scadenze',
+                               'impianti_interventi', 'file'):
+                    f.write(f"  {chiave:19} {contenuto[chiave]}\n")
+                f.write(f"  {'byte':19} {contenuto['byte']}\n\n")
                 f.write(
                     "Non incluso in questo archivio: il superadmin del deployment e i\n"
                     "tecnici (sono account condivisi con altre strutture, non di proprieta'\n"

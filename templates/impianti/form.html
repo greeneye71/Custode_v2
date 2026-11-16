@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block title %}
+{% if impianto %}Modifica{% else %}Nuovo{% endif %} Impianto - {{ app_name }}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>
+        <i class="bi bi-{% if impianto %}pencil{% else %}plus-lg{% endif %} me-2"></i>
+        {% if impianto %}Modifica Impianto{% else %}Nuovo Impianto{% endif %}
+    </h2>
+</div>
+
+<form method="POST" class="needs-validation" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="row g-4">
+        <div class="col-lg-8">
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-tag me-1"></i> Identificazione
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="nome" class="form-label">Nome <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="nome" name="nome"
+                                   value="{{ form_data.get('nome', '') }}" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="identificativo" class="form-label">Identificativo</label>
+                            <input type="text" class="form-control" id="identificativo" name="identificativo"
+                                   value="{{ form_data.get('identificativo', '') }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="tipo" class="form-label">Tipo <span class="text-danger">*</span></label>
+                            <select class="form-select" id="tipo" name="tipo" required
+                                    onchange="document.getElementById('tipo-custom-wrap').style.display = (this.value === 'altro') ? '' : 'none'">
+                                {% for t in tipi %}
+                                <option value="{{ t }}" {% if form_data.get('tipo') == t %}selected{% endif %}>
+                                    {{ t|replace('_', ' ')|capitalize }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6" id="tipo-custom-wrap"
+                             style="{% if form_data.get('tipo') != 'altro' %}display:none{% endif %}">
+                            <label for="tipo_custom" class="form-label">Descrizione tipo</label>
+                            <input type="text" class="form-control" id="tipo_custom" name="tipo_custom"
+                                   value="{{ form_data.get('tipo_custom', '') }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="ubicazione" class="form-label">Ubicazione</label>
+                            <input type="text" class="form-control" id="ubicazione" name="ubicazione"
+                                   value="{{ form_data.get('ubicazione', '') }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="anno_installazione" class="form-label">Anno installazione</label>
+                            <input type="number" class="form-control" id="anno_installazione" name="anno_installazione"
+                                   value="{{ form_data.get('anno_installazione', '') }}" min="1900" max="2100">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="stato" class="form-label">Stato</label>
+                            <select class="form-select" id="stato" name="stato">
+                                {% for s in stati %}
+                                <option value="{{ s }}" {% if form_data.get('stato', 'attivo') == s %}selected{% endif %}>
+                                    {{ s|replace('_', ' ')|capitalize }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="manutentore_id" class="form-label">Manutentore</label>
+                            <select class="form-select" id="manutentore_id" name="manutentore_id">
+                                <option value="">-- Nessuno --</option>
+                                {% for m in manutentori %}
+                                <option value="{{ m.id }}" {% if form_data.get('manutentore_id')|string == m.id|string %}selected{% endif %}>
+                                    {{ m.ragione_sociale }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-12">
+                            <label for="descrizione" class="form-label">Descrizione</label>
+                            <input type="text" class="form-control" id="descrizione" name="descrizione"
+                                   value="{{ form_data.get('descrizione', '') }}">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% if not impianto %}
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-list-check me-1"></i> Piano di manutenzione (catalogo)
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small">Seleziona le voci da inserire nel piano al momento della creazione. L'elenco dipende dal tipo scelto sopra.</p>
+                    {% for t in tipi %}
+                    <div class="catalogo-tipo" data-tipo="{{ t }}"
+                         style="{% if form_data.get('tipo', tipi[0]) != t %}display:none{% endif %}">
+                        {% for voce in catalogo.get(t, []) %}
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="catalogo"
+                                   value="{{ voce.nome }}" id="cat-{{ t }}-{{ loop.index }}">
+                            <label class="form-check-label" for="cat-{{ t }}-{{ loop.index }}">
+                                {{ voce.nome }} &mdash; ogni {{ voce.mesi }} mesi
+                                {% if voce.riferimento %}<span class="text-muted">({{ voce.riferimento }})</span>{% endif %}
+                            </label>
+                        </div>
+                        {% else %}
+                        <p class="text-muted small mb-0">Nessuna voce di catalogo per questo tipo.</p>
+                        {% endfor %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-chat-text me-1"></i> Note
+                </div>
+                <div class="card-body">
+                    <textarea class="form-control" id="note" name="note" rows="3">{{ form_data.get('note', '') }}</textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <i class="bi bi-building me-1"></i> Divisione
+                </div>
+                <div class="card-body">
+                    <select class="form-select" id="divisione_id" name="divisione_id" required>
+                        <option value="">-- Seleziona Divisione --</option>
+                        {% for d in divisioni %}
+                        <option value="{{ d.id }}" {% if form_data.get('divisione_id')|string == d.id|string %}selected{% endif %}>
+                            {{ d.nome }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body d-grid gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>
+                        {% if impianto %}Salva Modifiche{% else %}Crea Impianto{% endif %}
+                    </button>
+                    {% if impianto %}
+                    <a href="{{ url_for('impianti.dettaglio', impianto_id=impianto.id) }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-lg me-1"></i> Annulla
+                    </a>
+                    {% else %}
+                    <a href="{{ url_for('impianti.lista') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-lg me-1"></i> Annulla
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+(function() {
+    var tipoSelect = document.getElementById('tipo');
+    var blocchi = document.querySelectorAll('.catalogo-tipo');
+    if (!tipoSelect || !blocchi.length) { return; }
+    tipoSelect.addEventListener('change', function() {
+        blocchi.forEach(function(b) {
+            b.style.display = (b.dataset.tipo === tipoSelect.value) ? '' : 'none';
+        });
+    });
+})();
+</script>
+{% endblock %}

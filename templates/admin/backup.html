@@ -2,26 +2,34 @@
 {% block title %}Backup - {{ app_name }}{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h2 class="mb-1"><i class="bi bi-database me-2"></i>Backup Database</h2>
+        <h2 class="mb-1"><i class="bi bi-database me-2"></i>Backup e ripristino</h2>
         <p class="text-muted mb-0">
-            Gestione backup del database.
-            Retention: <strong>{{ retention }}</strong> backup conservati.
-            Backup automatico: <strong>ogni domenica alle 03:00</strong>.
+            Due strumenti distinti: il <strong>backup del database</strong> e l'<strong>archivio di ripristino completo</strong>.
         </p>
     </div>
-    <form method="POST" action="{{ url_for('admin.backup_crea') }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-primary">
-            <i class="bi bi-plus-circle me-1"></i> Crea Backup Ora
-        </button>
-    </form>
+</div>
+
+{# L'audit M12 chiedeva che fosse chiaro cosa il backup NON contiene. #}
+<div class="alert alert-warning">
+    <h6 class="alert-heading mb-2"><i class="bi bi-exclamation-triangle me-1"></i>Cosa contiene il backup del database</h6>
+    <p class="mb-2">
+        Il backup del database contiene <strong>soltanto il file SQLite</strong>. Non contiene
+        gli allegati (verbali, foto, documenti degli impianti), la configurazione locale,
+        il logo, la chiave di cifratura delle password di posta.
+        Dopo un ripristino su un'installazione nuova, i record esistono ma i loro allegati no.
+    </p>
+    <p class="mb-0">
+        Per un vero disaster recovery usa l'<strong>archivio di ripristino completo</strong> qui sotto:
+        database, allegati, configurazione, manifest con le impronte SHA-256 e istruzioni di ripristino
+        in un unico file.
+    </p>
 </div>
 
 {# Database info #}
 <div class="row g-3 mb-4">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card stat-card">
             <div class="card-body text-center">
                 <div class="stat-number text-primary">{{ db_size }}</div>
@@ -29,15 +37,23 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card stat-card">
             <div class="card-body text-center">
                 <div class="stat-number text-info">{{ backups|length }}</div>
-                <div class="stat-label">Backup disponibili</div>
+                <div class="stat-label">Backup database</div>
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <div class="card-body text-center">
+                <div class="stat-number text-success">{{ archivi|length }}</div>
+                <div class="stat-label">Archivi completi</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
         <div class="card stat-card">
             <div class="card-body text-center">
                 <div class="stat-number text-secondary">
@@ -49,10 +65,25 @@
     </div>
 </div>
 
-{# Backups list #}
-<div class="card">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-archive me-2"></i>Backup Disponibili</h5>
+{# Backup del solo database #}
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-file-earmark-binary me-2"></i>Backup del database</h5>
+        <form method="POST" action="{{ url_for('admin.backup_crea') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="bi bi-plus-circle me-1"></i> Crea backup ora
+            </button>
+        </form>
+    </div>
+    <div class="card-body pb-0">
+        <p class="text-muted small mb-3">
+            Solo il file SQLite. Retention: <strong>{{ retention }}</strong> backup conservati.
+            Automatico <strong>ogni domenica alle 03:00</strong>.
+            Il pulsante <em>Verifica</em> apre il backup in sola lettura e controlla che sia
+            davvero ripristinabile, senza toccare il database in uso: e' la prova di ripristino
+            da ripetere periodicamente.
+        </p>
     </div>
     {% if backups %}
     <div class="card-body p-0">
@@ -81,6 +112,13 @@
                                    class="btn btn-outline-primary" title="Scarica">
                                     <i class="bi bi-download"></i>
                                 </a>
+                                <form method="POST" action="{{ url_for('admin.backup_verifica', filename=backup.filename) }}"
+                                      class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-outline-success" title="Verifica (prova di ripristino)">
+                                        <i class="bi bi-shield-check"></i>
+                                    </button>
+                                </form>
                                 <form method="POST" action="{{ url_for('admin.backup_ripristina', filename=backup.filename) }}"
                                       class="d-inline"
                                       onsubmit="return confirm('ATTENZIONE: Il ripristino sovrascrivera il database attuale. Sei sicuro?')">
@@ -106,10 +144,104 @@
         </div>
     </div>
     {% else %}
-    <div class="card-body text-center py-5">
+    <div class="card-body text-center py-4">
         <i class="bi bi-archive display-4 text-muted"></i>
-        <p class="text-muted mt-3 mb-0">Nessun backup disponibile.</p>
-        <p class="text-muted small">Clicca "Crea Backup Ora" per creare il primo backup.</p>
+        <p class="text-muted mt-3 mb-0">Nessun backup del database disponibile.</p>
+        <p class="text-muted small mb-0">Usa "Crea backup ora" per creare il primo.</p>
+    </div>
+    {% endif %}
+</div>
+
+{# Archivio di ripristino completo #}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-box-seam me-2"></i>Archivio di ripristino completo</h5>
+        <form method="POST" action="{{ url_for('admin.archivio_crea') }}"
+              class="d-flex align-items-center gap-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" name="includi_uploads"
+                       value="1" id="includi_uploads" checked>
+                <label class="form-check-label small" for="includi_uploads">
+                    Includi allegati
+                </label>
+            </div>
+            <button type="submit" class="btn btn-success btn-sm">
+                <i class="bi bi-plus-circle me-1"></i> Crea archivio
+            </button>
+        </form>
+    </div>
+    <div class="card-body pb-0">
+        <p class="text-muted small mb-2">
+            Un solo file ZIP con: database in copia consistente, cartella <code>uploads/</code>,
+            <code>config.json</code> e <code>config.local.json</code>, un
+            <code>MANIFEST.json</code> con versione, conteggi e impronta SHA-256 di ogni file,
+            e <code>ISTRUZIONI_RIPRISTINO.txt</code>. Conservati: <strong>{{ archivio_retention }}</strong>.
+        </p>
+        <div class="alert alert-danger py-2 small">
+            <i class="bi bi-shield-lock me-1"></i>
+            L'archivio contiene la configurazione locale, quindi la <strong>chiave di cifratura</strong>
+            e le <strong>chiavi API</strong>. Vale come una credenziale: custodiscilo di conseguenza e
+            non inviarlo per posta.
+        </div>
+    </div>
+    {% if archivi %}
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Data creazione</th>
+                        <th>Dimensione</th>
+                        <th class="text-end">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for archivio in archivi %}
+                    <tr>
+                        <td>
+                            <i class="bi bi-file-earmark-zip text-success me-1"></i>
+                            <code class="small">{{ archivio.filename }}</code>
+                        </td>
+                        <td>{{ archivio.created_at }}</td>
+                        <td>{{ archivio.size_display }}</td>
+                        <td class="text-end">
+                            <div class="btn-group btn-group-sm">
+                                <a href="{{ url_for('admin.archivio_scarica', filename=archivio.filename) }}"
+                                   class="btn btn-outline-primary" title="Scarica">
+                                    <i class="bi bi-download"></i>
+                                </a>
+                                <form method="POST" action="{{ url_for('admin.archivio_verifica', filename=archivio.filename) }}"
+                                      class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-outline-success" title="Verifica (impronte e database)">
+                                        <i class="bi bi-shield-check"></i>
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('admin.archivio_elimina', filename=archivio.filename) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('Eliminare questo archivio di ripristino?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-outline-danger" title="Elimina">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card-body text-center py-4">
+        <i class="bi bi-box-seam display-4 text-muted"></i>
+        <p class="text-muted mt-3 mb-0">Nessun archivio di ripristino disponibile.</p>
+        <p class="text-muted small mb-0">
+            Senza archivio, un ripristino su una macchina nuova riporta i dati ma non gli allegati.
+        </p>
     </div>
     {% endif %}
 </div>

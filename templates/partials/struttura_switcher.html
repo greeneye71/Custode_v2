@@ -1,3 +1,7 @@
+{# Le voci sono <form method="post">, non link: impersonare una struttura
+   cambia il tenant su cui scrive il superadmin, e in GET bastava fargli
+   aprire un URL. Il bottone .dropdown-item ha l'aspetto della voce di
+   menu che sostituisce. #}
 <li class="nav-item dropdown">
   <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
     <i class="bi bi-building me-1"></i>
@@ -5,18 +9,22 @@
   </a>
   <ul class="dropdown-menu dropdown-menu-end">
     <li>
-      <a class="dropdown-item {% if not g_struttura %}active{% endif %}"
-         href="{{ url_for('auth.esci_impersonazione') }}">
-        <i class="bi bi-globe me-2"></i>Vista globale
-      </a>
+      <form method="post" action="{{ url_for('auth.esci_impersonazione') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="dropdown-item {% if not g_struttura %}active{% endif %}">
+          <i class="bi bi-globe me-2"></i>Vista globale
+        </button>
+      </form>
     </li>
     <li><hr class="dropdown-divider"></li>
     {% for s in strutture_list %}
     <li>
-      <a class="dropdown-item {% if g_struttura and g_struttura.id == s.id %}active{% endif %}"
-         href="{{ url_for('auth.impersona_struttura', struttura_id=s.id) }}">
-        {{ s.nome }}
-      </a>
+      <form method="post" action="{{ url_for('auth.impersona_struttura', struttura_id=s.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="dropdown-item {% if g_struttura and g_struttura.id == s.id %}active{% endif %}">
+          {{ s.nome }}
+        </button>
+      </form>
     </li>
     {% endfor %}
   </ul>

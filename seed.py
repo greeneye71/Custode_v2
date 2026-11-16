@@ -13,11 +13,13 @@ import shutil
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
+import percorsi
+
 
 def _ensure_config():
     """Crea config.json da config.example.json se mancante (prima installazione)."""
-    config_path = os.path.join(_BASE, 'config.json')
-    example_path = os.path.join(_BASE, 'config.example.json')
+    config_path = percorsi.percorso('config.json')
+    example_path = percorsi.modello('config.example.json')
     if not os.path.exists(config_path):
         if not os.path.exists(example_path):
             print("ERRORE: config.example.json non trovato. Il repository potrebbe essere incompleto.")
@@ -28,7 +30,7 @@ def _ensure_config():
         print("  -> Modificare config.local.json per personalizzare host, porta e API key AI.\n")
 
     # Crea la directory data/ se mancante
-    data_dir = os.path.join(_BASE, 'data')
+    data_dir = percorsi.percorso('data')
     os.makedirs(data_dir, exist_ok=True)
 
 

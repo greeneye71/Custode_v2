@@ -56,12 +56,30 @@
                 window.location.href = data.redirect;
             } else if (data.stato === 'failed') {
                 var box = document.getElementById('status-box');
-                box.innerHTML =
-                    '<i class="bi bi-x-circle-fill text-danger fs-1 mb-3 d-block"></i>' +
-                    '<h5 class="text-danger mb-2">Analisi non riuscita</h5>' +
-                    '<p class="text-muted">' + (data.errori_dettaglio || 'Errore sconosciuto.') + '</p>' +
-                    '<a href="' + uploadUrl + '" class="btn btn-outline-secondary mt-2">' +
-                    '<i class="bi bi-arrow-left me-1"></i>Riprova</a>';
+                // errori_dettaglio riporta il messaggio del provider AI e
+                // frammenti del documento caricato: come testo, non come
+                // HTML, altrimenti il contenuto di un PDF diventa markup
+                // eseguito nella pagina (XSS).
+                box.textContent = '';
+                var icona = document.createElement('i');
+                icona.className = 'bi bi-x-circle-fill text-danger fs-1 mb-3 d-block';
+                var titolo = document.createElement('h5');
+                titolo.className = 'text-danger mb-2';
+                titolo.textContent = 'Analisi non riuscita';
+                var dettaglio = document.createElement('p');
+                dettaglio.className = 'text-muted';
+                dettaglio.textContent = data.errori_dettaglio || 'Errore sconosciuto.';
+                var riprova = document.createElement('a');
+                riprova.className = 'btn btn-outline-secondary mt-2';
+                riprova.href = uploadUrl;
+                var freccia = document.createElement('i');
+                freccia.className = 'bi bi-arrow-left me-1';
+                riprova.appendChild(freccia);
+                riprova.appendChild(document.createTextNode('Riprova'));
+                box.appendChild(icona);
+                box.appendChild(titolo);
+                box.appendChild(dettaglio);
+                box.appendChild(riprova);
             } else {
                 setTimeout(pollStatus, 2000);
             }

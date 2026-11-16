@@ -1,0 +1,30 @@
+{# Pagina indipendente: non estende base.html e non carica CSS esterni, perche'
+   durante la manutenzione anche le richieste degli asset statici ricevono 503. #}
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="20">
+  <title>Manutenzione in corso — MedInventory</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+           background: #f5f6f8; color: #212529; margin: 0;
+           display: flex; align-items: center; justify-content: center;
+           min-height: 100vh; }
+    .riquadro { background: #fff; border-radius: .75rem; padding: 2.5rem;
+                max-width: 32rem; text-align: center;
+                box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.08); }
+    h1 { font-size: 1.35rem; margin: 0 0 1rem; }
+    p { margin: 0 0 .5rem; line-height: 1.5; }
+    .nota { color: #6c757d; font-size: .875rem; }
+  </style>
+</head>
+<body>
+  <div class="riquadro">
+    <h1>Manutenzione in corso</h1>
+    <p>{{ messaggio }}</p>
+    <p class="nota">La pagina si ricarica da sola fra pochi secondi.</p>
+  </div>
+</body>
+</html>

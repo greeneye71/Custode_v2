@@ -6,14 +6,13 @@ test restano quelli che le proteggono. Questo modulo serve solo a dare loro
 un'unica interfaccia e un unico modo di trovare il database.
 """
 import os
+import percorsi
 import sqlite3
 from datetime import datetime
 
-RADICE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 def radice():
-    return RADICE
+    return percorsi.radice()
 
 
 def percorso_database(percorso_esplicito=None):
@@ -76,14 +75,14 @@ def applica_migrazioni(conn, percorso_db, config, pendenti):
 def percorso_uploads(config):
     percorso = config.get('uploads_path', 'uploads')
     if not os.path.isabs(percorso):
-        percorso = os.path.join(RADICE, percorso)
+        percorso = os.path.join(radice(), percorso)
     return percorso
 
 
 def percorso_backup(config):
     percorso = config.get('backups_path', 'backups')
     if not os.path.isabs(percorso):
-        percorso = os.path.join(RADICE, percorso)
+        percorso = os.path.join(radice(), percorso)
     return percorso
 
 

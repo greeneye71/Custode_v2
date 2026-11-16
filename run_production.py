@@ -7,6 +7,7 @@ Used for production deployment and Windows service.
 import sys
 import os
 import logging
+import signal
 from logging.handlers import RotatingFileHandler
 
 # Force UTF-8 I/O on Windows (avoids 'ascii' codec errors with Italian text / Anthropic SDK)
@@ -19,6 +20,8 @@ if hasattr(sys.stderr, 'reconfigure'):
 app_dir = os.path.dirname(os.path.abspath(__file__))
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
+
+import percorsi
 
 from app import create_app
 
@@ -65,13 +68,29 @@ def setup_logging(log_dir):
     root_logger.addHandler(console_handler)
 
 
+def _termina(signum, frame):
+    """Gestore di SIGTERM: esce in modo pulito.
+
+    Come PID 1 in un container il processo non ha il gestore predefinito di
+    SIGTERM e non si fermerebbe mai. SystemExit non e' una Exception: Waitress
+    chiude il server, serve() ritorna e il finally di main() ferma lo scheduler.
+    """
+    logging.getLogger('medinventory').info("Arresto richiesto (SIGTERM)")
+    raise SystemExit(0)
+
+
+def installa_gestore_sigterm():
+    """Installa _termina come gestore di SIGTERM (solo dal thread principale)."""
+    signal.signal(signal.SIGTERM, _termina)
+
+
 def main():
     """Start the production server."""
     app = create_app()
     config = app.config['APP_CONFIG']
 
     # Setup logging
-    log_dir = os.path.join(app_dir, 'logs')
+    log_dir = percorsi.percorso('logs')
     setup_logging(log_dir)
 
     logger = logging.getLogger('medinventory')
@@ -115,6 +134,8 @@ def main():
     logger.info(f"Server in ascolto su {proto_label}://{host}:{port}")
     if cloudflare_mode:
         logger.info("Modalità Cloudflare Tunnel attiva — accesso esterno via tunnel cifrato")
+
+    installa_gestore_sigterm()
 
     try:
         from waitress import serve

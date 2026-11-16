@@ -391,9 +391,14 @@ def comando_backup(args):
     if args.ripristina:
         if not conferma(f'Sostituire il database con {args.ripristina}?'):
             return 0
-        operazioni.ripristina_backup(
+        # Il backup viene validato prima e dopo la scrittura; la copia del
+        # database precedente resta sul disco e va segnalata a chi lancia il
+        # comando, altrimenti non sa da dove tornare indietro.
+        copia = operazioni.ripristina_backup(
             os.path.join(cartella, args.ripristina), percorso_db)
         print(tui.riga_esito('ok', 'Database ripristinato.'))
+        print(tui.riga_esito(
+            'ok', f'Copia del database precedente: {os.path.basename(copia)}'))
         return 0
     elenco = operazioni.elenca_backup(cartella)
     if not elenco:

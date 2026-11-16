@@ -3,6 +3,7 @@
 Ogni test riceve un database vuoto e una cartella uploads propri, così i test
 non si influenzano fra loro e non toccano i dati reali dello sviluppatore.
 """
+import copy
 import os
 import sys
 
@@ -19,7 +20,17 @@ def app(tmp_path):
 
     import app as modulo_app
 
-    config = modulo_app.load_config()
+    # load_config() viene sostituita qui sotto e la sostituzione resta sul
+    # modulo: senza conservare l'originale, ogni test riceverebbe il dizionario
+    # di configurazione del test precedente e ne erediterebbe le modifiche (un
+    # test che scrive ai_local_url_allowlist faceva fallire un test successivo).
+    # Si riparte sempre dalla configurazione su disco, copiata in profondita'.
+    originale = getattr(modulo_app, '_load_config_originale', None)
+    if originale is None:
+        originale = modulo_app.load_config
+        modulo_app._load_config_originale = originale
+
+    config = copy.deepcopy(originale())
     config['database_path'] = str(tmp_path / 'data' / 'test.sqlite')
     config['uploads_path'] = str(tmp_path / 'uploads')
     config['single_struttura'] = False

@@ -1,0 +1,22 @@
+[Unit]
+Description=Custode proxy TLS per la rete locale
+After=custode-web.service
+Requires=custode-web.service
+
+[Container]
+# Versione fissata: aggiornarla a mano dopo aver letto le note di rilascio.
+Image=docker.io/library/nginx:1.28.0-alpine
+Pod=custode.pod
+ContainerName=custode-lan
+# Cartelle di Custode, montate in sola lettura e solo da questo container.
+# conf.d copre quella dell'immagine: resta solo custode-lan.conf.
+# In certs ci sono certificato e chiave del server, nient'altro.
+Volume=%h/lan/conf.d:/etc/nginx/conf.d:ro,Z
+Volume=%h/lan/certs:/etc/nginx/certs:ro,Z
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -21,6 +21,7 @@ In modalità Cloudflare disattiva vengono ripristinati:
 
 import json
 import os
+import re
 import sys
 import argparse
 import platform
@@ -33,9 +34,10 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CONFIG_LOCAL   = os.path.join(BASE_DIR, 'config.local.json')
-CONFIG_EXAMPLE = os.path.join(BASE_DIR, 'config.local.example.json')
+import percorsi
+
+CONFIG_LOCAL   = percorsi.percorso('config.local.json')
+CONFIG_EXAMPLE = percorsi.modello('config.local.example.json')
 
 # Percorsi standard del file di configurazione cloudflared
 _CF_CONFIG_PATHS = [
@@ -371,9 +373,14 @@ def _controlla_cookie_login(url_base, timeout=10):
     }
 
 
-def esegui_test(config):
+def esegui_test(config, hostname=None):
     """
     Diagnostica completa dell'integrazione Cloudflare Tunnel.
+
+    Nel container (percorsi.stato_separato()) cloudflared gira in un altro
+    container del pod: le sezioni che guardano l'host vengono saltate e
+    l'hostname pubblico, che non si puo' leggere da config.yml, arriva da
+    --hostname.
     """
     print()
     print("=" * 60)
@@ -401,57 +408,69 @@ def esegui_test(config):
         _print_check(None, "cloudflare_mode=true ma force_https=false — "
                            "cookie Secure e HSTS non attivi")
 
-    # ── Sezione 2: cloudflared installato ────────────────────────────────────
-    print("\n[2] Installazione cloudflared")
-    exe = _trova_cloudflared()
-    if exe:
-        versione = _versione_cloudflared(exe)
-        _print_check(True, f"Trovato: {exe}")
-        if versione:
-            _print_check('info', versione)
+    nel_container = percorsi.stato_separato()
+
+    if nel_container:
+        print("\n[2-4] Saltati - cloudflared gira nel container custode-tunnel, "
+              "non su questo sistema")
+        _print_check('info', "Log del tunnel, dall'host: "
+                             "sudo journalctl CONTAINER_NAME=custode-tunnel -n 50 --no-pager")
+        _print_check('info', "Stato di pod, container e tunnel, dall'host: "
+                             "sudo bash deploy/podman/configura.sh stato")
+        attivo_proc = None
+        cf_cfg = {}
     else:
-        _print_check(False, "cloudflared non trovato nel PATH né nelle posizioni standard")
-        if platform.system() == 'Windows':
-            _print_check('info', "Installare con: winget install --id Cloudflare.cloudflared")
+        # ── Sezione 2: cloudflared installato ────────────────────────────────────
+        print("\n[2] Installazione cloudflared")
+        exe = _trova_cloudflared()
+        if exe:
+            versione = _versione_cloudflared(exe)
+            _print_check(True, f"Trovato: {exe}")
+            if versione:
+                _print_check('info', versione)
         else:
-            _print_check('info', "Installare con: sudo apt install cloudflared")
-            _print_check('info', "Oppure (binario diretto): sudo curl -fsSL "
-                                 "https://github.com/cloudflare/cloudflared/releases/latest"
-                                 "/download/cloudflared-linux-amd64 "
-                                 "-o /usr/local/bin/cloudflared && sudo chmod +x /usr/local/bin/cloudflared")
+            _print_check(False, "cloudflared non trovato nel PATH né nelle posizioni standard")
+            if platform.system() == 'Windows':
+                _print_check('info', "Installare con: winget install --id Cloudflare.cloudflared")
+            else:
+                _print_check('info', "Installare con: sudo apt install cloudflared")
+                _print_check('info', "Oppure (binario diretto): sudo curl -fsSL "
+                                     "https://github.com/cloudflare/cloudflared/releases/latest"
+                                     "/download/cloudflared-linux-amd64 "
+                                     "-o /usr/local/bin/cloudflared && sudo chmod +x /usr/local/bin/cloudflared")
 
-    # ── Sezione 3: processo/servizio cloudflared ─────────────────────────────
-    print("\n[3] Stato processo/servizio cloudflared")
-    attivo_proc, dettaglio_proc = _servizio_cloudflared_attivo()
-    if attivo_proc is True:
-        _print_check(True, f"In esecuzione — {dettaglio_proc}")
-    elif attivo_proc is False:
-        _print_check(False, f"Non in esecuzione — {dettaglio_proc}")
-        if platform.system() == 'Windows':
-            _print_check('info', "Avvia con: cloudflared tunnel run <nome-tunnel>  "
-                                 "oppure: sc start cloudflared  (se installato come servizio)")
+        # ── Sezione 3: processo/servizio cloudflared ─────────────────────────────
+        print("\n[3] Stato processo/servizio cloudflared")
+        attivo_proc, dettaglio_proc = _servizio_cloudflared_attivo()
+        if attivo_proc is True:
+            _print_check(True, f"In esecuzione — {dettaglio_proc}")
+        elif attivo_proc is False:
+            _print_check(False, f"Non in esecuzione — {dettaglio_proc}")
+            if platform.system() == 'Windows':
+                _print_check('info', "Avvia con: cloudflared tunnel run <nome-tunnel>  "
+                                     "oppure: sc start cloudflared  (se installato come servizio)")
+            else:
+                _print_check('info', "Avvia con: cloudflared tunnel run <nome-tunnel>  "
+                                     "oppure: sudo systemctl start cloudflared  (se installato come servizio)")
         else:
-            _print_check('info', "Avvia con: cloudflared tunnel run <nome-tunnel>  "
-                                 "oppure: sudo systemctl start cloudflared  (se installato come servizio)")
-    else:
-        _print_check(None, f"Stato non determinabile — {dettaglio_proc}")
+            _print_check(None, f"Stato non determinabile — {dettaglio_proc}")
 
-    # ── Sezione 4: file di configurazione cloudflared ────────────────────────
-    print("\n[4] File di configurazione cloudflared")
-    cf_cfg = _leggi_config_cloudflared()
-    if cf_cfg:
-        _print_check(True, f"Trovato: {cf_cfg['config_path']}")
-        if cf_cfg.get('tunnel'):
-            _print_check('info', f"Tunnel UUID  : {cf_cfg['tunnel']}")
-        if cf_cfg.get('hostname'):
-            _print_check('info', f"Hostname     : {cf_cfg['hostname']}")
-        if cf_cfg.get('service'):
-            _print_check('info', f"Service locale: {cf_cfg['service']}")
-    else:
-        _print_check(None, "File config.yml non trovato nelle posizioni standard")
-        _print_check('info', "Consultare: CLOUDFLARE_TUNNEL.md — Parte 4")
+        # ── Sezione 4: file di configurazione cloudflared ────────────────────────
+        print("\n[4] File di configurazione cloudflared")
+        cf_cfg = _leggi_config_cloudflared()
+        if cf_cfg:
+            _print_check(True, f"Trovato: {cf_cfg['config_path']}")
+            if cf_cfg.get('tunnel'):
+                _print_check('info', f"Tunnel UUID  : {cf_cfg['tunnel']}")
+            if cf_cfg.get('hostname'):
+                _print_check('info', f"Hostname     : {cf_cfg['hostname']}")
+            if cf_cfg.get('service'):
+                _print_check('info', f"Service locale: {cf_cfg['service']}")
+        else:
+            _print_check(None, "File config.yml non trovato nelle posizioni standard")
+            _print_check('info', "Consultare: CLOUDFLARE_TUNNEL.md — Parte 4")
 
-    hostname_tunnel = cf_cfg.get('hostname')
+    hostname_tunnel = hostname or cf_cfg.get('hostname')
 
     # ── Sezione 5: server locale MedInventory ────────────────────────────────
     print("\n[5] Server MedInventory locale")
@@ -466,7 +485,11 @@ def esegui_test(config):
     else:
         _print_check(False, f"Non raggiungibile su http://{host_prova}:{porta}")
         _print_check('info', det_locale)
-        _print_check('info', "Avviare MedInventory con: python run_production.py")
+        if nel_container:
+            _print_check('info', "Dall'host: sudo bash deploy/podman/configura.sh stato  "
+                                 "e  sudo journalctl CONTAINER_NAME=custode-web -n 50 --no-pager")
+        else:
+            _print_check('info', "Avviare MedInventory con: python run_production.py")
 
     # ── Sezione 6: tunnel HTTPS (se hostname disponibile) ────────────────────
     if hostname_tunnel:
@@ -482,6 +505,9 @@ def esegui_test(config):
             _print_check(False, f"Non raggiungibile: {ris['errore']}")
             if attivo_proc is False:
                 _print_check('info', "Verifica che cloudflared sia in esecuzione (sezione 3)")
+            if nel_container:
+                _print_check('info', "Log del tunnel, dall'host: "
+                                     "sudo journalctl CONTAINER_NAME=custode-tunnel -n 50 --no-pager")
 
         # ── Sezione 7: header di sicurezza ───────────────────────────────────
         if ris['ok'] and ris['headers']:
@@ -544,8 +570,14 @@ def esegui_test(config):
             _print_check('info', "Verifica il record CNAME in Cloudflare Dashboard → DNS")
 
     else:
-        print(f"\n[6–10] Saltati — hostname tunnel non trovato in config.yml")
-        _print_check('info', "Configura il tunnel e poi riesegui il test")
+        if nel_container:
+            print("\n[6-10] Saltati - nel container l'hostname pubblico si indica "
+                  "con --hostname")
+            _print_check('info', "Esempio: custode cloudflare_mode.py --test "
+                                 "--hostname custode.example.it")
+        else:
+            print(f"\n[6–10] Saltati — hostname tunnel non trovato in config.yml")
+            _print_check('info', "Configura il tunnel e poi riesegui il test")
 
     # ── Riepilogo ─────────────────────────────────────────────────────────────
     print()
@@ -562,7 +594,12 @@ def esegui_test(config):
 # Entrypoint
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
+_HOSTNAME_VALIDO = re.compile(
+    r'^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+    r'(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$')
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Gestisce la modalità Cloudflare Tunnel di MedInventory'
     )
@@ -572,13 +609,23 @@ def main():
     gruppo.add_argument('--on',   action='store_true', help='Attiva la modalità Cloudflare')
     gruppo.add_argument('--off',  action='store_true', help='Disattiva la modalità Cloudflare')
     gruppo.add_argument('--test', action='store_true', help='Diagnostica completa del tunnel')
-    args = parser.parse_args()
+    parser.add_argument('--hostname', metavar='FQDN', default=None,
+                        help='Nome pubblico del tunnel per i controlli HTTPS '
+                             '(solo con --test; nel container sostituisce config.yml)')
+    args = parser.parse_args(argv)
+
+    if args.hostname is not None:
+        if not args.test:
+            parser.error('--hostname vale solo insieme a --test')
+        if not _HOSTNAME_VALIDO.match(args.hostname):
+            parser.error('--hostname vuole un nome di dominio, senza schema, '
+                         'porta o percorso (esempio: custode.example.it)')
 
     config  = leggi_config()
     corrente = cloudflare_attivo(config)
 
     if args.test:
-        esegui_test(config)
+        esegui_test(config, hostname=args.hostname)
         return
 
     print("=" * 55)

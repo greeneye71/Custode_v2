@@ -14,10 +14,16 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash
 
+import ai_chiavi
+import archivio_recupero
+
 from auth import (admin_required, superadmin_required,
                   tecnico_o_admin_required, operazione_globale_required)
 from models import query_one, query_all, execute, log_attivita, get_db
-from ai_service import AI_PROVIDERS
+from ai_service import AI_PROVIDERS, AI_PROVIDER_DEFAULTS
+from sicurezza_url import valida_url_ai_locale
+import manutenzione_globale
+from manutenzione_globale import ManutenzioneInCorso
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -779,6 +785,12 @@ def configurazione():
     display_config = dict(config)
     display_config['imap_password_set'] = bool(display_config.get('imap_password'))
     display_config['smtp_password_set'] = bool(display_config.get('smtp_password'))
+    # Le impostazioni AI si mostrano risolte: un'installazione aggiornata da una
+    # versione precedente alla 2.6 tiene ancora le chiavi senza prefisso e il
+    # runtime le usa davvero (ai_chiavi.py), quindi la pagina deve dichiararle
+    # configurate invece di mostrare campi vuoti che non lo sono.
+    for _chiave, _globale in ai_chiavi.CHIAVI_AI.items():
+        display_config[_globale] = ai_chiavi.valore_globale(config, _chiave, '')
     for _k in ('default_anthropic_api_key', 'default_gemini_api_key', 'default_openai_api_key'):
         display_config[_k + '_set'] = bool(display_config.get(_k))
 
@@ -807,11 +819,23 @@ def test_default_ai():
     # Salva provider
     config['default_ai_provider'] = provider
 
+    # L'URL del server AI locale si valida prima di salvarlo, come nella rotta
+    # per struttura. L'allowlist e' quella gia' presente in config: si cambia
+    # solo modificando config.local.json, non da questa pagina.
+    base_url_richiesto = (data.get('local_base_url') or '').strip()
+    if provider in AI_PROVIDER_DEFAULTS and base_url_richiesto:
+        try:
+            base_url_richiesto = valida_url_ai_locale(base_url_richiesto, config)
+        except ValueError as e:
+            log_attivita(g.user['id'], 'modifica', 'configurazione', None,
+                         f'Test AI default {provider}: URL locale rifiutato ({str(e)[:120]})',
+                         request.remote_addr)
+            return jsonify({'ok': False, 'models': [], 'message': str(e)}), 400
+
     # Modelli e URL locale
     for cfg_key, payload_field in (
         ('default_ai_import_model',   'ai_import_model'),
         ('default_ai_email_model',    'ai_email_model'),
-        ('default_ai_local_base_url', 'local_base_url'),
         ('default_ai_local_model',    'local_model'),
     ):
         val = (data.get(payload_field) or '').strip()
@@ -819,6 +843,10 @@ def test_default_ai():
             config[cfg_key] = val
         else:
             config.pop(cfg_key, None)
+    if base_url_richiesto:
+        config['default_ai_local_base_url'] = base_url_richiesto
+    else:
+        config.pop('default_ai_local_base_url', None)
 
     # Chiavi API (solo se fornite — non sovrascrivere se vuote)
     for cfg_key, payload_field in (
@@ -832,11 +860,13 @@ def test_default_ai():
 
     save_config(config)
 
-    # Recupera chiavi attive (appena salvate o già presenti)
-    anthropic_key = config.get('default_anthropic_api_key', '')
-    gemini_key    = config.get('default_gemini_api_key', '')
-    openai_key    = config.get('default_openai_api_key', '')
-    base_url      = config.get('default_ai_local_base_url', '')
+    # Recupera i valori attivi (appena salvati, gia' presenti, o ereditati da una
+    # chiave legacy senza prefisso): si prova esattamente quello che userebbe il
+    # runtime, non solo quello che questa pagina ha appena scritto.
+    anthropic_key = ai_chiavi.valore_globale(config, 'anthropic_api_key', '')
+    gemini_key    = ai_chiavi.valore_globale(config, 'gemini_api_key', '')
+    openai_key    = ai_chiavi.valore_globale(config, 'openai_api_key', '')
+    base_url      = ai_chiavi.valore_globale(config, 'ai_local_base_url', '')
 
     try:
         if provider == 'anthropic':
@@ -854,7 +884,7 @@ def test_default_ai():
         else:
             if not base_url:
                 return jsonify({'ok': False, 'message': 'URL server AI non configurato.', 'models': []})
-            models = _fetch_local_models(base_url)
+            models = _fetch_local_models(base_url, config)
 
         log_attivita(g.user['id'], 'modifica', 'configurazione', None,
                      f'Test AI default {provider}: OK, {len(models)} modelli', request.remote_addr)
@@ -962,10 +992,14 @@ def backup():
         else:
             db_size = f"{size_bytes / (1024 * 1024):.1f} MB"
 
+    archivi = archivio_recupero.elenca_archivi(backups_path)
+
     return render_template('admin/backup.html',
                            backups=backups,
+                           archivi=archivi,
                            db_size=db_size,
-                           retention=config.get('backup_retention', 4))
+                           retention=config.get('backup_retention', 4),
+                           archivio_retention=config.get('archivio_retention', 2))
 
 
 @admin_bp.route('/backup/crea', methods=['POST'])
@@ -1001,9 +1035,7 @@ def backup_scarica(filename):
     from werkzeug.utils import safe_join
 
     backups_path = current_app.config['BACKUPS_PATH']
-    if (not filename.startswith('medinventory_backup_')
-            or not filename.endswith('.sqlite')
-            or '/' in filename or '\\' in filename or '..' in filename):
+    if not _nome_backup_valido(filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -1015,14 +1047,13 @@ def backup_scarica(filename):
 def backup_ripristina(filename):
     """Restore database from a backup."""
     from backup_service import create_backup, restore_backup
+    from models import close_db
 
     backups_path = current_app.config['BACKUPS_PATH']
     db_path = current_app.config['DATABASE_PATH']
 
     # Strict filename validation: no path separators or traversal sequences
-    if (not filename.startswith('medinventory_backup_')
-            or not filename.endswith('.sqlite')
-            or '/' in filename or '\\' in filename or '..' in filename):
+    if not _nome_backup_valido(filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -1033,20 +1064,54 @@ def backup_ripristina(filename):
         flash('Percorso backup non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
+    # Chi ha chiesto il ripristino va letto adesso: dopo la sostituzione del
+    # file, l'utente della sessione potrebbe non esistere piu' nel database.
+    autore_id = g.user['id']
+    autore_email = g.user['email']
+
     try:
-        # Create a safety backup of the current DB before overwriting it
-        retention = current_app.config['APP_CONFIG'].get('backup_retention', 4)
-        create_backup(db_path, backups_path, retention=retention + 1)
+        # Il traffico si ferma prima di toccare il file: senza questo, gli
+        # altri thread di Waitress e lo scheduler continuerebbero a leggere e
+        # scrivere il database mentre viene sostituito.
+        with manutenzione_globale.operazione_esclusiva(
+                f"ripristino del backup {filename}"):
+            # La connessione di questa richiesta punta al file che stiamo per
+            # sostituire: va chiusa anche lei.
+            close_db()
 
-        restore_backup(backup_path, db_path)
+            retention = current_app.config['APP_CONFIG'].get('backup_retention', 4)
+            create_backup(db_path, backups_path, retention=retention + 1)
 
-        log_attivita(g.user['id'], 'backup_ripristino', 'backup', None,
-                     f"Ripristinato da: {filename}", request.remote_addr,
-                     struttura_id=None)
-
-        flash(f"Database ripristinato da {filename}. Riavvia l'applicazione per applicare le modifiche.", 'warning')
+            copia_sicurezza = restore_backup(backup_path, db_path)
+            close_db()
+    except ManutenzioneInCorso as e:
+        flash(str(e), 'warning')
+        return redirect(url_for('admin.backup'))
     except Exception as e:
         flash(f"Errore durante il ripristino: {str(e)}", 'danger')
+        return redirect(url_for('admin.backup'))
+
+    # Traccia dell'operazione fuori dal database: il file appena ripristinato
+    # non e' un posto affidabile dove annotare la propria sostituzione.
+    current_app.logger.warning(
+        "Ripristino database da %s eseguito da %s (id %s, IP %s). "
+        "Copia di sicurezza del database precedente: %s",
+        filename, autore_email, autore_id, request.remote_addr, copia_sicurezza)
+
+    # Il log applicativo finisce nel database ripristinato, dove l'autore
+    # potrebbe non esistere: la foreign key rifiuterebbe la riga. Il ripristino
+    # e' comunque riuscito, e non deve essere presentato come un errore.
+    try:
+        log_attivita(autore_id, 'backup_ripristino', 'backup', None,
+                     f"Ripristinato da: {filename}", request.remote_addr,
+                     struttura_id=None)
+    except Exception as e:
+        current_app.logger.warning(
+            "Ripristino riuscito ma non registrato nel log attivita': %s", e)
+
+    flash(f"Database ripristinato da {filename}. Copia di sicurezza del "
+          f"database precedente: {os.path.basename(copia_sicurezza)}. "
+          f"Riavvia l'applicazione per applicare le modifiche.", 'warning')
 
     return redirect(url_for('admin.backup'))
 
@@ -1059,9 +1124,7 @@ def backup_elimina(filename):
 
     backups_path = current_app.config['BACKUPS_PATH']
 
-    if (not filename.startswith('medinventory_backup_')
-            or not filename.endswith('.sqlite')
-            or '/' in filename or '\\' in filename or '..' in filename):
+    if not _nome_backup_valido(filename):
         flash('Nome file non valido.', 'danger')
         return redirect(url_for('admin.backup'))
 
@@ -1070,6 +1133,157 @@ def backup_elimina(filename):
     try:
         delete_backup(backup_path)
         flash(f"Backup {filename} eliminato.", 'info')
+    except Exception as e:
+        flash(f"Errore durante l'eliminazione: {str(e)}", 'danger')
+
+    return redirect(url_for('admin.backup'))
+
+
+@admin_bp.route('/backup/<filename>/verifica', methods=['POST'])
+@operazione_globale_required
+def backup_verifica(filename):
+    """Prova un backup senza ripristinarlo.
+
+    Serve a sapere che il file e' davvero ripristinabile *prima* del giorno in
+    cui servira': l'audit chiede prove periodiche di ripristino, non la sola
+    constatazione che il backup e' stato creato.
+    """
+    from backup_service import verifica_database
+
+    backups_path = current_app.config['BACKUPS_PATH']
+    if not _nome_backup_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    problemi = verifica_database(os.path.join(backups_path, filename))
+
+    log_attivita(g.user['id'], 'backup_verifica', 'backup', None,
+                 f"Verifica di {filename}: "
+                 + ('nessun problema' if not problemi else '; '.join(problemi)),
+                 request.remote_addr, struttura_id=None)
+
+    if problemi:
+        flash(f"Il backup {filename} NON e' ripristinabile: " + ' '.join(problemi),
+              'danger')
+    else:
+        flash(f"Il backup {filename} e' integro e ripristinabile.", 'success')
+
+    return redirect(url_for('admin.backup'))
+
+
+# ============================================================================
+# ARCHIVIO DI RIPRISTINO COMPLETO
+# ============================================================================
+
+def _nome_backup_valido(filename):
+    """Il nome viene dall'URL: deve restare un file dentro la cartella backup."""
+    return (filename.startswith('medinventory_backup_')
+            and filename.endswith('.sqlite')
+            and '/' not in filename and '\\' not in filename
+            and '..' not in filename)
+
+
+def _nome_archivio_valido(filename):
+    """Come sopra, per gli archivi di ripristino completo."""
+    return (filename.startswith(archivio_recupero.PREFISSO)
+            and filename.endswith(archivio_recupero.ESTENSIONE)
+            and '/' not in filename and '\\' not in filename
+            and '..' not in filename)
+
+
+@admin_bp.route('/backup/archivio/crea', methods=['POST'])
+@operazione_globale_required
+def archivio_crea():
+    """Crea l'archivio di ripristino completo (database + allegati + config)."""
+    import app as app_module
+
+    try:
+        includi_uploads = request.form.get('includi_uploads', '1') != '0'
+        config = current_app.config['APP_CONFIG']
+
+        risultato = archivio_recupero.crea_archivio(
+            db_path=current_app.config['DATABASE_PATH'],
+            uploads_path=current_app.config['UPLOADS_PATH'],
+            config_paths=[app_module.CONFIG_PATH, app_module.LOCAL_CONFIG_PATH],
+            archivi_path=current_app.config['BACKUPS_PATH'],
+            versione_app=config.get('version', 'sconosciuta'),
+            includi_uploads=includi_uploads,
+            retention=config.get('archivio_retention', 2))
+
+        log_attivita(g.user['id'], 'archivio_creazione', 'backup', None,
+                     f"Archivio di ripristino creato: {risultato['filename']} "
+                     f"({risultato['manifest']['numero_allegati']} allegati)",
+                     request.remote_addr, struttura_id=None)
+
+        flash(f"Archivio di ripristino creato: {risultato['filename']} "
+              f"({risultato['size_display']}). Contiene la configurazione "
+              "locale, chiave di cifratura compresa: custodiscilo come una "
+              "password.", 'success')
+    except Exception as e:
+        flash(f"Errore durante la creazione dell'archivio: {str(e)}", 'danger')
+
+    return redirect(url_for('admin.backup'))
+
+
+@admin_bp.route('/backup/archivio/<filename>/scarica')
+@operazione_globale_required
+def archivio_scarica(filename):
+    """Scarica un archivio di ripristino."""
+    from flask import send_from_directory
+
+    if not _nome_archivio_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    log_attivita(g.user['id'], 'archivio_download', 'backup', None,
+                 f"Archivio scaricato: {filename}", request.remote_addr,
+                 struttura_id=None)
+
+    return send_from_directory(current_app.config['BACKUPS_PATH'], filename,
+                               as_attachment=True)
+
+
+@admin_bp.route('/backup/archivio/<filename>/verifica', methods=['POST'])
+@operazione_globale_required
+def archivio_verifica(filename):
+    """Prova di ripristino: impronte di tutti i file e validita' del database."""
+    if not _nome_archivio_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    percorso = os.path.join(current_app.config['BACKUPS_PATH'], filename)
+    problemi = archivio_recupero.verifica_archivio(percorso)
+
+    log_attivita(g.user['id'], 'archivio_verifica', 'backup', None,
+                 f"Verifica di {filename}: "
+                 + ('nessun problema' if not problemi else '; '.join(problemi)),
+                 request.remote_addr, struttura_id=None)
+
+    if problemi:
+        flash(f"L'archivio {filename} NON e' utilizzabile: " + ' '.join(problemi),
+              'danger')
+    else:
+        flash(f"L'archivio {filename} e' completo: impronte corrette e database "
+              "ripristinabile.", 'success')
+
+    return redirect(url_for('admin.backup'))
+
+
+@admin_bp.route('/backup/archivio/<filename>/elimina', methods=['POST'])
+@superadmin_required
+def archivio_elimina(filename):
+    """Elimina un archivio di ripristino."""
+    if not _nome_archivio_valido(filename):
+        flash('Nome file non valido.', 'danger')
+        return redirect(url_for('admin.backup'))
+
+    try:
+        archivio_recupero.elimina_archivio(
+            os.path.join(current_app.config['BACKUPS_PATH'], filename))
+        log_attivita(g.user['id'], 'archivio_eliminazione', 'backup', None,
+                     f"Archivio eliminato: {filename}", request.remote_addr,
+                     struttura_id=None)
+        flash(f"Archivio {filename} eliminato.", 'info')
     except Exception as e:
         flash(f"Errore durante l'eliminazione: {str(e)}", 'danger')
 
@@ -1089,64 +1303,77 @@ def reset_database():
     config = current_app.config['APP_CONFIG']
     retention = config.get('backup_retention', 4)
 
+    # Letti prima: dopo l'azzeramento questo utente non esiste piu'.
+    autore_id = g.user['id']
+    autore_email = g.user['email']
+
     try:
-        # 1. Backup automatico prima di qualsiasi modifica
-        backup_result = create_backup(db_path, backups_path, retention)
+        # Il traffico si ferma prima di cancellare il file: la sola
+        # close_db() della richiesta corrente lasciava gli altri thread di
+        # Waitress e lo scheduler dentro un database che spariva.
+        with manutenzione_globale.operazione_esclusiva('azzeramento del database'):
+            # 1. Backup automatico prima di qualsiasi modifica
+            backup_result = create_backup(db_path, backups_path, retention)
 
-        # 2. Chiudi la connessione corrente al DB
-        close_db()
+            # 2. Chiudi la connessione corrente al DB
+            close_db()
 
-        # 3. Elimina il file DB e i journal WAL/SHM
-        for suffix in ('', '-wal', '-shm'):
-            fpath = db_path + suffix
-            if os.path.exists(fpath):
-                os.remove(fpath)
+            # 3. Elimina il file DB e i journal WAL/SHM
+            for suffix in ('', '-wal', '-shm'):
+                fpath = db_path + suffix
+                if os.path.exists(fpath):
+                    os.remove(fpath)
 
-        # 4. Reinizializza lo schema da schema.sql
-        init_db()
-        apply_schema_updates()
+            # 4. Reinizializza lo schema da schema.sql
+            init_db()
+            apply_schema_updates()
 
-        # 5. Seed: struttura di default + 2 divisioni + utente admin predefinito
-        c = db_execute(
-            """INSERT INTO strutture (nome, codice, descrizione, modalita, attiva)
-               VALUES (?,?,?,?,?)""",
-            ('Struttura Principale', 'DEFAULT',
-             'Struttura predefinita (rinominare da Amministrazione → Strutture)',
-             'avanzata', 1)
-        )
-        struttura_id = c.lastrowid
-
-        c = db_execute(
-            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
-               VALUES (?,?,?,?,?)""",
-            ('Divisione 1', 'DIV1', '#0ea5e9',
-             'Prima divisione (rinominare da pannello admin)', struttura_id)
-        )
-        div1_id = c.lastrowid
-        c = db_execute(
-            """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
-               VALUES (?,?,?,?,?)""",
-            ('Divisione 2', 'DIV2', '#10b981',
-             'Seconda divisione (rinominare da pannello admin)', struttura_id)
-        )
-        div2_id = c.lastrowid
-
-        password_hash = generate_password_hash('admin123')
-        c = db_execute(
-            """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
-               VALUES (?,?,?,?,?,?,1)""",
-            ('admin@medinventory.local', password_hash, 'Amministratore', 'Sistema', 'admin',
-             struttura_id)
-        )
-        admin_id = c.lastrowid
-
-        for div_id in (div1_id, div2_id):
-            db_execute(
-                "INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione) VALUES (?,?,?)",
-                (admin_id, div_id, 'admin')
+            # 5. Seed: struttura di default + 2 divisioni + utente admin predefinito
+            c = db_execute(
+                """INSERT INTO strutture (nome, codice, descrizione, modalita, attiva)
+                   VALUES (?,?,?,?,?)""",
+                ('Struttura Principale', 'DEFAULT',
+                 'Struttura predefinita (rinominare da Amministrazione → Strutture)',
+                 'avanzata', 1)
             )
+            struttura_id = c.lastrowid
 
-        # 6. Invalida la sessione corrente e reindirizza al login
+            c = db_execute(
+                """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+                   VALUES (?,?,?,?,?)""",
+                ('Divisione 1', 'DIV1', '#0ea5e9',
+                 'Prima divisione (rinominare da pannello admin)', struttura_id)
+            )
+            div1_id = c.lastrowid
+            c = db_execute(
+                """INSERT INTO divisioni (nome, codice, colore, descrizione, struttura_id)
+                   VALUES (?,?,?,?,?)""",
+                ('Divisione 2', 'DIV2', '#10b981',
+                 'Seconda divisione (rinominare da pannello admin)', struttura_id)
+            )
+            div2_id = c.lastrowid
+
+            password_hash = generate_password_hash('admin123')
+            c = db_execute(
+                """INSERT INTO utenti (email, password_hash, nome, cognome, ruolo, struttura_id, primo_accesso)
+                   VALUES (?,?,?,?,?,?,1)""",
+                ('admin@medinventory.local', password_hash, 'Amministratore', 'Sistema', 'admin',
+                 struttura_id)
+            )
+            admin_id = c.lastrowid
+
+            for div_id in (div1_id, div2_id):
+                db_execute(
+                    "INSERT INTO utenti_divisioni (utente_id, divisione_id, ruolo_divisione) VALUES (?,?,?)",
+                    (admin_id, div_id, 'admin')
+                )
+
+        # 6. Traccia fuori dal database (che e' appena stato ricreato) e
+        #    invalida la sessione corrente, reindirizzando al login.
+        current_app.logger.warning(
+            "Database azzerato da %s (id %s, IP %s). Backup precedente: %s",
+            autore_email, autore_id, request.remote_addr,
+            backup_result['filename'])
         flask_session.clear()
 
         flash(
@@ -1156,6 +1383,9 @@ def reset_database():
         )
         return redirect(url_for('auth.login'))
 
+    except ManutenzioneInCorso as e:
+        flash(str(e), 'warning')
+        return redirect(url_for('admin.configurazione'))
     except Exception as e:
         flash(f'Errore durante il reset del database: {str(e)}', 'danger')
         return redirect(url_for('admin.configurazione'))
@@ -1268,7 +1498,12 @@ def log_attivita_view():
             FROM log_attivita l LEFT JOIN utenti u ON u.id = l.utente_id
             {where_sql} ORDER BY l.created_at DESC
         """, params)
-        writer.writerows([dict(r) for r in all_logs])
+        # Le stesse formule di Excel valgono per il CSV: il log riporta
+        # testo scritto dagli utenti (dettagli, nomi), che aperto in un foglio
+        # di calcolo verrebbe eseguito. Vedi export_service.cella_sicura().
+        from export_service import cella_sicura
+        writer.writerows([{k: cella_sicura(v) for k, v in dict(r).items()}
+                          for r in all_logs])
         return Response(
             output.getvalue(), mimetype='text/csv',
             headers={'Content-Disposition': 'attachment; filename=log_attivita.csv'}
@@ -1345,9 +1580,15 @@ def superadmin_dashboard():
 # ============================================================================
 
 @admin_bp.route('/sicurezza')
-@admin_required
+@operazione_globale_required
 def sicurezza():
-    """Visualizza e sblocca IP/utenti bloccati dal rate limiting."""
+    """Visualizza e sblocca IP/utenti bloccati dal rate limiting.
+
+    login_attempts e' una tabella globale: non ha struttura_id e raccoglie i
+    tentativi di tutto il deployment. Fino alla 2.7.1 la rotta era
+    @admin_required, e un admin di struttura leggeva gli indirizzi IP e le
+    email di chi tenta l'accesso alle altre.
+    """
     # Finestra calcolata da SQLite: created_at e' scritta con
     # CURRENT_TIMESTAMP, che e' UTC, e confrontarla con l'ora locale teneva
     # questo elenco sempre vuoto (vedi la nota in auth.login).
@@ -1363,7 +1604,7 @@ def sicurezza():
 
 
 @admin_bp.route('/sicurezza/sblocca', methods=['POST'])
-@admin_required
+@operazione_globale_required
 def sblocca_ip():
     """Rimuove i tentativi falliti per un IP specifico."""
     import ipaddress

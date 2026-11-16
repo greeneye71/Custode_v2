@@ -1,0 +1,13 @@
+[Unit]
+Description=Pod Custode (web, tunnel e proxy TLS per la LAN)
+
+[Pod]
+PodName=custode
+# Unica porta pubblicata: il proxy TLS. L'app ascolta su 127.0.0.1:5000
+# dentro il pod e da fuori non si raggiunge.
+# Sull'host la 8443 (sopra la 1024: nessuna soglia del kernel da abbassare);
+# dentro il pod nginx resta sulla 443.
+PublishPort=8443:443
+
+[Install]
+WantedBy=default.target

@@ -19,6 +19,10 @@ import io
 import os
 import logging
 
+from ai_chiavi import DEFAULT_AI, valore_globale
+from sicurezza_url import valida_url_ai_locale, leggi_allowlist
+from validazione_dominio import TIPO_NON_CLASSIFICATO
+
 logger = logging.getLogger('medinventory.ai')
 
 INVENTORY_SYSTEM_PROMPT = """Sei un assistente specializzato nell'analisi di inventari di apparecchi elettromedicali.
@@ -64,6 +68,8 @@ Ti verrà fornito il testo (o il PDF) di uno o più verbali/rapporti di interven
 
 Devi estrarre i dati e restituire un ARRAY JSON. Ogni elemento dell'array rappresenta un intervento su un singolo apparecchio e contiene:
 - matricola (il numero di serie/matricola dell'apparecchio su cui è stato fatto l'intervento)
+- marca (produttore dell'apparecchio, null se non indicato)
+- modello (modello dell'apparecchio, null se non indicato)
 - tipo (uno tra: preventiva, correttiva, verifica, calibrazione)
 - data_intervento (formato YYYY-MM-DD)
 - tecnico_ditta (nome del tecnico e/o ditta che ha eseguito l'intervento)
@@ -77,7 +83,7 @@ REGOLE:
 - Restituisci SOLO un array JSON valido, senza altro testo
 - Se il documento riguarda un solo apparecchio, restituisci un array con un solo elemento
 - Se il documento riguarda più apparecchi (pagine diverse, sezioni diverse), restituisci un elemento per ciascuno
-- La matricola è fondamentale per identificare l'apparecchio
+- La matricola è fondamentale per identificare l'apparecchio; riporta anche marca e modello quando compaiono, servono a distinguere apparecchi diversi con la stessa matricola
 - Per il tipo, deduci dal contesto: "manutenzione programmata" -> "preventiva", "guasto" -> "correttiva", etc.
 - Se la data non è in formato standard, convertila in YYYY-MM-DD
 - Se non trovi un campo, usa null
@@ -169,9 +175,15 @@ AI_PROVIDER_DEFAULTS = {
 
 
 def _get_ai_config(config=None, struttura_id=None):
-    """Get AI provider configuration.
-    When struttura_id is given: reads ONLY from struttura_config (no global config fallback for AI keys).
-    When struttura_id is None: reads from global config.
+    """Configurazione AI effettiva.
+
+    Con `struttura_id`: override della struttura, altrimenti il default globale
+    `default_*`, altrimenti la chiave legacy, altrimenti il default di
+    programma. Senza `struttura_id`: la sola configurazione globale, con lo
+    stesso ordine fra `default_*` e chiave legacy.
+
+    La corrispondenza fra i due nomi sta in `ai_chiavi.py` e non va ripetuta
+    qui: e' quella che prima divergeva fra interfaccia, seed e servizio AI.
     """
     if config is None:
         from flask import current_app
@@ -179,30 +191,31 @@ def _get_ai_config(config=None, struttura_id=None):
 
     if struttura_id:
         from models import get_struttura_config as _gsc
-        def _sc(key, default=''):
-            val = _gsc(struttura_id, key)
-            return val if val is not None else default
+        def _sc(chiave):
+            return _gsc(struttura_id, chiave, DEFAULT_AI[chiave])
     else:
-        def _sc(key, default=''):
-            return config.get(key, default)
+        def _sc(chiave):
+            return valore_globale(config, chiave, DEFAULT_AI[chiave])
 
     return {
-        'provider':       _sc('ai_provider', 'anthropic'),
-        'api_key':        _sc('anthropic_api_key', ''),
-        'gemini_api_key': _sc('gemini_api_key', ''),
-        'openai_api_key': _sc('openai_api_key', ''),
-        'model_import':   _sc('ai_import_model', 'claude-sonnet-4-20250514'),
-        'model_email':    _sc('ai_email_model', 'claude-haiku-4-5-20251001'),
-        'local_base_url': _sc('ai_local_base_url', 'http://localhost:11434'),
-        'local_model':    _sc('ai_local_model', ''),
+        'provider':       _sc('ai_provider'),
+        'api_key':        _sc('anthropic_api_key'),
+        'gemini_api_key': _sc('gemini_api_key'),
+        'openai_api_key': _sc('openai_api_key'),
+        'model_import':   _sc('ai_import_model'),
+        'model_email':    _sc('ai_email_model'),
+        'local_base_url': _sc('ai_local_base_url'),
+        'local_model':    _sc('ai_local_model'),
+        # L'allowlist degli URL locali e' politica di sistema: si legge sempre
+        # dalla configurazione globale, mai da strutture_config, perche' e' il
+        # limite che vincola l'admin di struttura e non deve poterlo allargare.
+        # Per lo stesso motivo non compare in ai_chiavi.CHIAVI_AI.
+        'local_url_allowlist': leggi_allowlist(config),
     }
 
 
 def get_ai_config(struttura_id=None, config=None):
-    """Public alias for _get_ai_config.
-    When struttura_id is given: reads ONLY from struttura_config (no global fallback).
-    When struttura_id is None: reads from global config.
-    """
+    """Alias pubblico di _get_ai_config: stesso ordine di risoluzione."""
     return _get_ai_config(config=config, struttura_id=struttura_id)
 
 
@@ -247,12 +260,18 @@ def _call_anthropic_with_pdf(system_prompt, user_text, pdf_path, api_key, model,
     return message.content[0].text.strip()
 
 
-def _call_openai_compatible(system_prompt, user_message, base_url, model, max_tokens=4096):
-    """Call an OpenAI-compatible API (Ollama, LM Studio, etc.)."""
+def _call_openai_compatible(system_prompt, user_message, base_url, model, max_tokens=4096,
+                            allowlist=None):
+    """Call an OpenAI-compatible API (Ollama, LM Studio, etc.).
+
+    L'URL arriva dalla configurazione di una struttura, cioe' da un utente: va
+    rivalidato qui e non solo al salvataggio, perche' fra i due momenti il nome
+    puo' essere stato ripuntato altrove (vedi sicurezza_url).
+    """
     import httpx
 
     # Normalize base URL
-    base_url = base_url.rstrip('/')
+    base_url = valida_url_ai_locale(base_url, allowlist)
     if not base_url.endswith('/v1'):
         base_url += '/v1'
 
@@ -439,7 +458,8 @@ def _call_ai(system_prompt, user_message, api_key, model, max_tokens=4096, confi
         # ollama, lmstudio, openai_compatible
         base_url = ai_cfg['local_base_url']
         local_model = ai_cfg['local_model'] or model
-        return _call_openai_compatible(system_prompt, user_message, base_url, local_model, max_tokens)
+        return _call_openai_compatible(system_prompt, user_message, base_url, local_model,
+                                       max_tokens, ai_cfg['local_url_allowlist'])
 
 
 def _call_ai_with_pdf(system_prompt, user_text, pdf_path, api_key, model, max_tokens=4096, config=None, struttura_id=None):
@@ -493,6 +513,10 @@ def check_ai_configured(config=None, struttura_id=None):
             return False, 'URL del server AI locale non configurato. Configura l\'AI nella pagina della struttura.'
         if not ai_cfg['local_model']:
             return False, 'Modello AI locale non configurato. Configura l\'AI nella pagina della struttura.'
+        try:
+            valida_url_ai_locale(ai_cfg['local_base_url'], ai_cfg['local_url_allowlist'])
+        except ValueError as e:
+            return False, str(e)
         return True, None
 
 
@@ -666,7 +690,9 @@ def _parse_classification_result(result):
         return 'verbale_manutenzione'
     if 'inventario' in r:
         return 'inventario'
-    return 'inventario'
+    # M14: una classificazione non riconosciuta non diventa 'inventario'.
+    # Il documento va rivisto a mano, non importato come qualcos'altro.
+    return TIPO_NON_CLASSIFICATO
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +791,7 @@ def analyze_verifiche_from_pdf_document(filepath, api_key, model='claude-haiku-4
 
 def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type from PDF text.
-    Returns: 'verifica_elettrica' | 'manutenzione'
+    Returns: 'verifica_elettrica' | 'manutenzione' | 'da_classificare'
     """
     text_lower = pdf_text.lower()
 
@@ -794,16 +820,20 @@ def classify_email_document_type(pdf_text, api_key, model='claude-haiku-4-5-2025
             f"Classifica questo documento:\n\n{pdf_text[:2000]}",
             api_key, model, max_tokens=20, config=config, struttura_id=struttura_id
         )
-        if 'verifica' in result.lower():
+        risposta = result.lower()
+        if 'verifica' in risposta:
             return 'verifica_elettrica'
+        if 'manutenzione' in risposta:
+            return 'manutenzione'
     except Exception:
-        pass
-    return 'manutenzione'
+        logger.warning("Classificazione AI del documento email fallita", exc_info=True)
+    # M14: se l'AI non si pronuncia, il documento resta da classificare.
+    return TIPO_NON_CLASSIFICATO
 
 
 def classify_email_document_type_from_pdf_document(filepath, api_key, model='claude-haiku-4-5-20251001', config=None, struttura_id=None):
     """Classify document type for a scanned PDF.
-    Returns: 'verifica_elettrica' | 'manutenzione'
+    Returns: 'verifica_elettrica' | 'manutenzione' | 'da_classificare'
     """
     try:
         result = _call_ai_with_pdf(
@@ -811,11 +841,15 @@ def classify_email_document_type_from_pdf_document(filepath, api_key, model='cla
             "Classifica questo documento.",
             filepath, api_key, model, max_tokens=200, config=config, struttura_id=struttura_id
         )
-        if 'verifica' in result.lower():
+        risposta = result.lower()
+        if 'verifica' in risposta:
             return 'verifica_elettrica'
+        if 'manutenzione' in risposta:
+            return 'manutenzione'
     except Exception:
-        pass
-    return 'manutenzione'
+        logger.warning("Classificazione AI del PDF scansionato fallita", exc_info=True)
+    # M14: se l'AI non si pronuncia, il documento resta da classificare.
+    return TIPO_NON_CLASSIFICATO
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +918,7 @@ def find_duplicates(items, divisione_id, struttura_id=None):
     """Match extracted items against existing apparecchi in the database.
     Filtra per struttura_id quando disponibile per garantire isolamento multi-tenant.
     """
-    from models import query_one, query_all
+    from models import query_one, query_all, scegli_apparecchio
 
     results = []
     for item in items:
@@ -900,21 +934,40 @@ def find_duplicates(items, divisione_id, struttura_id=None):
         descrizione = item.get('descrizione', '').strip() if item.get('descrizione') else ''
 
         if matricola:
+            # UNIQUE e' su (struttura_id, modello, matricola): la matricola da
+            # sola puo' tornare piu' righe. Prenderne una a caso significava
+            # dichiarare "duplicato esatto" di un apparecchio che poteva non
+            # essere quello del documento.
             if struttura_id:
-                existing = query_one(
+                candidati = query_all(
                     "SELECT * FROM apparecchi WHERE matricola = ? AND struttura_id = ? AND stato != 'dismesso'",
                     (matricola, struttura_id)
                 )
             else:
-                existing = query_one(
+                candidati = query_all(
                     "SELECT * FROM apparecchi WHERE matricola = ? AND stato != 'dismesso'",
                     (matricola,)
                 )
+            existing, motivo = scegli_apparecchio(candidati,
+                                                  modello=item.get('modello'),
+                                                  marca=item.get('marca'))
             if existing:
                 result['match_type'] = 'esatto'
                 result['match_id'] = existing['id']
-                result['match_confidence'] = 1.0
+                result['match_confidence'] = 1.0 if motivo == 'matricola' else 0.8
                 result['match_info'] = f"{existing['marca']} {existing['modello']}"
+                results.append(result)
+                continue
+            if motivo == 'ambiguo':
+                # Non e' ne' nuovo ne' abbinato: senza una scelta umana
+                # importarlo creerebbe un doppione della matricola.
+                item['_match_ambiguo'] = [
+                    {'id': c['id'], 'marca': c['marca'], 'modello': c['modello']}
+                    for c in candidati
+                ]
+                result['match_type'] = 'ambiguo'
+                result['match_info'] = ', '.join(
+                    f"{c['marca']} {c['modello']}" for c in candidati)
                 results.append(result)
                 continue
 

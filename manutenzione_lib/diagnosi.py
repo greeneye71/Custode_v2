@@ -63,6 +63,31 @@ def controllo_migrazioni(conn, config, fotografia):
     return None
 
 
+def controllo_versione_dichiarata(conn, config, fotografia):
+    """B05: un database che non dichiara la propria versione.
+
+    Con PRAGMA user_version a 0 la versione va dedotta dalla forma delle
+    tabelle, e strumenti diversi possono dedurla in modo diverso: e' cosi'
+    che un file gia' aggiornato si e' fatto riconoscere come v1.1. Non e'
+    un guasto - le migrazioni pendenti le segnala controllo_migrazioni -
+    ma prima della messa in servizio va sanato.
+    """
+    schema = fotografia.get('schema') or {}
+    if not schema.get('disponibile'):
+        return None
+    if schema.get('pendenti'):
+        return None
+    if schema.get('user_version'):
+        return None
+    return Esito('avviso', 'Versione dello schema non dichiarata',
+                 'Il database ha PRAGMA user_version = 0: le tabelle sono '
+                 'quelle attuali, ma il file non dichiara la propria '
+                 'versione e ogni strumento deve dedurla.',
+                 'Fai un backup verificato, poi avvia il programma una '
+                 'volta oppure esegui python manutenzione.py migra, '
+                 'infine ripeti la diagnosi')
+
+
 def controllo_nessun_utente_attivo(conn, config, fotografia):
     sezione = fotografia.get('utenti') or {}
     if not sezione.get('disponibile'):
@@ -233,6 +258,7 @@ CONTROLLI = (
     controllo_integrita,
     controllo_chiavi_esterne,
     controllo_migrazioni,
+    controllo_versione_dichiarata,
     controllo_nessun_utente_attivo,
     controllo_strutture_senza_admin,
     controllo_impronte,

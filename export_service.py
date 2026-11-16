@@ -7,6 +7,26 @@ import io
 from datetime import datetime, timedelta
 
 
+# I caratteri con cui Excel e LibreOffice riconoscono l'inizio di una formula.
+_PREFISSI_FORMULA = ('=', '+', '-', '@', chr(9), chr(13))
+
+
+def cella_sicura(valore):
+    """Il valore da scrivere in un foglio, senza che diventi una formula.
+
+    Excel e LibreOffice eseguono il contenuto di ogni cella di testo che
+    inizia per ``=``, ``+``, ``-`` o ``@``: la descrizione di un apparecchio o
+    il nome di una ditta — testo che l'utente scrive e che noi riesportiamo —
+    puo' cosi' diventare codice che parte sul computer di chi apre il report
+    (CSV injection). L'apostrofo davanti forza il testo e non viene mostrato.
+
+    Numeri e date passano intatti: vanno scritti come tali, non come stringhe.
+    """
+    if isinstance(valore, str) and valore[:1] in _PREFISSI_FORMULA:
+        return "'" + valore
+    return valore
+
+
 def export_apparecchi_excel(apparecchi, divisione_nome=''):
     """Export apparecchi list to Excel (xlsx) using openpyxl."""
     from openpyxl import Workbook
@@ -71,7 +91,7 @@ def export_apparecchi_excel(apparecchi, divisione_nome=''):
             app.get('divisione_nome', ''),
         ]
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
 
@@ -146,7 +166,7 @@ def export_manutenzioni_excel(manutenzioni, title_extra=''):
             m.get('divisione_nome', ''),
         ]
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
 
@@ -226,7 +246,7 @@ def export_scadenzario_excel(scadenze, title_extra=''):
         ]
         fill = priority_fills.get(priorita, PatternFill())
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
             cell.fill = fill
@@ -305,7 +325,7 @@ def export_verifiche_excel(verifiche, title_extra=''):
         ]
         fill = esito_fills.get(esito, PatternFill())
         for col, value in enumerate(data, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value or '')
+            cell = ws.cell(row=row_idx, column=col, value=cella_sicura(value) or '')
             cell.border = thin_border
             cell.font = Font(name='Inter', size=10)
             if col == 4:
@@ -327,20 +347,21 @@ def export_verifiche_excel(verifiche, title_extra=''):
 def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export verifiche to PDF."""
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     class PDF(FPDF):
         def header(self):
             self.set_font('Helvetica', 'B', 14)
-            self.cell(0, 8, app_name, ln=True, align='C')
+            self.cell(0, 8, app_name, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', '', 9)
             subtitle = 'Registro Verifiche di Sicurezza Elettrica'
             if divisione_nome:
                 subtitle += f' - {divisione_nome}'
             if structure_name:
                 subtitle = f'{structure_name} - {subtitle}'
-            self.cell(0, 5, subtitle, ln=True, align='C')
+            self.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', 'I', 8)
-            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.ln(3)
 
         def footer(self):
@@ -398,7 +419,7 @@ def export_verifiche_pdf(verifiche, divisione_nome='', structure_name='', app_na
     pdf.set_font('Helvetica', 'I', 9)
     positivi = sum(1 for v in verifiche if v.get('esito') == 'positivo')
     negativi = sum(1 for v in verifiche if v.get('esito') == 'negativo')
-    pdf.cell(0, 5, f"Totale verifiche: {len(verifiche)} | Positive: {positivi} | Negative: {negativi}", ln=True)
+    pdf.cell(0, 5, f"Totale verifiche: {len(verifiche)} | Positive: {positivi} | Negative: {negativi}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     buffer = io.BytesIO()
     pdf.output(buffer)
@@ -430,7 +451,7 @@ def _foglio_semplice(titolo, intestazioni, righe_valori):
 
     for indice, valori in enumerate(righe_valori, start=4):
         for colonna, valore in enumerate(valori, start=1):
-            ws.cell(row=indice, column=colonna, value=valore)
+            ws.cell(row=indice, column=colonna, value=cella_sicura(valore))
 
     for colonna, etichetta in enumerate(intestazioni, start=1):
         larghezza = max([len(str(etichetta))] +
@@ -471,12 +492,88 @@ def stampa_scadenze_excel(scadute, in_scadenza, titolo):
     return _foglio_semplice(titolo, intestazioni, valori)
 
 
+# (etichetta, larghezza in mm, allineamento) — la somma deve fare 180, come le
+# tabelle di report_service. Colonne proprie perche' la riga impianto non ha
+# marca/modello/matricola: ha un nome e una verifica.
+COLONNE_IMPIANTI = [
+    ('Impianto', 46, 'L'),
+    ('Ubicazione', 34, 'L'),
+    ('Divisione', 26, 'L'),
+    ('Verifica', 38, 'L'),
+    ('Scadenza', 22, 'C'),
+    ('Giorni', 14, 'C'),
+]
+
+
+def _data_italiana_impianti(valore):
+    """Da 2026-08-15 a 15/08/2026. Lascia intatto cio' che non riconosce.
+
+    Duplicata da report_service._data_italiana invece di importarla: quella e'
+    un dettaglio privato del modulo (prefisso '_'), e questa funzione ha lo
+    stesso identico bisogno ma vive fuori da report_service, che non va
+    toccato per aggiungere gli impianti.
+    """
+    from report_service import testo_sicuro
+    testo = testo_sicuro(valore)
+    parti = testo.split('-')
+    if len(parti) == 3 and len(parti[0]) == 4:
+        return f'{parti[2]}/{parti[1]}/{parti[0]}'
+    return testo
+
+
+def _stampa_impianti(scadute, in_scadenza, contesto):
+    """Prospetto scadenze impianti, gemello di report_service.stampa_scadenze
+    ma per le proprie colonne. Documento a se': viene unito a quello degli
+    apparecchi con pypdf, perche' stampa_scadenze() restituisce gia' un PDF
+    completo e non e' un contenitore a cui aggiungere pagine dall'esterno.
+    """
+    from fpdf.enums import XPos, YPos
+    from report_service import ReportPDF, testo_sicuro
+
+    pdf = ReportPDF(contesto)
+    pdf.add_page()
+
+    indice = 0
+    for titolo, righe in (('Scadute', scadute),
+                          (f"In scadenza entro il {contesto.get('fine_periodo', '')}",
+                           in_scadenza)):
+        if not righe:
+            continue
+        pdf.ln(2)
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(0, 7, testo_sicuro(f'{titolo} ({len(righe)})'),
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.intestazione_tabella(COLONNE_IMPIANTI)
+        for riga in righe:
+            indice += 1
+            valori = [
+                riga.get('impianto_nome'),
+                riga.get('ubicazione'),
+                riga.get('divisione_nome'),
+                riga.get('scadenza_nome'),
+                _data_italiana_impianti(riga.get('prossima_scadenza')),
+                riga.get('giorni_rimasti'),
+            ]
+            pdf.riga_tabella(valori, COLONNE_IMPIANTI, alternata=(indice % 2 == 0))
+
+    pdf.ln(2)
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(0, 7, f'Totale impianti: {len(scadute)} scadute, {len(in_scadenza)} in scadenza',
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.blocco_firma()
+    return bytes(pdf.output())
+
+
 def genera_report_scadenze_pdf(struttura_id, output_path):
     """Report scadenze per l'invio automatico via email.
 
     Usa lo stesso motore delle stampe manuali: il PDF che arriva in posta e'
     identico a quello che si stampa dalla pagina Stampe, e resta un solo posto
-    da mantenere quando la grafica cambia.
+    da mantenere quando la grafica cambia. La sezione impianti e' un documento
+    separato (report_service.stampa_scadenze non e' estendibile dall'esterno,
+    restituisce gia' i byte finali) unito in coda con pypdf, e solo se c'e'
+    davvero qualcosa da mostrare: un impianto assente non genera nemmeno la
+    pagina.
     """
     from models import query_all, query_one, percorso_logo_struttura
     from report_service import stampa_scadenze
@@ -511,6 +608,23 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
                " ORDER BY ps.prossima_scadenza",
         (struttura_id, oggi.isoformat(), fine.isoformat()))
 
+    # Stesso schema di query degli apparecchi, sulla vista degli impianti.
+    # divisione_nome non e' nella vista (che espone solo divisione_id): serve
+    # il JOIN, come nel digest dello scheduler.
+    base_impianti = """SELECT v.impianto_nome, v.ubicazione, v.scadenza_nome,
+                              v.prossima_scadenza, v.giorni_rimasti,
+                              d.nome AS divisione_nome
+                       FROM prossime_scadenze_impianti v
+                       LEFT JOIN divisioni d ON d.id = v.divisione_id
+                       WHERE v.struttura_id = ?"""
+    scadute_impianti = query_all(
+        base_impianti + " AND v.prossima_scadenza < ? ORDER BY v.prossima_scadenza",
+        (struttura_id, oggi.isoformat()))
+    in_scadenza_impianti = query_all(
+        base_impianti + " AND v.prossima_scadenza >= ? AND v.prossima_scadenza <= ?"
+                        " ORDER BY v.prossima_scadenza",
+        (struttura_id, oggi.isoformat(), fine.isoformat()))
+
     contesto = {
         'struttura_nome': (struttura or {}).get('nome') or 'MedInventory',
         'titolo': 'Scadenzario',
@@ -522,27 +636,43 @@ def genera_report_scadenze_pdf(struttura_id, output_path):
         'fine_periodo': fine.strftime('%d/%m/%Y'),
     }
 
-    with open(output_path, 'wb') as f:
-        f.write(stampa_scadenze(scadute, in_scadenza, contesto))
+    documento = stampa_scadenze(scadute, in_scadenza, contesto)
+
+    if scadute_impianti or in_scadenza_impianti:
+        from pypdf import PdfWriter
+
+        contesto_impianti = dict(contesto, titolo='Scadenzario impianti')
+        sezione_impianti = _stampa_impianti(
+            scadute_impianti, in_scadenza_impianti, contesto_impianti)
+
+        writer = PdfWriter()
+        writer.append(io.BytesIO(documento))
+        writer.append(io.BytesIO(sezione_impianti))
+        with open(output_path, 'wb') as f:
+            writer.write(f)
+    else:
+        with open(output_path, 'wb') as f:
+            f.write(documento)
 
 
 def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export apparecchi list to PDF using fpdf2."""
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     class PDF(FPDF):
         def header(self):
             self.set_font('Helvetica', 'B', 14)
-            self.cell(0, 8, app_name, ln=True, align='C')
+            self.cell(0, 8, app_name, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', '', 9)
             subtitle = 'Inventario Apparecchi Elettromedicali'
             if divisione_nome:
                 subtitle += f' - {divisione_nome}'
             if structure_name:
                 subtitle = f'{structure_name} - {subtitle}'
-            self.cell(0, 5, subtitle, ln=True, align='C')
+            self.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', 'I', 8)
-            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.ln(3)
 
         def footer(self):
@@ -595,7 +725,7 @@ def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_
     # Summary
     pdf.ln(5)
     pdf.set_font('Helvetica', 'I', 9)
-    pdf.cell(0, 5, f"Totale apparecchi: {len(apparecchi)}", ln=True)
+    pdf.cell(0, 5, f"Totale apparecchi: {len(apparecchi)}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     buffer = io.BytesIO()
     pdf.output(buffer)
@@ -606,20 +736,21 @@ def export_apparecchi_pdf(apparecchi, divisione_nome='', structure_name='', app_
 def export_scadenzario_pdf(scadenze, divisione_nome='', structure_name='', app_name='MedInventory'):
     """Export scadenzario to PDF."""
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
 
     class PDF(FPDF):
         def header(self):
             self.set_font('Helvetica', 'B', 14)
-            self.cell(0, 8, app_name, ln=True, align='C')
+            self.cell(0, 8, app_name, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', '', 9)
             subtitle = 'Scadenzario Manutenzioni'
             if divisione_nome:
                 subtitle += f' - {divisione_nome}'
             if structure_name:
                 subtitle = f'{structure_name} - {subtitle}'
-            self.cell(0, 5, subtitle, ln=True, align='C')
+            self.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.set_font('Helvetica', 'I', 8)
-            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+            self.cell(0, 5, f"Generato il {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
             self.ln(3)
 
         def footer(self):
@@ -683,9 +814,141 @@ def export_scadenzario_pdf(scadenze, divisione_nome='', structure_name='', app_n
     pdf.set_font('Helvetica', 'I', 9)
     scaduti = sum(1 for s in scadenze if s.get('priorita') == 'scaduto')
     urgenti = sum(1 for s in scadenze if s.get('priorita') == 'urgente')
-    pdf.cell(0, 5, f"Totale scadenze: {len(scadenze)} | Scadute: {scaduti} | Urgenti: {urgenti}", ln=True)
+    pdf.cell(0, 5, f"Totale scadenze: {len(scadenze)} | Scadute: {scaduti} | Urgenti: {urgenti}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     buffer = io.BytesIO()
     pdf.output(buffer)
     buffer.seek(0)
     return buffer
+
+
+def genera_libretto_impianto(impianto_id, output_path):
+    """Il libretto dell'impianto: anagrafica, componenti, documenti, piano,
+    storico interventi.
+
+    Servizio interno: non convalida lo scope. La tenant-isolation passa dalla
+    rotta chiamante (impianti.libretto), che verifica l'accesso con
+    models.impianto_accessibile() prima di invocare questa funzione — qui
+    l'impianto_id arriva gia' verificato e le query sulle tabelle figlie
+    restano chiavi su di esso.
+
+    Dei documenti riporta i metadati, non i file: e' un indice di cosa esiste e
+    chi l'ha emesso, non un archivio da stampare.
+    """
+    from models import query_one, query_all, percorso_logo_struttura
+    from report_service import ReportPDF, testo_sicuro as _t
+
+    impianto = query_one(
+        """SELECT i.*, d.nome as divisione_nome, s.nome as struttura_nome,
+                  s.logo_path as struttura_logo_path,
+                  m.ragione_sociale as manutentore_nome
+           FROM impianti i
+           LEFT JOIN divisioni d ON d.id = i.divisione_id
+           LEFT JOIN strutture s ON s.id = i.struttura_id
+           LEFT JOIN manutentori m ON m.id = i.manutentore_id
+           WHERE i.id = ?""", (impianto_id,))
+    if not impianto:
+        raise ValueError(f"Impianto {impianto_id} inesistente")
+
+    componenti = query_all(
+        "SELECT * FROM impianti_componenti WHERE impianto_id = ?"
+        " ORDER BY descrizione", (impianto_id,))
+    documenti = query_all(
+        "SELECT * FROM impianti_documenti WHERE impianto_id = ?"
+        " ORDER BY data_documento DESC, id DESC", (impianto_id,))
+    piano = query_all(
+        "SELECT * FROM impianti_scadenze WHERE impianto_id = ?"
+        " ORDER BY attiva DESC, prossima_scadenza", (impianto_id,))
+    interventi = query_all(
+        """SELECT i.*, m.ragione_sociale as manutentore_nome
+           FROM impianti_interventi i
+           LEFT JOIN manutentori m ON m.id = i.manutentore_id
+           WHERE i.impianto_id = ? ORDER BY i.data_intervento DESC""",
+        (impianto_id,))
+
+    contesto = {
+        'struttura_nome': impianto['struttura_nome'] or 'MedInventory',
+        'titolo': f"Libretto impianto - {impianto['nome']}",
+        'ambito': impianto['divisione_nome'] or '',
+        'logo_path': percorso_logo_struttura(
+            {'logo_path': impianto['struttura_logo_path']}),
+        'mostra_firma': False,
+    }
+
+    pdf = ReportPDF(contesto)
+    pdf.add_page()
+
+    def titolo(testo):
+        pdf.ln(3)
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(0, 7, _t(testo), new_x='LMARGIN', new_y='NEXT')
+        pdf.set_font('Helvetica', '', 9)
+
+    def riga(etichetta, valore):
+        pdf.cell(45, 5, _t(etichetta), border=0)
+        pdf.multi_cell(0, 5, _t(valore if valore not in (None, '') else '-'),
+                        new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Anagrafica')
+    riga('Tipo', impianto['tipo_custom'] or impianto['tipo'])
+    riga('Stato', impianto['stato'])
+    riga('Ubicazione', impianto['ubicazione'])
+    riga('Identificativo', impianto['identificativo'])
+    riga('Anno installazione', impianto['anno_installazione'])
+    riga('Manutentore', impianto['manutentore_nome'])
+    riga('Descrizione', impianto['descrizione'])
+
+    titolo('Componenti')
+    if componenti:
+        for c in componenti:
+            pdf.multi_cell(0, 5, _t(
+                f"- {c['descrizione']} "
+                f"({c['marca'] or '-'} {c['modello'] or ''} "
+                f"mat. {c['matricola'] or '-'})"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Nessun componente censito.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Documentazione')
+    if documenti:
+        for d in documenti:
+            pdf.multi_cell(0, 5, _t(
+                f"- [{d['tipo']}] {d['descrizione'] or d['filename']} - "
+                f"{d['data_documento'] or 's.d.'} - "
+                f"{d['emittente_ragione_sociale'] or 'emittente non indicato'}"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Nessun documento caricato.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Piano di manutenzione e verifica')
+    if piano:
+        for p in piano:
+            periodo = (f"ogni {p['periodicita_mesi']} mesi"
+                       if p['periodicita_mesi'] else 'una tantum')
+            stato = '' if p['attiva'] else ' [sospesa]'
+            pdf.multi_cell(0, 5, _t(
+                f"- {p['nome']} ({periodo}) - prossima: "
+                f"{p['prossima_scadenza']} - "
+                f"{p['riferimento_normativo'] or 'nessun riferimento'}{stato}"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Piano non ancora definito.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    titolo('Storico interventi')
+    if interventi:
+        for i in interventi:
+            pdf.multi_cell(0, 5, _t(
+                f"- {i['data_intervento']} [{i['tipo']}] "
+                f"{i['esito'] or 'esito non indicato'} - "
+                f"{i['manutentore_nome'] or i['tecnico_ditta'] or '-'} - "
+                f"{i['descrizione'] or ''}"),
+                new_x='LMARGIN', new_y='NEXT')
+    else:
+        pdf.cell(0, 5, _t('Nessun intervento registrato.'),
+                 new_x='LMARGIN', new_y='NEXT')
+
+    pdf.output(output_path)
+    return output_path
