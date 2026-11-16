@@ -87,10 +87,11 @@ def _righe(relativo):
             if r.strip() and not r.strip().startswith("#")]
 
 
-def test_pod_pubblica_solo_la_443():
+def test_pod_pubblica_solo_la_8443():
     righe = _righe(PODMAN + "custode.pod")
     assert "PodName=custode" in righe
-    assert [r for r in righe if r.startswith("PublishPort=")] == ["PublishPort=443:443"]
+    assert [r for r in righe if r.startswith("PublishPort=")] == ["PublishPort=8443:443"]
+    assert "PublishPort=443:443" not in righe
     assert "WantedBy=default.target" in righe
     # La 5000 resta dentro il pod: nessun container pubblica porte per conto suo.
     for nome in ("custode-web", "custode-tunnel", "custode-lan"):
@@ -491,16 +492,23 @@ def test_configura_subuid_diversi_da_mcorsi():
     assert "200000" not in testo and "265535" not in testo
 
 
-def test_configura_sysctl_prima_del_pod():
+def test_configura_non_tocca_le_porte_privilegiate():
     testo = _leggi(CONFIGURA)
-    assert "SYSCTL_FILE=/etc/sysctl.d/90-custode-porta-443.conf" in testo
-    assert "net.ipv4.ip_unprivileged_port_start=443" in testo
+    assert "PORTA_LAN=8443" in testo
+    # Nessun valore scritto per la soglia, tranne il ripristino a 1024.
+    valori = re.findall(r"ip_unprivileged_port_start=(\d+)", testo)
+    assert valori == ["1024"]
+    assert "SYSCTL_FILE" not in testo and "apri_porta_443" not in testo
+    # La migrazione rimuove solo il file di Custode, in installa, prima delle unità.
+    assert "SYSCTL_VECCHIO=/etc/sysctl.d/90-custode-porta-443.conf" in testo
+    assert 'rm -f "$SYSCTL_VECCHIO"' in testo
     installa = _corpo(testo, "cmd_installa")
-    assert installa.index("apri_porta_443") < installa.index("installa_unita")
-    # Il pod parte in un punto solo, e lì la porta viene controllata prima.
+    assert installa.index("ripristina_soglia_porte") < installa.index("installa_unita")
+    # Firewall: la porta, non il servizio https (che può servire ad altro).
+    assert '--add-port="$PORTA_LAN/tcp"' in testo
+    assert "--add-service=https" not in testo
+    # Il pod parte in un punto solo.
     assert len(re.findall(r'(?:re)?start "\$POD_SERVICE"', testo)) == 1
-    pod = _corpo(testo, "avvia_pod")
-    assert pod.index("porta_443_aperta") < pod.index('restart "$POD_SERVICE"')
 
 
 def test_configura_prepara_utente_e_host():
@@ -508,14 +516,12 @@ def test_configura_prepara_utente_e_host():
     for atteso in (
         'useradd --system --create-home --shell /sbin/nologin "$APP_USER"',
         'loginctl enable-linger "$APP_USER"',
-        "firewall-cmd --permanent --add-service=https",
         'install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$BACKUP_DIR"',
         "podman build --network=host",
         'podman save "$IMAGE" | as_custode podman load',
         'install -m 0755 "$SCRIPT_DIR/custode" /usr/local/bin/custode',
     ):
         assert atteso in testo, atteso
-    assert "--add-port" not in testo
 
 
 def test_configura_log_dal_journal_di_sistema():

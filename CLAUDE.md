@@ -85,7 +85,7 @@ The Fedora deployment runs in a rootless Podman pod managed by Quadlet units (`d
 - **State outside the sources.** Sources live in `/app`, state in the `custode-stato` volume mounted at `/stato`, selected by `MEDINVENTORY_RADICE=/stato`. Every state path must go through `percorsi.percorso()` instead of computing a root from `__file__`.
 - **Names.** Pod `custode` (`custode-pod.service`), containers `custode-web` (app, `127.0.0.1:5000` inside the pod), `custode-lan` (nginx TLS) and `custode-tunnel` (cloudflared), volume `custode-stato`, image `localhost/custode:latest`, backups on the host in `/var/backups/custode`.
 - **Maintenance CLIs** go through the `custode` wrapper, in four forms: `custode <script.py>` (app running), `custode manutenzione ...` (shortcut for `manutenzione.py`), `custode fermo <script.py>` (pod stopped, always restarted afterwards), `custode esterna <dir> <script.py>` (another installation, read-only, `--security-opt label=disable`).
-- **Port 5000 is never published.** Only `443:443` is; outside access is the tunnel only.
+- **Port 5000 is never published.** Only `8443:443` is (host 8443, above 1024: no sysctl change; nginx inside the pod stays on 443); outside access is the tunnel only.
 - **Tunnel token** only as the Podman secret `custode-tunnel-token`, set via `configura.sh token` (hidden input). Never on a command line or in a file.
 - **`ca.key` never goes to a container**, a volume or a `podman` command; it stays in `/etc/pki/minventory-ca`.
 - **SELinux labels.** `:Z` only on Custode's own folders; `--security-opt label=disable` on anyone else's.

@@ -7,13 +7,13 @@ Questo documento descrive l'installazione di MedInventory (Custode) in container
 - Un utente di sistema `custode`, senza shell, con linger attivo (i servizi partono all'avvio dell'host anche senza una sessione aperta).
 - Un pod `custode` (`custode-pod.service`) con tre container:
   - `custode-web`: l'applicazione, in ascolto su `127.0.0.1:5000` dentro il pod;
-  - `custode-lan`: nginx con TLS, l'unica porta pubblicata del pod è `443:443`;
+  - `custode-lan`: nginx con TLS, l'unica porta pubblicata del pod è `8443:443`;
   - `custode-tunnel`: cloudflared, per l'accesso dall'esterno.
 - Il volume `custode-stato`, montato in `/stato`: database, `uploads/`, `config.json`, `config.local.json` (`MEDINVENTORY_RADICE=/stato`; i sorgenti stanno in `/app`).
 - La cartella dei backup sull'host, `/var/backups/custode`.
 - Il timer `custode-diagnosi.timer`, che lancia periodicamente la diagnosi (`custode-diagnosi.service`).
 
-La porta 5000 non è pubblicata e non va mai pubblicata: dalla LAN si entra solo dalla 443, dall'esterno solo dal tunnel.
+La porta 5000 non è pubblicata e non va mai pubblicata: dalla LAN si entra solo dalla 8443, dall'esterno solo dal tunnel.
 
 ## Prerequisiti
 
@@ -39,19 +39,19 @@ Senza argomenti `configura.sh` apre un menu. Con un sottocomando esegue direttam
 | `tunnel-off` | spegne il tunnel e ne rimuove l'unit |
 | `certificato` | certificato HTTPS per la LAN |
 | `avvia` | avvia il pod (unico punto di avvio) |
-| `stato` | stato di unit, container, secret, certificato, porta 443 |
+| `stato` | stato di unit, container, secret, certificato, porta LAN 8443 |
 | `aggiorna` | ricostruisce l'immagine e riallinea le unit |
 | `disinstalla` | rimuove le unit (i dati restano) |
 
 ## Prima installazione
 
-1. `sudo bash deploy/podman/configura.sh installa` - crea l'utente, costruisce `localhost/custode:latest`, installa i Quadlet e il wrapper `/usr/local/bin/custode`, scrive `/etc/sysctl.d/90-custode-porta-443.conf`, apre il firewall (`firewall-cmd --permanent --add-service=https`).
+1. `sudo bash deploy/podman/configura.sh installa` - crea l'utente, costruisce `localhost/custode:latest`, installa i Quadlet e il wrapper `/usr/local/bin/custode`, rimuove l'eventuale `/etc/sysctl.d/90-custode-porta-443.conf` delle versioni precedenti, apre il firewall (`firewall-cmd --permanent --add-port=8443/tcp`).
 2. `sudo bash deploy/podman/configura.sh nuovo` - stato vuoto nel volume: schema, utente amministratore predefinito, `config.local.json` con una `encryption_key` nuova.
 3. `sudo bash deploy/podman/configura.sh certificato` - vedi la sezione sul certificato.
 4. `sudo bash deploy/podman/configura.sh token` - vedi la sezione sulla migrazione per il token; si salta se l'accesso è solo dalla LAN.
 5. `sudo bash deploy/podman/configura.sh avvia`. Il primo avvio attende che `custode-web` risulti sano e può richiedere circa 30 secondi (il limite di attesa dell'unit lo prevede): è normale.
 6. `sudo custode crea_superadmin.py` per un'installazione multi-struttura (`seed.py` crea solo un admin).
-7. Controllo: `sudo bash deploy/podman/configura.sh stato` e, da un PC della LAN, `curl -sk https://NOME-DEL-SERVER/health/ready` con risposta `{"status":"ok"}`.
+7. Controllo: `sudo bash deploy/podman/configura.sh stato` e, da un PC della LAN, `curl -sk https://NOME-DEL-SERVER:8443/health/ready` con risposta `{"status":"ok"}`.
 8. Cambiare subito la password di `admin@medinventory.local`.
 
 ## Migrazione da un'installazione esistente
@@ -169,11 +169,13 @@ sudo systemctl --user -M custode@ restart custode-lan.service
 
 Nota: `custode-lan` e `custode-tunnel` dipendono da `custode-web` (`Requires=`). Riavviare `custode-web.service` riavvia quindi anche loro, e il tunnel resta giù per qualche secondo; riavviare `custode-lan.service` da solo non tocca gli altri.
 
-## La porta 443 e il suo effetto collaterale
+## La porta 8443
 
-Il pod è rootless e per aprire la 443 `installa` scrive `net.ipv4.ip_unprivileged_port_start=443` in `/etc/sysctl.d/90-custode-porta-443.conf`. Da quel momento **qualunque utente dell'host** può mettersi in ascolto sulle porte da 443 in su, non solo `custode`. È accettabile su un server dedicato; su una macchina con altri utenti è una decisione da prendere consapevolmente.
+Sull'host il pod pubblica la `8443` (`PublishPort=8443:443`): i client aprono `https://NOME-DEL-SERVER:8443`. Dentro il pod nginx resta sulla 443. La 8443 è sopra la soglia delle porte privilegiate, quindi un pod rootless la pubblica senza modificare il kernel: niente `sysctl`, niente porte 443-1023 aperte a tutti gli utenti dell'host (il server è condiviso con altre applicazioni).
 
-Verifica: `sysctl net.ipv4.ip_unprivileged_port_start` deve rispondere `443`. Firewall: `sudo firewall-cmd --list-services` deve contenere `https`.
+Le installazioni precedenti avevano abbassato la soglia a 443: `installa` rimuove `/etc/sysctl.d/90-custode-porta-443.conf` (solo quel file) e riporta subito `net.ipv4.ip_unprivileged_port_start` a 1024. Il servizio firewall `https`, se presente, non viene toccato: `installa` avvisa e, se lo aveva aggiunto Custode, si toglie con `sudo firewall-cmd --permanent --remove-service=https && sudo firewall-cmd --reload`.
+
+Verifica: `sysctl net.ipv4.ip_unprivileged_port_start` deve rispondere `1024`. Firewall: `sudo firewall-cmd --list-ports` deve contenere `8443/tcp`.
 
 ## Manutenzione: il comando custode
 
@@ -237,11 +239,9 @@ sudo bash deploy/podman/configura.sh disinstalla
 
 Rimuove le unit e i Quadlet, il timer, il linger dell'utente e il wrapper `/usr/local/bin/custode`. Conserva dati, backup, secret del token, certificati, la CA e l'utente `custode`. Al termine lo script stampa i comandi, uno per riga, per cancellare anche i dati.
 
-Il volume `custode-stato` e `/var/backups/custode` contengono dati sanitari dell'inventario e non vanno cancellati senza un backup verificato. Il file `/etc/sysctl.d/90-custode-porta-443.conf`, se resta, continua a produrre l'effetto descritto sopra finché non viene rimosso:
+Il volume `custode-stato` e `/var/backups/custode` contengono dati sanitari dell'inventario e non vanno cancellati senza un backup verificato.
 
-```bash
-sudo rm /etc/sysctl.d/90-custode-porta-443.conf && sudo sysctl --system
-```
+La regola firewall `8443/tcp` resta: per toglierla `sudo firewall-cmd --permanent --remove-port=8443/tcp && sudo firewall-cmd --reload`.
 
 ## Verifiche dopo l'installazione
 

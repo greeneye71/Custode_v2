@@ -10,7 +10,7 @@
 #   token        token del tunnel Cloudflare, nel segreto di Podman
 #   certificato  certificato HTTPS per la LAN
 #   avvia        avvia il pod (unico punto di avvio)
-#   stato        stato di unità, container, segreto, certificato, porta 443
+#   stato        stato di unità, container, segreto, certificato, porta LAN
 #   aggiorna     ricostruisce l'immagine e riallinea le unità
 #   tunnel-off   spegne il tunnel
 #   disinstalla  rimuove le unità (i dati restano)
@@ -31,7 +31,11 @@ TIMER=custode-diagnosi.timer
 VOLUME_STATO=custode-stato
 BACKUP_DIR=/var/backups/custode
 SUBID=300000-365535
-SYSCTL_FILE=/etc/sysctl.d/90-custode-porta-443.conf
+# Porta dell'host su cui il pod pubblica HTTPS (dentro il pod nginx ascolta sulla 443).
+# Sopra la 1024: il pod rootless la pubblica senza toccare le soglie del kernel.
+PORTA_LAN=8443
+# File scritto dalle versioni precedenti: oggi lo si trova solo per rimuoverlo.
+SYSCTL_VECCHIO=/etc/sysctl.d/90-custode-porta-443.conf
 VECCHIO_SERVIZIO=medinventory.service
 CA_DIR=/etc/pki/minventory-ca
 CA_CRT="$CA_DIR/ca.crt"
@@ -157,23 +161,27 @@ stato_presente() {
         test -e /stato/data/database.sqlite
 }
 
-porta_443_aperta() {
-    # Rootless non può pubblicare la 443 finché la soglia delle porte privilegiate
-    # è sopra: il pod fallirebbe all'avvio con un errore di bind poco leggibile.
-    [ "$(sysctl -n net.ipv4.ip_unprivileged_port_start)" -le 443 ]
-}
-
-apri_porta_443() {
-    printf 'net.ipv4.ip_unprivileged_port_start=443\n' > "$SYSCTL_FILE"
-    sysctl -p "$SYSCTL_FILE" >/dev/null
-    ok "porte dalla 443 in su pubblicabili senza root ($SYSCTL_FILE)"
+ripristina_soglia_porte() {
+    # Le installazioni precedenti abbassavano la soglia delle porte privilegiate a 443,
+    # aprendo le porte 443-1023 a qualunque utente dell'host. Si toglie solo il file
+    # di Custode e si riporta il valore corrente al default del kernel.
+    if [ -f "$SYSCTL_VECCHIO" ]; then
+        rm -f "$SYSCTL_VECCHIO"
+        sysctl -w net.ipv4.ip_unprivileged_port_start=1024 >/dev/null
+        ok "rimosso $SYSCTL_VECCHIO e ripristinata la soglia delle porte privilegiate (1024)"
+    fi
 }
 
 apri_firewall() {
     if firewall-cmd --state >/dev/null 2>&1; then
-        firewall-cmd --permanent --add-service=https >/dev/null
+        firewall-cmd --permanent --add-port="$PORTA_LAN/tcp" >/dev/null
         firewall-cmd --reload >/dev/null
-        ok "firewall: servizio https aperto"
+        ok "firewall: porta $PORTA_LAN/tcp aperta"
+        if firewall-cmd --permanent --query-service=https >/dev/null 2>&1; then
+            echo "Il servizio https (443) è aperto nel firewall: non è più usato da Custode."
+            echo "Se lo aveva aggiunto Custode puoi toglierlo (se serve ad altro, lascialo):"
+            echo "  sudo firewall-cmd --permanent --remove-service=https && sudo firewall-cmd --reload"
+        fi
     else
         echo "firewalld non è attivo: nessuna regola aggiunta."
     fi
@@ -181,10 +189,6 @@ apri_firewall() {
 
 avvia_pod() {
     # L'unico punto da cui il pod parte o riparte.
-    if ! porta_443_aperta; then
-        err "la porta 443 non è pubblicabile senza root: esegui 'configura.sh installa'"
-        return 1
-    fi
     user_systemctl daemon-reload
     user_systemctl restart "$POD_SERVICE"
     user_systemctl enable --now "$TIMER"
@@ -326,7 +330,7 @@ cmd_installa() {
         ok "subuid/subgid $SUBID assegnati a $APP_USER"
     fi
     loginctl enable-linger "$APP_USER"
-    apri_porta_443
+    ripristina_soglia_porte
     apri_firewall
     install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$BACKUP_DIR"
     costruisci_immagine
@@ -526,6 +530,7 @@ EOF
     echo
     echo "Ai client va installato SOLO $CA_CRT (è pubblico), tra le autorità radice attendibili."
     echo "Il nome $nome deve risolvere a $ip: record statico sul DNS del router."
+    echo "I PC della LAN aprono il gestionale su https://$nome:$PORTA_LAN"
 }
 
 certificato_esistente() {
@@ -644,6 +649,10 @@ cmd_importa() {
 
 # --- stato e rimozione ------------------------------------------------------------
 
+porta_lan_in_ascolto() {
+    ss -ltn "sport = :$PORTA_LAN" | grep -q ":$PORTA_LAN"
+}
+
 cmd_stato() {
     local s c crt
     richiedi_utente || return 1
@@ -661,7 +670,7 @@ cmd_stato() {
     if [ -f "$crt" ]; then
         echo "  scadenza: $(openssl x509 -noout -enddate -in "$crt" | cut -d= -f2)"
     fi
-    printf 'Porta 443 pubblicabile senza root: %s\n' "$(si_no porta_443_aperta)"
+    printf 'Porta LAN %s in ascolto sull'"'"'host: %s\n' "$PORTA_LAN" "$(si_no porta_lan_in_ascolto)"
     echo
     user_systemctl list-timers "$TIMER" --no-pager || true
     echo
@@ -701,8 +710,7 @@ Per cancellare anche i dati (irreversibile), un comando per riga:
   sudo rm -rf $BACKUP_DIR
   sudo rm -rf $(lan_dir)
   sudo userdel -r $APP_USER
-  sudo rm -f $SYSCTL_FILE
-  sudo firewall-cmd --permanent --remove-service=https
+  sudo firewall-cmd --permanent --remove-port=$PORTA_LAN/tcp
 EOF
 }
 
