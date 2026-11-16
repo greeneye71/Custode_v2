@@ -540,6 +540,13 @@ def test_configura_importa_adegua_e_si_ferma():
     assert 'is-active --quiet "$VECCHIO_SERVIZIO"' in corpo
 
 
+def test_configura_importa_non_copia_il_contesto_selinux():
+    corpo = _corpo(_leggi(CONFIGURA), "cmd_importa")
+    riga = next(r for r in corpo.splitlines() if '"/sorgente/$voce"' in r and "cp " in r)
+    assert "cp -a" not in riga, "cp -a porta l'etichetta MCS privata del mount :Z nel volume"
+    assert "--preserve=mode,ownership,timestamps" in riga
+
+
 def test_configura_messaggi_della_migrazione():
     testo = _leggi(CONFIGURA)
     for atteso in (
@@ -663,5 +670,5 @@ def test_configura_giorni_validita_esclude_zero():
 def test_importa_toglie_la_config_vecchia_prima_di_copiare():
     sh = _leggi(PODMAN + "configura.sh")
     pulizia = sh.index("rm -f /stato/config.json /stato/config.local.json")
-    copia = sh.index('cp -a "/sorgente/$voce" /stato/')
+    copia = sh.index('cp -R --preserve=mode,ownership,timestamps "/sorgente/$voce" /stato/')
     assert pulizia < copia

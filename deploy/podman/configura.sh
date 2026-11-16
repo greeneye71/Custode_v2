@@ -617,7 +617,9 @@ cmd_importa() {
             rm -rf /stato/data /stato/uploads
             rm -f /stato/config.json /stato/config.local.json
             for voce in data uploads config.json config.local.json; do
-                if [ -e "/sorgente/$voce" ]; then cp -a "/sorgente/$voce" /stato/; fi
+                # Niente cp -a: copierebbe il contesto SELinux, cioè l etichetta MCS
+                # privata del mount :Z, e i container successivi non leggerebbero più il volume.
+                if [ -e "/sorgente/$voce" ]; then cp -R --preserve=mode,ownership,timestamps "/sorgente/$voce" /stato/; fi
             done
             mkdir -p /stato/data /stato/uploads /stato/logs'; then
         err "copia nel volume fallita: non avviare il pod."
