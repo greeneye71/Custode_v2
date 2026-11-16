@@ -318,6 +318,22 @@ cloudflared ancora in servizio sull'host si scollega all'istante.
 EOF
 }
 
+promemoria_tunnel() {
+    cat <<EOF
+
+Da controllare nella dashboard Cloudflare, per questo tunnel:
+
+  1. Public Hostname -> Service:  HTTP  localhost:5000   (http://localhost:5000)
+       cloudflared sta nello stesso pod dell'applicazione. Non https, non 8443/443,
+       non l'IP del server.
+  2. DNS -> Records: l'hostname pubblico è un CNAME proxato verso
+       <ID-del-tunnel>.cfargotunnel.com
+       con l'ID di QUESTO tunnel. Se il record esisteva già (tunnel precedente)
+       resta sul vecchio ID e va corretto a mano: altrimenti errore 1033/530
+       anche con il tunnel HEALTHY.
+EOF
+}
+
 # --- installazione e avvio --------------------------------------------------------
 
 cmd_installa() {
@@ -423,6 +439,7 @@ cmd_token() {
     printf '%s' "$token" | as_custode podman secret create --replace custode-tunnel-token - >/dev/null
     unset token
     ok "token salvato nel segreto custode-tunnel-token"
+    promemoria_tunnel
     installa_tunnel_quadlet
     user_systemctl daemon-reload
     if pod_attivo; then
