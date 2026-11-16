@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Development (auto-reload, debug mode)
 python app.py
 
-# Production (Waitress WSGI, 4 threads, rotating logs)
+# Production (Waitress WSGI, 8 threads, rotating logs)
 python run_production.py
 
 # First-time setup: initialize database schema + default admin user
@@ -78,6 +78,19 @@ Behaviour worth knowing before changing it:
 - Not imported: `sessioni`, `login_attempts`, `api_tokens`, `email_config`,
   `import_preview`. They belong to the source deployment or are transient.
 
+## Container deployment (Podman + Quadlet)
+
+The Fedora deployment runs in a rootless Podman pod managed by Quadlet units (`deploy/podman/`, `Containerfile`). Full procedure: `docs/DEPLOYMENT.md` (read it in the repository on the host; `docs/` is not in the image).
+
+- **State outside the sources.** Sources live in `/app`, state in the `custode-stato` volume mounted at `/stato`, selected by `MEDINVENTORY_RADICE=/stato`. Every state path must go through `percorsi.percorso()` instead of computing a root from `__file__`.
+- **Names.** Pod `custode` (`custode-pod.service`), containers `custode-web` (app, `127.0.0.1:5000` inside the pod), `custode-lan` (nginx TLS) and `custode-tunnel` (cloudflared), volume `custode-stato`, image `localhost/custode:latest`, backups on the host in `/var/backups/custode`.
+- **Maintenance CLIs** go through the `custode` wrapper, in four forms: `custode <script.py>` (app running), `custode manutenzione ...` (shortcut for `manutenzione.py`), `custode fermo <script.py>` (pod stopped, always restarted afterwards), `custode esterna <dir> <script.py>` (another installation, read-only, `--security-opt label=disable`).
+- **Port 5000 is never published.** Only `443:443` is; outside access is the tunnel only.
+- **Tunnel token** only as the Podman secret `custode-tunnel-token`, set via `configura.sh token` (hidden input). Never on a command line or in a file.
+- **`ca.key` never goes to a container**, a volume or a `podman` command; it stays in `/etc/pki/minventory-ca`.
+- **SELinux labels.** `:Z` only on Custode's own folders; `--security-opt label=disable` on anyone else's.
+- **Logs.** `journalctl CONTAINER_NAME=custode-web` (also `custode-lan`, `custode-tunnel`), never `journalctl --user`. Unit status: `systemctl --user -M custode@ status ...`.
+
 ## Configuration
 
 Config is split in two files, merged at startup (`load_config()` in `app.py`, local wins):
@@ -113,7 +126,7 @@ not be able to widen it.
 ## Architecture
 
 ### Flask Application Factory
-`app.py` — `create_app()` registers all blueprints, sets security headers and cookie flags, enables CSRF protection, and injects globals into all templates via `inject_globals()`. The background scheduler is started by the entry points (`app.py __main__`, `run_production.py`), not by the factory.
+`app.py` — `create_app()` registers all blueprints, sets security headers and cookie flags, enables CSRF protection, and injects globals into all templates via `inject_globals()`. The background scheduler is started by the entry points (`app.py __main__`, `run_production.py`), not by the factory. `/health/ready` is unauthenticated, opens the database and answers `200 {"status":"ok"}` or `503 {"status":"errore"}`; the container health check uses it. `/api/health` stays and does not touch the database.
 
 ### Blueprints
 | File | Prefix | Responsibility |
@@ -138,10 +151,11 @@ not be able to widen it.
 | `backup_service.py` | SQLite backup/restore lifecycle |
 | `archivio_recupero.py` | Disaster-recovery archive: one ZIP with database, `uploads/`, config, SHA-256 manifest and restore instructions, plus the verify step that doubles as the documented restore drill. Flask-free |
 | `export_service.py` | Report generation logic (openpyxl, fpdf2) |
-| `cloudflare_mode.py` | Cloudflare Tunnel setup helper |
+| `cloudflare_mode.py` | Cloudflare Tunnel setup helper; `--test` skips host checks inside the container and takes `--hostname` |
 | `sicurezza_url.py` | URL validation for the local AI server: scheme, blocked networks after DNS resolution, ports, optional `ai_local_url_allowlist`. Flask-free |
 | `allegati.py` | Upload validation: magic bytes against the declared extension, empty files, zip-bomb ratio. Every upload route calls `allegati.verifica()`. Flask-free |
 | `coda_import.py` | Admission limit for background AI import analyses: global and per-facility caps, slot reserved before the upload is written. Not a durable queue. Flask-free |
+| `percorsi.py` | Where state lives: `radice()`, `percorso()`, `modello()`; honours `MEDINVENTORY_RADICE` so that sources and state can be separated (container). Flask-free |
 | `models.py` | DB helpers: `get_db()`, query wrappers, scope helpers, incremental schema updates |
 | `posta.py` | The only place mail leaves from: system-wide SMTP resolution and sending |
 | `reset_password.py` | Forgotten-password flow: temporary password valid *alongside* the current one |

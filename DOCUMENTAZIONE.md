@@ -222,6 +222,7 @@ Lo script crea la tabella `verifiche`, aggiorna il CHECK in `import_history` e r
 12. [Export e report](#12-export-e-report)
 13. [Backup e ripristino](#13-backup-e-ripristino)
 14. [Installazione come servizio Windows/Linux](#14-installazione-come-servizio-windows)
+    - [Installazione in container (Fedora + Podman)](#installazione-in-container-fedora--podman)
 15. [Accesso remoto — Cloudflare Tunnel](#15-accesso-remoto--cloudflare-tunnel)
 16. [Architettura tecnica](#15-architettura-tecnica)
 17. [Schema database](#16-schema-database)
@@ -1046,6 +1047,12 @@ StandardError=append:/path/to/logs/service_stderr.log
 WantedBy=multi-user.target
 ```
 
+### Installazione in container (Fedora + Podman)
+
+Su Fedora è il modo consigliato: l'applicazione gira in un pod Podman rootless con Quadlet (applicazione, nginx con HTTPS per la LAN, cloudflared per l'accesso esterno), con lo stato in un volume e i backup in `/var/backups/custode`. La procedura completa - installazione, migrazione, certificato, log, backup, aggiornamento - è in `docs/DEPLOYMENT.md`, da leggere nel repository sull'host (la cartella `docs/` non è nell'immagine).
+
+**Attenzione:** il servizio systemd `medinventory.service` e il container non convivono sullo stesso tunnel. Chi passa al container ferma e disabilita `medinventory.service` seguendo l'ordine descritto nella sezione sulla migrazione di `docs/DEPLOYMENT.md`, prima di avviare il pod.
+
 ---
 
 ## 15. Accesso remoto — Cloudflare Tunnel
@@ -1068,6 +1075,8 @@ nessun IP fisso necessario. HTTPS e certificato SSL sono gestiti automaticamente
 - Account Cloudflare gratuito
 - Un dominio gestito da Cloudflare (es. `tuodominio.it`)
 - MedInventory in esecuzione su `localhost:5000`
+
+> **Container:** nell'installazione in container cloudflared non si installa sull'host (gira nel container `custode-tunnel`) e la diagnostica si lancia con `custode cloudflare_mode.py --test --hostname <nome pubblico>`.
 
 ### Documentazione completa
 
@@ -1135,6 +1144,9 @@ MedInventory/
 |-- backup_service.py         # Gestione backup
 |-- export_service.py         # Generazione report
 |
+|-- percorsi.py               # Dove vive lo stato (MEDINVENTORY_RADICE)
+|-- Containerfile             # Immagine del container
+|-- deploy/podman/            # Quadlet, configura.sh, wrapper custode
 |-- run_production.py         # Server produzione (Waitress)
 |-- setup.bat                 # Setup iniziale (Windows)
 |-- setup.sh                  # Setup iniziale (Linux)
@@ -1319,6 +1331,7 @@ Vista SQL precalcolata che mostra tutte le scadenze future con priorita automati
 |---|---|---|
 | GET | `/` | Dashboard principale |
 | GET | `/api/health` | Health check (JSON) |
+| GET | `/health/ready` | Verifica di prontezza: apre il database (JSON, senza autenticazione) |
 
 #### Apparecchi
 | Metodo | URL | Descrizione |
@@ -1403,6 +1416,8 @@ Vista SQL precalcolata che mostra tutte le scadenze future con priorita automati
 ## 16. Risoluzione problemi
 
 ### L'applicazione non si avvia
+
+**Installazione in container:** `sudo bash deploy/podman/configura.sh stato` e `sudo journalctl CONTAINER_NAME=custode-web -n 100 --no-pager`.
 
 **Errore "Address already in use":**
 La porta 5000 e' gia' in uso. Modificare la porta in `config.json` oppure terminare il processo che la occupa:
