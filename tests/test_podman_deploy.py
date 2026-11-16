@@ -203,6 +203,14 @@ def test_nginx_termina_tls_e_inoltra_solo_all_app():
     assert "client_max_body_size 32m;" in righe
 
 
+def test_nginx_reindirizza_http_in_chiaro_sulla_porta_tls():
+    righe = _righe(PODMAN + "custode-lan.conf")
+    # 497 = HTTP in chiaro sulla porta TLS: $http_host conserva la porta
+    # digitata dal client (8443 dell'host), che dentro il pod non si vede.
+    assert "error_page 497 =301 https://$http_host$request_uri;" in righe
+    assert not any("$server_port" in r for r in righe)
+
+
 def test_nessun_quadlet_nomina_la_ca():
     unita = _unita()
     assert len(unita) >= 8
