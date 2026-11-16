@@ -189,6 +189,7 @@ sudo custode esterna /srv/vecchio-medinventory manutenzione.py stato   # lavora 
 - `fermo` serve a tutto ciò che vuole il database per sé (migrazioni, ripristini); il pod riparte sempre al termine.
 - Dopo `toggle_modalita.py` e dopo `cloudflare_mode.py --on` / `--off` l'applicazione va riavviata: `sudo systemctl --user -M custode@ restart custode-web.service` (riavvia anche lan e tunnel, vedi sopra).
 - `esterna` monta la cartella indicata in sola lettura e senza rietichettarla per SELinux (`--security-opt label=disable`, nessun `:Z`), quindi la cartella resta utilizzabile dal suo proprietario.
+- `esterna` è di sola lettura anche per il database della vecchia installazione: funzionano solo i comandi che leggono (`manutenzione.py stato`, `diagnosi`, `utenti elenca`, `importa_installazione.py --dry-run`). Le azioni di scrittura del menu (`migra`, `utenti azzera`) falliscono con "attempt to write a readonly database": vanno eseguite sull'installazione di Custode, non su quella esterna.
 - Il timer di diagnosi non riaccende l'applicazione durante un `fermo`.
 
 ## Log
