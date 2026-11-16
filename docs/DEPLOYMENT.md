@@ -100,6 +100,11 @@ L'ordine che segue è obbligatorio.
 
    Il token si prende dalla dashboard (Zero Trust -> Networks -> Tunnels -> il tunnel di Custode -> Configure) e si incolla quando richiesto: l'input è nascosto; serve la sola stringa che comincia con `eyJ...`. Il token non si passa mai sulla riga di comando, non si scrive in un file e non si incolla in una chat o in un ticket. **Non usare "Refresh token"** nella dashboard: invalida il token in uso e il vecchio servizio smette di funzionare prima che il nuovo sia pronto, togliendo la via del rollback.
 
+   Nella stessa pagina del tunnel controllare due impostazioni (vedi anche la sezione [Tunnel Cloudflare: servizio e CNAME](#tunnel-cloudflare-servizio-e-cname)):
+
+   - **Public Hostname -> Service**: `HTTP` e `localhost:5000`, cioè `http://localhost:5000`;
+   - **DNS**: il record dell'hostname pubblico è un CNAME proxato verso `<ID-del-tunnel>.cfargotunnel.com`.
+
 6. Spegnere in modo definitivo il vecchio cloudflared di Custode e la vecchia applicazione:
 
    ```bash
@@ -144,6 +149,33 @@ La vecchia cartella non viene modificata né cancellata: resta la base del rollb
    ```
 
 Vale la stessa regola del token: mai i due cloudflared insieme. I dati inseriti nel container dopo la migrazione non tornano da soli nella vecchia installazione: vanno riportati a mano oppure si accetta di perderli. Per questo il rollback si decide presto.
+
+## Tunnel Cloudflare: servizio e CNAME
+
+Il token dice a `custode-tunnel` *a quale* tunnel collegarsi; *dove* inoltrare le richieste e *quale nome* le porta al tunnel si decidono invece nella dashboard Cloudflare. Sono due impostazioni, e vanno controllate ogni volta che si crea o si cambia tunnel.
+
+**Servizio del Public Hostname.** In Zero Trust -> Networks -> Tunnels -> il tunnel di Custode -> Public Hostname, il servizio dell'hostname pubblico deve essere:
+
+```
+Type: HTTP    URL: localhost:5000      (cioè http://localhost:5000)
+```
+
+I container del pod condividono la stessa rete, quindi per cloudflared `localhost:5000` è direttamente `custode-web`. Non vanno usati `https://`, la porta `8443` o `443` (quella è nginx per la LAN, con un certificato che Cloudflare non riconosce), né l'IP del server o il nome di un container.
+
+**CNAME nel DNS.** Il record DNS dell'hostname pubblico (per esempio `minv` nella zona dello studio) è un CNAME **proxato** (nuvola arancione) verso:
+
+```
+<ID-del-tunnel>.cfargotunnel.com
+```
+
+L'ID è quello del tunnel in uso, visibile nella pagina del tunnel in dashboard. Quando si aggiunge il Public Hostname dalla dashboard Cloudflare crea il record da sola; se però il record esisteva già, per esempio di un tunnel precedente, **resta puntato al vecchio ID** e va corretto a mano in DNS -> Records. Sintomo tipico: tunnel `HEALTHY` in dashboard e `custode-tunnel` collegato nei log, ma dall'esterno errore 1033 o 530, perché il nome porta ancora al tunnel vecchio, che non ha più connettori.
+
+Controllo dall'host, senza mostrare token:
+
+```bash
+sudo journalctl CONTAINER_NAME=custode-tunnel -n 30 | grep -i 'registered tunnel connection'
+curl -sI https://NOME-PUBBLICO/health/ready
+```
 
 ## Certificato per la LAN e CA interna
 

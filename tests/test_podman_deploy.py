@@ -619,8 +619,12 @@ def test_configura_ip_valido(ip, valido):
 # Verdetti del controllore (F1, F6, F10, F11)
 
 def test_configura_indirizzo_interno_mai_localhost():
-    # F1: solo il nome dell'immagine puo' contenere "localhost".
-    testo = _leggi(CONFIGURA).replace("localhost/custode:latest", "")
+    # F1: solo il nome dell'immagine puo' contenere "localhost", piu' la riga
+    # del promemoria che riporta il valore da impostare nella dashboard
+    # Cloudflare (testo per l'operatore, non un indirizzo usato dallo script).
+    testo = (_leggi(CONFIGURA)
+             .replace("localhost/custode:latest", "")
+             .replace("HTTP  localhost:5000   (http://localhost:5000)", ""))
     assert "localhost" not in testo
 
 
