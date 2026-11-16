@@ -621,3 +621,27 @@ def test_configura_non_tocca_altri_cloudflared():
     for vietato in ("pkill", "killall", "kill ", "systemctl stop cloudflared",
                     "systemctl disable cloudflared"):
         assert vietato not in testo, vietato
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+def test_configura_menu_errexit_attivo_e_fallimento_segnalato():
+    """Un passo fallito dal menu ferma il comando, e il menu lo dice e prosegue."""
+    import os
+    ambiente = dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
+    copione = (
+        ". ./deploy/podman/configura.sh --solo-funzioni; "
+        "esegui() { false; echo PASSO_DOPO_IL_FALLIMENTO; }; "
+        "menu"
+    )
+    esito = subprocess.run(
+        [BASH, "-c", copione], input=b"1\n4\n0\n", capture_output=True,
+        cwd=RADICE, env=ambiente,
+    )
+    # byte e non testo: su Windows il testo trasformerebbe \n in \r\n e `read` sbaglierebbe scelta
+    fuori = esito.stdout.decode("utf-8", "replace")
+    errori = esito.stderr.decode("utf-8", "replace")
+    assert esito.returncode == 0, errori
+    assert "PASSO_DOPO_IL_FALLIMENTO" not in fuori
+    assert "non è andato a buon fine (codice 1)" in errori
+    # il menu è andato avanti: la scelta 4 è stata eseguita (errore ripetuto) e 0 ha chiuso
+    assert errori.count("non è andato a buon fine") == 2

@@ -729,6 +729,22 @@ esegui() {
     esac
 }
 
+dal_menu() {
+    # Un comando del menu gira in una subshell (suoi trap di pulizia) con errexit
+    # attivo davvero: dentro un contesto `||` bash lo spegnerebbe e un passo fallito
+    # non fermerebbe i successivi. Il codice di uscita si legge con un assegnamento
+    # a errexit sospeso, che poi si riattiva: lo script non muore sul fallimento.
+    local rc
+    set +e
+    ( set -e; esegui "$@" )
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        err "'$*' non è andato a buon fine (codice $rc)"
+    fi
+    return 0
+}
+
 menu() {
     local scelta
     while true; do
@@ -751,18 +767,17 @@ Prima installazione e migrazione
 MENU
         printf 'Scelta: '
         read -r scelta || return 0
-        # Subshell: ogni comando ha il suo processo, con i suoi trap di pulizia.
         case "$scelta" in
-            1) (esegui installa) || true ;;
-            2) (esegui token) || true ;;
-            3) (esegui certificato) || true ;;
-            4) (esegui stato) || true ;;
-            5) (esegui aggiorna) || true ;;
-            6) (esegui disinstalla) || true ;;
-            7) (esegui nuovo) || true ;;
-            8) (esegui importa) || true ;;
-            9) (esegui avvia) || true ;;
-            10) (esegui tunnel-off) || true ;;
+            1) dal_menu installa ;;
+            2) dal_menu token ;;
+            3) dal_menu certificato ;;
+            4) dal_menu stato ;;
+            5) dal_menu aggiorna ;;
+            6) dal_menu disinstalla ;;
+            7) dal_menu nuovo ;;
+            8) dal_menu importa ;;
+            9) dal_menu avvia ;;
+            10) dal_menu tunnel-off ;;
             0) return 0 ;;
             *) echo "Scelta non valida." ;;
         esac
