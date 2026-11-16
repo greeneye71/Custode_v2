@@ -17,7 +17,7 @@ RUN grep -vi '^pystray==' /tmp/requirements.lock.txt > /tmp/lock-container.txt \
     && rm /tmp/requirements.lock.txt /tmp/lock-container.txt
 
 COPY . /app
-RUN chmod +x deploy/podman/custode \
+RUN chmod +x deploy/podman/custode deploy/podman/configura.sh \
     && mkdir -p /stato
 
 # Tutto lo stato modificabile vive qui (percorsi.py): volume e backup del Quadlet.

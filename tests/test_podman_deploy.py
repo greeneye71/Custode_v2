@@ -391,3 +391,233 @@ def test_wrapper_tty_vuoto_senza_terminale():
     assert esito.returncode == 0, esito.stderr
     assert "n=0" in esito.stdout
     assert "x y" in esito.stdout
+
+
+# --- Task 9: configura.sh ------------------------------------------------------
+
+CONFIGURA = PODMAN + "configura.sh"
+TOKEN_FINTO = "eyJh" + "A" * 60
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+def test_configura_e_bash_valido():
+    subprocess.run([BASH, "-n", CONFIGURA], check=True, cwd=RADICE)
+
+
+def test_configura_offre_ogni_comando():
+    testo = _leggi(CONFIGURA)
+    for comando in ("installa", "token", "certificato", "stato", "aggiorna",
+                    "disinstalla", "nuovo", "importa", "avvia", "tunnel-off"):
+        assert f"{comando})" in testo, comando
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("incollato", [
+    TOKEN_FINTO,
+    "sudo cloudflared service install " + TOKEN_FINTO,
+    "  " + TOKEN_FINTO + "  ",
+])
+def test_configura_normalizza_token_estrae(incollato):
+    esito = _bash(CONFIGURA, 'normalizza_token "$1"', incollato)
+    assert esito.returncode == 0 and esito.stdout.strip() == TOKEN_FINTO
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("incollato", ["", "   ", "corto", "token con caratteri ;rm"])
+def test_configura_normalizza_token_rifiuta(incollato):
+    esito = _bash(CONFIGURA, 'normalizza_token "$1"', incollato)
+    assert esito.returncode == 1 and esito.stdout == ""
+
+
+def test_configura_non_espone_mai_il_token():
+    testo = _leggi(CONFIGURA)
+    assert "read -rs" in testo
+    assert "podman secret create --replace custode-tunnel-token -" in testo
+    assert "set -x" not in testo and "xtrace" not in testo
+    assert "TUNNEL_TOKEN=" not in testo
+    # Il token esce dalla variabile in un solo punto: stdin di `podman secret create`.
+    consegna = "printf '%s' \"$token\" | as_custode podman secret create"
+    for riga in testo.splitlines():
+        if "$token" in riga or "${token" in riga:
+            assert riga.strip().startswith(consegna), riga
+    # Il testo incollato passa solo a normalizza_token (funzione di shell, non un processo).
+    for riga in testo.splitlines():
+        if "$incollato" in riga:
+            assert riga.strip() == 'if ! token=$(normalizza_token "$incollato"); then', riga
+
+
+def test_chiave_della_ca_mai_verso_il_container():
+    # Righe logiche: le continuazioni con "\" fanno parte dello stesso comando.
+    righe = [r.strip() for r in _leggi(CONFIGURA).replace("\\\n", " ").splitlines()]
+    ammessi = (
+        "#",                              # commenti
+        'CA_KEY="$CA_DIR/ca.key"',        # la definizione
+        'if [ ! -f "$CA_KEY" ]',          # il controllo di esistenza
+        'if [ -f "$CA_KEY" ]',
+        "openssl req -x509 ",             # creazione della CA
+        "openssl x509 -req ",             # firma del certificato del server
+        'chmod 600 "$CA_KEY"',
+        "echo ", "err ",                  # messaggi all'operatore
+    )
+    citazioni = [r for r in righe if "ca.key" in r or "CA_KEY" in r]
+    assert citazioni, "configura.sh deve firmare con la CA"
+    for riga in citazioni:
+        assert riga.startswith(ammessi), riga
+        for vietato in ("podman", "as_custode", "CERT_DIR", "lan/certs", "-v ",
+                        "Volume", "cp ", "install ", "mv ", "tar ", "rsync"):
+            assert vietato not in riga, riga
+    # Verso ~custode/lan/certs viaggiano solo custode.crt e custode.key, uno per riga.
+    copie = [r for r in righe if "$CERT_DIR" in r and r.startswith(("install ", "cp ", "mv "))]
+    assert len(copie) == 2
+    for riga in copie:
+        assert re.search(r'"\$CERT_DIR/custode\.(crt|key)"$', riga), riga
+        assert "*" not in riga and "$CA_DIR/." not in riga and " -r" not in riga, riga
+    # Nessuna copia a tappeto della cartella della CA.
+    for riga in righe:
+        assert '"$CA_DIR"/*' not in riga and "$CA_DIR/*" not in riga, riga
+
+
+def test_configura_subuid_diversi_da_mcorsi():
+    testo = _leggi(CONFIGURA)
+    assert "SUBID=300000-365535" in testo
+    assert '--add-subuids "$SUBID" --add-subgids "$SUBID"' in testo
+    assert "200000" not in testo and "265535" not in testo
+
+
+def test_configura_sysctl_prima_del_pod():
+    testo = _leggi(CONFIGURA)
+    assert "SYSCTL_FILE=/etc/sysctl.d/90-custode-porta-443.conf" in testo
+    assert "net.ipv4.ip_unprivileged_port_start=443" in testo
+    installa = _corpo(testo, "cmd_installa")
+    assert installa.index("apri_porta_443") < installa.index("installa_unita")
+    # Il pod parte in un punto solo, e lì la porta viene controllata prima.
+    assert len(re.findall(r'(?:re)?start "\$POD_SERVICE"', testo)) == 1
+    pod = _corpo(testo, "avvia_pod")
+    assert pod.index("porta_443_aperta") < pod.index('restart "$POD_SERVICE"')
+
+
+def test_configura_prepara_utente_e_host():
+    testo = _leggi(CONFIGURA)
+    for atteso in (
+        'useradd --system --create-home --shell /sbin/nologin "$APP_USER"',
+        'loginctl enable-linger "$APP_USER"',
+        "firewall-cmd --permanent --add-service=https",
+        'install -d -o "$APP_USER" -g "$APP_USER" -m 0750 "$BACKUP_DIR"',
+        "podman build --network=host",
+        'podman save "$IMAGE" | as_custode podman load',
+        'install -m 0755 "$SCRIPT_DIR/custode" /usr/local/bin/custode',
+    ):
+        assert atteso in testo, atteso
+    assert "--add-port" not in testo
+
+
+def test_configura_log_dal_journal_di_sistema():
+    # "journalctl --user -M utente@" fallisce da root: si legge per CONTAINER_NAME.
+    testo = _leggi(CONFIGURA)
+    assert "journalctl --user" not in testo
+    stato = _corpo(testo, "cmd_stato")
+    for atteso in ("CONTAINER_NAME=", "custode-web", "custode-tunnel", "custode-lan",
+                   "podman ps --pod", '"$TIMER"'):
+        assert atteso in stato, atteso
+
+
+def test_configura_importa_adegua_e_si_ferma():
+    corpo = _corpo(_leggi(CONFIGURA), "cmd_importa")
+    for voce in ("data", "uploads", "backups", "config.json", "config.local.json"):
+        assert voce in corpo, voce
+    prova = corpo.index("config_container.py adegua --radice /sorgente --prova")
+    scrittura = corpo.index("rm -rf /stato/data /stato/uploads")
+    assert prova < scrittura, "la prova di adegua precede ogni scrittura nel volume"
+    assert corpo.index("config_container.py adegua;") > scrittura
+    assert "avvia_pod" not in corpo, "importa non avvia: prima token e vecchie unità"
+    assert 'is-active --quiet "$VECCHIO_SERVIZIO"' in corpo
+
+
+def test_configura_messaggi_della_migrazione():
+    testo = _leggi(CONFIGURA)
+    for atteso in (
+        "due processi cloudflared, uno è di mCorsi",
+        "(porta 5100): non va toccato",
+        "ps -eo pid,user,unit,args | grep '[c]loudflared' | sed 's/--token [^ ]*/--token ***/'",
+        "due repliche dello stesso tunnel",
+        "502",
+        'NON usare "Refresh token"',
+        "Zero Trust -> Networks -> Tunnels",
+        "systemctl stop $VECCHIO_SERVIZIO",
+        "systemctl disable --now",
+        "encryption_key",
+    ):
+        assert atteso in testo, atteso
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("nome, valido", [
+    ("custode.studio.lan", True),
+    ("srv-01", True),
+    ("", False),
+    ("nome con spazi", False),
+    ("x;rm -rf", False),
+    ("custode.lan\nIP.2 = 10.0.0.1", False),
+])
+def test_configura_nome_host_valido(nome, valido):
+    # Nome e IP finiscono in san.cnf e in -subj: un a capo aggiungerebbe un SAN.
+    esito = _bash(CONFIGURA, 'nome_host_valido "$1"', nome)
+    assert esito.returncode == (0 if valido else 1), esito.stderr
+
+
+@pytest.mark.skipif(BASH is None, reason="bash non disponibile")
+@pytest.mark.parametrize("ip, valido", [
+    ("192.168.1.215", True),
+    ("999.1.1.1", False),
+    ("1.2.3", False),
+    ("1.2.3.4\nDNS.2 = esempio.it", False),
+    ("", False),
+])
+def test_configura_ip_valido(ip, valido):
+    esito = _bash(CONFIGURA, 'ip_valido "$1"', ip)
+    assert esito.returncode == (0 if valido else 1), esito.stderr
+
+
+# Verdetti del controllore (F1, F6, F10, F11)
+
+def test_configura_indirizzo_interno_mai_localhost():
+    # F1: solo il nome dell'immagine puo' contenere "localhost".
+    testo = _leggi(CONFIGURA).replace("localhost/custode:latest", "")
+    assert "localhost" not in testo
+
+
+def test_configura_eseguibile_nell_immagine_e_in_git():
+    # F6: il bit di esecuzione nel Containerfile e fine riga LF forzati.
+    assert "deploy/podman/configura.sh" in _leggi("Containerfile")
+    chmod = re.search(r"RUN chmod \+x ([^&]*?)\s*&&", _leggi("Containerfile"), re.S)
+    assert chmod and "deploy/podman/configura.sh" in chmod.group(1)
+    assert "|| true" not in chmod.group(0) and "2>/dev/null" not in chmod.group(0)
+    assert "deploy/podman/configura.sh" in _leggi(".gitattributes")
+    assert b"\r\n" not in (RADICE / CONFIGURA).read_bytes()
+
+
+def test_configura_importa_pulisce_la_copia_di_lavoro_su_ogni_uscita():
+    # F10: un trap RETURN non scatta a set -e ne' su un errore del chiamante.
+    testo = _leggi(CONFIGURA)
+    assert "RETURN" not in testo
+    corpo = _corpo(testo, "cmd_importa")
+    trap = [r for r in corpo.splitlines() if r.strip().startswith("trap ")]
+    assert any("EXIT" in r and "rm -rf" in r for r in trap), trap
+    # La copia viene creata dentro lo stesso blocco che installa il trap.
+    assert corpo.index("trap ") > corpo.index("mktemp -d /var/tmp/custode-importa")
+    assert corpo.index("trap ") < corpo.index("cp -a")
+
+
+def test_configura_nuovo_non_monta_i_backup():
+    # F11: seed.py non scrive in backups: nessuna superficie :Z in piu'.
+    corpo = _corpo(_leggi(CONFIGURA), "cmd_nuovo")
+    assert "BACKUP_DIR" not in corpo and ":Z" not in corpo
+    assert "seed.py" in corpo and "config_container.py adegua" in corpo
+    assert "avvia_pod" not in corpo
+
+
+def test_configura_non_tocca_altri_cloudflared():
+    testo = _leggi(CONFIGURA)
+    for vietato in ("pkill", "killall", "kill ", "systemctl stop cloudflared",
+                    "systemctl disable cloudflared"):
+        assert vietato not in testo, vietato
