@@ -499,7 +499,7 @@ certificato_genera() {
     fi
     read -r -p "Durata in giorni [825; 398 se un browser rifiuta la durata]: " giorni
     giorni=${giorni:-825}
-    if ! [[ "$giorni" =~ ^[0-9]{1,4}$ ]]; then
+    if ! [[ "$giorni" =~ ^[1-9][0-9]{0,3}$ ]]; then
         err "durata non valida"
         return 1
     fi
@@ -615,6 +615,7 @@ cmd_importa() {
         -v "$VOLUME_STATO:/stato" -v "$staging:/sorgente:Z" "$IMAGE" sh -c '
             set -eu
             rm -rf /stato/data /stato/uploads
+            rm -f /stato/config.json /stato/config.local.json
             for voce in data uploads config.json config.local.json; do
                 if [ -e "/sorgente/$voce" ]; then cp -a "/sorgente/$voce" /stato/; fi
             done

@@ -6,7 +6,8 @@ After=custode-web.service
 
 [Service]
 Type=oneshot
-# A container assente (app ferma) l'esecuzione viene saltata: l'unità non fallisce.
-ExecCondition=/usr/bin/podman container exists custode-web
+# A container assente o fermo (app ferma, o in riavvio) l'esecuzione viene saltata:
+# l'unità non fallisce. $$ è il $ letterale della shell (escape systemd).
+ExecCondition=/usr/bin/sh -c '[ "$$(/usr/bin/podman inspect -f {{.State.Running}} custode-web 2>/dev/null)" = true ]'
 # Esce con 1 se la diagnosi trova errori: l'unità risulta fallita.
 ExecStart=/usr/bin/podman exec custode-web python3 /app/manutenzione.py diagnosi

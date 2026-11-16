@@ -69,6 +69,9 @@ def test_containerignore_esclude_stato_e_segreti():
         assert voce in righe
     assert "config.example.json" not in righe
     assert "deploy/" not in righe
+    for voce in ("**/*.sqlite*", "**/*.bak_*", "*.key", "*.pem", ".env"):
+        assert voce in righe
+    assert "schema.sql" not in righe
 
 
 ESTENSIONI_UNITA = {".pod", ".container", ".volume", ".conf", ".service", ".timer"}
@@ -217,7 +220,11 @@ def test_diagnosi_non_riavvia_un_app_ferma():
     assert "After=custode-web.service" in righe
     assert "Type=oneshot" in righe
     # A container assente l'esecuzione viene saltata, non fallisce.
-    assert "ExecCondition=/usr/bin/podman container exists custode-web" in righe
+    # ... e anche se esiste ma è fermo ($$ = $ letterale per systemd).
+    cond = [r for r in righe if r.startswith("ExecCondition=")]
+    assert len(cond) == 1
+    assert "{{.State.Running}} custode-web" in cond[0]
+    assert "= true ]" in cond[0] and "$$(" in cond[0]
     assert [r for r in righe if r.startswith("ExecStart=")] == [
         "ExecStart=/usr/bin/podman exec custode-web python3 /app/manutenzione.py diagnosi"]
     for testo in (_leggi(PODMAN + "custode-diagnosi.service"),
@@ -645,3 +652,16 @@ def test_configura_menu_errexit_attivo_e_fallimento_segnalato():
     assert "non è andato a buon fine (codice 1)" in errori
     # il menu è andato avanti: la scelta 4 è stata eseguita (errore ripetuto) e 0 ha chiuso
     assert errori.count("non è andato a buon fine") == 2
+
+
+def test_configura_giorni_validita_esclude_zero():
+    sh = _leggi(PODMAN + "configura.sh")
+    assert '"$giorni" =~ ^[1-9][0-9]{0,3}$' in sh
+    assert "^[0-9]{1,4}$" not in sh
+
+
+def test_importa_toglie_la_config_vecchia_prima_di_copiare():
+    sh = _leggi(PODMAN + "configura.sh")
+    pulizia = sh.index("rm -f /stato/config.json /stato/config.local.json")
+    copia = sh.index('cp -a "/sorgente/$voce" /stato/')
+    assert pulizia < copia
